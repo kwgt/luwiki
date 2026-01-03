@@ -1,0 +1,124 @@
+.markdown-body {
+  color: var(--md-fg, #24292f);
+  background-color: var(--md-bg, transparent);
+  font-family: var(--md-font-family, "IBM Plex Sans JP", "BIZ UDPGothic", sans-serif);
+  font-size: var(--md-font-size, 0.95rem);
+  line-height: 1.75;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  color: var(--md-heading, var(--md-fg, #24292f));
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.4rem 0 0.6rem;
+}
+
+.markdown-body h1 {
+  border-bottom: 1px solid var(--md-border, #d0d7de);
+  font-size: 1.8rem;
+  padding-bottom: 0.3rem;
+}
+
+.markdown-body h2 {
+  border-bottom: 1px solid var(--md-border, #d0d7de);
+  font-size: 1.4rem;
+  padding-bottom: 0.2rem;
+}
+
+.markdown-body h3 {
+  font-size: 1.15rem;
+}
+
+.markdown-body p {
+  margin: 0.7rem 0;
+}
+
+.markdown-body a {
+  color: var(--md-link, #0969da);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body code {
+  background: var(--md-code-bg, #f6f8fa);
+  border-radius: 6px;
+  font-family: var(--md-code-font-family, var(--md-font-family, monospace));
+  font-size: var(--md-code-font-size, var(--md-font-size, 0.95rem));
+  padding: 0.12rem 0.35rem;
+}
+
+.markdown-body pre {
+  background: var(--md-code-bg, #f6f8fa);
+  border-radius: 8px;
+  font-family: var(--md-code-font-family, var(--md-font-family, monospace));
+  font-size: var(--md-code-font-size, var(--md-font-size, 0.95rem));
+  overflow-x: auto;
+  padding: 0.9rem 1rem;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 4px solid var(--md-border, #d0d7de);
+  color: var(--md-muted, #57606a);
+  margin: 1rem 0;
+  padding-left: 1rem;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 1rem 0;
+  width: 100%;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--md-border, #d0d7de);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.7rem 0 0.7rem 1.4rem;
+}
+
+.markdown-body hr {
+  border: 0;
+  border-top: 1px solid var(--md-border, #d0d7de);
+  margin: 1.2rem 0;
+}
+
+.markdown-theme-github.markdown-body {
+  --md-fg: #24292f;
+  --md-heading: #24292f;
+  --md-link: #0969da;
+  --md-border: #d0d7de;
+  --md-muted: #57606a;
+  --md-code-bg: #f6f8fa;
+  --md-bg: #ffffff;
+}
+
+.markdown-theme-github-dark.markdown-body {
+  --md-fg: #c9d1d9;
+  --md-heading: #c9d1d9;
+  --md-link: #58a6ff;
+  --md-border: #30363d;
+  --md-muted: #8b949e;
+  --md-code-bg: #161b22;
+  --md-bg: #0d1117;
+}

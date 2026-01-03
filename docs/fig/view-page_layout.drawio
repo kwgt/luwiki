@@ -1,0 +1,185 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.0.3 Chrome/140.0.7339.249 Electron/38.7.0 Safari/537.36" version="29.0.3" pages="6">
+  <diagram name="表示画面レイアウト" id="tr7CCGfihjXkXs87yMmg">
+    <mxGraphModel dx="1213" dy="928" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="vuavLH7-82IRV5qaq5WC-1" value="&lt;font style=&quot;font-size: 19px; color: rgb(0, 0, 0);&quot;&gt;(1)ページタイトル領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="740" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="vuavLH7-82IRV5qaq5WC-2" value="(3)操作ボタン領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="158" width="740" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="vuavLH7-82IRV5qaq5WC-8" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(4)TOC&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="198" width="110" height="762" as="geometry" />
+        </mxCell>
+        <mxCell id="vuavLH7-82IRV5qaq5WC-9" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(5)本文レンダリング領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="160" y="198" width="620" height="622" as="geometry" />
+        </mxCell>
+        <mxCell id="vuavLH7-82IRV5qaq5WC-10" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;(6)アセット一覧&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="160" y="830" width="620" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="vuavLH7-82IRV5qaq5WC-11" value="(2)ページパス領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="740" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="ie4BxvhyfLAdM6ZrBxKd" name="表示画面 - 操作ボタンレイアウト">
+    <mxGraphModel dx="1213" dy="2097" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="wpWn-AVNCanb0m-wQd_--1" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="44" y="-1070" width="740" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--2" value="編集" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="44" y="-1070" width="46" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--3" value="移動" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="180" y="-1070" width="46" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--4" value="履歴" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="272" y="-1070" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--5" value="差分表示" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="321" y="-1070" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--6" value="新規作成" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="670" y="-1070" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--7" value="" style="shape=curlyBracket;whiteSpace=wrap;html=1;rounded=1;flipH=1;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;rotation=90;strokeColor=#CC0000;size=0.5;" vertex="1" parent="1">
+          <mxGeometry x="205" y="-1185" width="20" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--8" value="&lt;font style=&quot;color: rgb(204, 0, 0);&quot;&gt;当該ページ対する操作は左に集める&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="95" y="-1010" width="210" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--9" value="" style="shape=curlyBracket;whiteSpace=wrap;html=1;rounded=1;flipH=1;labelPosition=right;verticalLabelPosition=middle;align=left;verticalAlign=middle;rotation=90;strokeColor=#CC0000;" vertex="1" parent="1">
+          <mxGeometry x="717.5" y="-1072.5" width="20" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--10" value="&lt;font color=&quot;#cc0000&quot;&gt;その他は右に集める&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=right;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="574" y="-1010" width="210" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="wpWn-AVNCanb0m-wQd_--11" value="情報表示" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="226" y="-1070" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="waKawcsmSZ-c_hEzWvF1-1" value="設定" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="724" y="-1070" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="waKawcsmSZ-c_hEzWvF1-2" value="アセット追加" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="90" y="-1070" width="90" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="pOePq7XywhzH0XIfyvCn" name="編集画面レイアウト(lg以上)">
+    <mxGraphModel dx="1733" dy="1326" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="9Eibg6WF3MSN_nd5rVDF-1" value="&lt;font style=&quot;font-size: 19px; color: rgb(0, 0, 0);&quot;&gt;(1)ページタイトル領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="110" y="30" width="550" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="9Eibg6WF3MSN_nd5rVDF-2" value="(3)操作ボタン領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="110" y="138" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="9Eibg6WF3MSN_nd5rVDF-3" value="(2)ページパス領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="110" y="100" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="9mAKAsAQjKw6zr3_6UdS-1" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(4)TOC&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="110" y="200" width="110" height="742" as="geometry" />
+        </mxCell>
+        <mxCell id="9mAKAsAQjKw6zr3_6UdS-2" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(5)本文編集領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="230" y="200" width="430" height="602" as="geometry" />
+        </mxCell>
+        <mxCell id="9mAKAsAQjKw6zr3_6UdS-3" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;(6)アセット一覧&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="230" y="812" width="430" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="9mAKAsAQjKw6zr3_6UdS-4" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(7)プレビュー領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="670" y="200" width="430" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="u4RyVSz0LgliWk-zGRl9-1" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(8)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="110" y="180" width="110" height="10" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="bSgAkyqSMWu7UWVVp2Mb" name="編集画面レイアウト(md以上)">
+    <mxGraphModel dx="1213" dy="928" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="YVN_fQT15bqL8i5aOUB9-1" value="&lt;font style=&quot;font-size: 19px; color: rgb(0, 0, 0);&quot;&gt;(1)ページタイトル領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="550" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="YVN_fQT15bqL8i5aOUB9-2" value="(3)操作ボタン領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="138" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="YVN_fQT15bqL8i5aOUB9-3" value="(2)ページパス領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="YVN_fQT15bqL8i5aOUB9-4" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(4)TOC&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="110" height="742" as="geometry" />
+        </mxCell>
+        <mxCell id="YVN_fQT15bqL8i5aOUB9-5" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(5)本文編集領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="160" y="200" width="430" height="602" as="geometry" />
+        </mxCell>
+        <mxCell id="YVN_fQT15bqL8i5aOUB9-6" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;(6)アセット一覧&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="160" y="812" width="430" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="lcm6o-HlKuYwGZHRn7iU-1" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(8)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="110" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="lcm6o-HlKuYwGZHRn7iU-2" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(9)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="160" y="180" width="110" height="10" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="4SafCA9MTDwpspIyF6UO" name="編集画面(md未満)">
+    <mxGraphModel dx="1213" dy="928" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="27i7Wzd0-qalVBOt_Hau-1" value="&lt;font style=&quot;font-size: 19px; color: rgb(0, 0, 0);&quot;&gt;(1)ページタイトル領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="140" y="20" width="430" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="27i7Wzd0-qalVBOt_Hau-2" value="(3)操作ボタン領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="140" y="128" width="430" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="27i7Wzd0-qalVBOt_Hau-3" value="(2)ページパス領域" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="140" y="90" width="430" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="27i7Wzd0-qalVBOt_Hau-5" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(5)本文編集領域&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="140" y="190" width="430" height="602" as="geometry" />
+        </mxCell>
+        <mxCell id="27i7Wzd0-qalVBOt_Hau-6" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;(6)アセット一覧&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="140" y="802" width="430" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="s24mHVwqyDwHAjcBrEeY-1" value="&lt;font style=&quot;font-size: 24px; color: rgb(0, 0, 0);&quot;&gt;(9)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="140" y="170" width="110" height="10" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="編集画面 - 操作ボタンレイアウトのコピー" id="rKSCsROZGdzgXM5vQcXB">
+    <mxGraphModel dx="1213" dy="2097" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="zuSQuKwv1i-xIt0QTiB9-0" />
+        <mxCell id="zuSQuKwv1i-xIt0QTiB9-1" parent="zuSQuKwv1i-xIt0QTiB9-0" />
+        <mxCell id="zuSQuKwv1i-xIt0QTiB9-2" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#CCCCCC;" vertex="1" parent="zuSQuKwv1i-xIt0QTiB9-1">
+          <mxGeometry x="44" y="-1070" width="740" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="zuSQuKwv1i-xIt0QTiB9-4" value="保存" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="zuSQuKwv1i-xIt0QTiB9-1">
+          <mxGeometry x="140" y="-1070" width="46" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="zuSQuKwv1i-xIt0QTiB9-12" value="キャンセル" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="zuSQuKwv1i-xIt0QTiB9-1">
+          <mxGeometry x="186" y="-1070" width="64" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="zuSQuKwv1i-xIt0QTiB9-14" value="アセット追加" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="zuSQuKwv1i-xIt0QTiB9-1">
+          <mxGeometry x="44" y="-1070" width="90" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

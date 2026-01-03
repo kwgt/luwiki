@@ -1,0 +1,643 @@
+openapi: 3.1.0
+info:
+  title: Wiki REST API
+  version: "1.0.0"
+  description: >
+    Wiki システム用 REST API。
+    ページ管理、アセット管理、ページロック（TTL/トークン）を提供する。
+
+servers:
+  - url: /api
+
+security:
+  - basicAuth: []
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+
+  parameters:
+    PageId:
+      name: page_id
+      in: path
+      required: true
+      schema: { type: string }
+
+    AssetId:
+      name: asset_id
+      in: path
+      required: true
+      schema: { type: string }
+
+    LockAuthHeader:
+      name: X-Lock-Authentication
+      in: header
+      required: true
+      schema: { type: string }
+      description: 'token={lock_token}'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: 人間可読なエラー理由
+
+    IdResponse:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+
+    PagePath:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string }
+
+    LockInfo:
+      type: object
+      properties:
+        expire:
+          type: string
+          format: date-time
+        username:
+          type: string
+
+    AssetMeta:
+      type: object
+      properties:
+        file_name: { type: string }
+        mime_type: { type: string }
+        size: { type: number }
+        timestamp: { type: string }
+        username: { type: string }
+
+paths:
+  /pages:
+    post:
+      summary: ページの作成
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "201":
+          description: 作成成功
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdResponse" }
+        "400":
+          description: パス不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: 既存ページあり
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}/source:
+    get:
+      summary: ページソース取得
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: rev
+          in: query
+          schema: { type: number }
+      responses:
+        "200":
+          description: Markdown ソース
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            text/markdown:
+              schema: { type: string }
+        "400":
+          description: rev 不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ/リビジョン不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    put:
+      summary: ページソース更新
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: amend
+          in: query
+          schema: { type: boolean }
+        - $ref: "#/components/parameters/LockAuthHeader"
+      requestBody:
+        required: true
+        content:
+          text/markdown:
+            schema: { type: string }
+      responses:
+        "204":
+          description: 更新成功
+        "400":
+          description: amend 不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "403":
+          description: 権限/トークン不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "423":
+          description: ロック中（トークン未指定）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}/meta:
+    get:
+      summary: ページメタ情報取得
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: rev
+          in: query
+          schema: { type: number }
+      responses:
+        "200":
+          description: メタ情報
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: rev 不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ/リビジョン不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}/path:
+    get:
+      summary: ページパス取得
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: ページパス
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PagePath" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+    post:
+      summary: ページリネーム
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: rename_to
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: リネーム成功
+        "400":
+          description: パス不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: パス競合
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}/assets:
+    get:
+      summary: ページ配下アセット一覧
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: アセット一覧
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AssetMeta" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}/assets/{file_name}:
+    post:
+      summary: アセットアップロード（ページ指定）
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: file_name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: アップロード成功
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdResponse" }
+        "400":
+          description: パラメータ不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: ファイル重複
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済みページ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      summary: アセット取得リダイレクト（ページ指定）
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: file_name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: リダイレクト
+          headers:
+            Location: { schema: { type: string } }
+        "400":
+          description: パラメータ不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ/アセット不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}/lock:
+    post:
+      summary: ページロック取得
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "204":
+          description: ロック成功
+          headers:
+            X-Page-Lock: { schema: { type: string } }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: 既にロック中
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    put:
+      summary: ページロック延長
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - $ref: "#/components/parameters/LockAuthHeader"
+      responses:
+        "204":
+          description: 延長成功
+          headers:
+            X-Page-Lock: { schema: { type: string } }
+        "403":
+          description: トークン不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ロックなし/ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      summary: ロック状態取得
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: ロック情報
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LockInfo" }
+        "404":
+          description: ロックなし/ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    delete:
+      summary: ページロック解除
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - $ref: "#/components/parameters/LockAuthHeader"
+      responses:
+        "204":
+          description: 解除成功
+        "403":
+          description: トークン不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ロックなし/ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /pages/{page_id}:
+    delete:
+      summary: ページ削除
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - $ref: "#/components/parameters/LockAuthHeader"
+      responses:
+        "204":
+          description: 削除成功
+        "403":
+          description: トークン不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 既に削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "423":
+          description: ロック中（トークン未指定）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /assets:
+    post:
+      summary: アセットアップロード（パス指定）
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+        - name: file
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: アップロード成功
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdResponse" }
+        "400":
+          description: パラメータ不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: ファイル重複
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済みページ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      summary: アセット取得リダイレクト（パス指定）
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+        - name: file
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: リダイレクト
+          headers:
+            Location: { schema: { type: string } }
+        "400":
+          description: パラメータ不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: ページ/アセット不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /assets/{asset_id}/data:
+    get:
+      summary: アセット本体取得
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: バイナリデータ
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: アセット不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /assets/{asset_id}/meta:
+    get:
+      summary: アセットメタ取得
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: メタ情報
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetMeta" }
+        "404":
+          description: アセット不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /assets/{asset_id}:
+    delete:
+      summary: アセット削除
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "204":
+          description: 削除成功
+        "404":
+          description: アセット不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }

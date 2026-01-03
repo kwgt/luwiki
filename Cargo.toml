@@ -1,0 +1,38 @@
+[package]
+name = "luwiki"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+actix-multipart = "0.7.2"
+actix-web = "4.6.0"
+actix-web-httpauth = "0.8.2"
+argon2 = "0.5.3"
+clap = { version = "4.5.53", features = ["derive"] }
+directories = "6.0.0"
+flexi_logger = "0.31.7"
+log = "0.4.29"
+mime_guess = "2.0.5"
+pulldown-cmark = "0.11.0"
+rand_core = "0.6.4"
+redb = "3.1.0"
+rmp-serde = "1.3.0"
+rpassword = "7.3.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.140"
+similar = "2.6.0"
+tantivy = "0.25.0"
+time = "0.3.36"
+toml = "0.9.10"
+tokio = {version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"]}
+ulid = "1.2.1"
+webbrowser = "1.0.4"
+rust-embed = "8.5.0"
+chrono = { version = "0.4.42", features = ["serde"] }
+
+[dev-dependencies]
+reqwest = { version = "0.11.27", features = ["blocking"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52.0", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }

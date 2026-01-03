@@ -1,0 +1,18 @@
+doctype html
+html(lang="ja")
+  head
+    meta(charset="utf-8")
+    meta(http-equiv="X-UA-Compatible" content="IE=edge")
+    meta(name="viewport" content="width=device-width, initial-scale=1.0")
+    meta(name="wiki-page-id" content="{{PAGE_ID}}")
+    meta(name="wiki-page-revision" content="{{REVISION}}")
+    meta(name="frontend-ui-font" content="{{FRONTEND_UI_FONT}}")
+    meta(name="frontend-md-font-sans" content="{{FRONTEND_MD_FONT_SANS}}")
+    meta(name="frontend-md-font-serif" content="{{FRONTEND_MD_FONT_SERIF}}")
+    meta(name="frontend-md-font-mono" content="{{FRONTEND_MD_FONT_MONO}}")
+    meta(name="frontend-md-code-font" content="{{FRONTEND_MD_CODE_FONT}}")
+    meta(name="asset-max-bytes" content="{{ASSET_MAX_BYTES}}")
+    title Luwiki
+  body.antialiased
+    #wiki-root
+    script(type="module" src="/src/main.ts")

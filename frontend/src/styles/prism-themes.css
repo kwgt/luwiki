@@ -1,0 +1,181 @@
+.prism-theme-light pre[class*="language-"],
+.prism-theme-light code[class*="language-"] {
+  color: #24292f;
+  background: none;
+  font-family: var(--md-code-font-family, ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: var(--md-code-font-size, 0.9em);
+  line-height: 1.5;
+  text-shadow: none;
+  white-space: pre;
+  word-break: normal;
+  word-wrap: normal;
+}
+
+.prism-theme-light pre[class*="language-"] {
+  background: #f6f8fa;
+  border-radius: 8px;
+  overflow: auto;
+  padding: 0.9rem 1rem;
+}
+
+.prism-theme-light :not(pre) > code[class*="language-"] {
+  background: #f6f8fa;
+  border-radius: 6px;
+  padding: 0.12rem 0.35rem;
+}
+
+.prism-theme-light .token.comment,
+.prism-theme-light .token.prolog,
+.prism-theme-light .token.doctype,
+.prism-theme-light .token.cdata {
+  color: #6e7781;
+}
+
+.prism-theme-light .token.punctuation {
+  color: #24292f;
+}
+
+.prism-theme-light .token.property,
+.prism-theme-light .token.tag,
+.prism-theme-light .token.boolean,
+.prism-theme-light .token.number,
+.prism-theme-light .token.constant,
+.prism-theme-light .token.symbol,
+.prism-theme-light .token.deleted {
+  color: #0550ae;
+}
+
+.prism-theme-light .token.selector,
+.prism-theme-light .token.attr-name,
+.prism-theme-light .token.string,
+.prism-theme-light .token.char,
+.prism-theme-light .token.builtin,
+.prism-theme-light .token.inserted {
+  color: #0a3069;
+}
+
+.prism-theme-light .token.operator,
+.prism-theme-light .token.entity,
+.prism-theme-light .token.url,
+.prism-theme-light .language-css .token.string,
+.prism-theme-light .style .token.string {
+  color: #cf222e;
+}
+
+.prism-theme-light .token.atrule,
+.prism-theme-light .token.attr-value,
+.prism-theme-light .token.keyword {
+  color: #cf222e;
+}
+
+.prism-theme-light .token.function,
+.prism-theme-light .token.class-name {
+  color: #8250df;
+}
+
+.prism-theme-light .token.regex,
+.prism-theme-light .token.important,
+.prism-theme-light .token.variable {
+  color: #953800;
+}
+
+.prism-theme-light .token.important,
+.prism-theme-light .token.bold {
+  font-weight: 700;
+}
+
+.prism-theme-light .token.italic {
+  font-style: italic;
+}
+
+.prism-theme-dark pre[class*="language-"],
+.prism-theme-dark code[class*="language-"] {
+  color: #c9d1d9;
+  background: none;
+  font-family: var(--md-code-font-family, ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: var(--md-code-font-size, 0.9em);
+  line-height: 1.5;
+  text-shadow: none;
+  white-space: pre;
+  word-break: normal;
+  word-wrap: normal;
+}
+
+.prism-theme-dark pre[class*="language-"] {
+  background: #161b22;
+  border-radius: 8px;
+  overflow: auto;
+  padding: 0.9rem 1rem;
+}
+
+.prism-theme-dark :not(pre) > code[class*="language-"] {
+  background: #161b22;
+  border-radius: 6px;
+  padding: 0.12rem 0.35rem;
+}
+
+.prism-theme-dark .token.comment,
+.prism-theme-dark .token.prolog,
+.prism-theme-dark .token.doctype,
+.prism-theme-dark .token.cdata {
+  color: #8b949e;
+}
+
+.prism-theme-dark .token.punctuation {
+  color: #c9d1d9;
+}
+
+.prism-theme-dark .token.property,
+.prism-theme-dark .token.tag,
+.prism-theme-dark .token.boolean,
+.prism-theme-dark .token.number,
+.prism-theme-dark .token.constant,
+.prism-theme-dark .token.symbol,
+.prism-theme-dark .token.deleted {
+  color: #79c0ff;
+}
+
+.prism-theme-dark .token.selector,
+.prism-theme-dark .token.attr-name,
+.prism-theme-dark .token.string,
+.prism-theme-dark .token.char,
+.prism-theme-dark .token.builtin,
+.prism-theme-dark .token.inserted {
+  color: #a5d6ff;
+}
+
+.prism-theme-dark .token.operator,
+.prism-theme-dark .token.entity,
+.prism-theme-dark .token.url,
+.prism-theme-dark .language-css .token.string,
+.prism-theme-dark .style .token.string {
+  color: #ff7b72;
+}
+
+.prism-theme-dark .token.atrule,
+.prism-theme-dark .token.attr-value,
+.prism-theme-dark .token.keyword {
+  color: #ff7b72;
+}
+
+.prism-theme-dark .token.function,
+.prism-theme-dark .token.class-name {
+  color: #d2a8ff;
+}
+
+.prism-theme-dark .token.regex,
+.prism-theme-dark .token.important,
+.prism-theme-dark .token.variable {
+  color: #ffa657;
+}
+
+.prism-theme-dark .token.important,
+.prism-theme-dark .token.bold {
+  font-weight: 700;
+}
+
+.prism-theme-dark .token.italic {
+  font-style: italic;
+}

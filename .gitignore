@@ -1,0 +1,10 @@
+/target
+/tests/tmp
+/frontend/node_modules/
+/frontend/dist/*
+!/frontend/dist/.gitkeep
+/frontend/index.html
+/frontend/.vite/
+/frontend/.tmp/
+/frontend/*.tgz
+/docs/fig/*.bkp
