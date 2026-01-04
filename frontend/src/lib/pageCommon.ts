@@ -1,5 +1,6 @@
 import axios from 'axios';
 import MarkdownIt from 'markdown-it';
+import taskLists from 'markdown-it-task-lists';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-markup';
 import 'prismjs/components/prism-markdown';
@@ -22,6 +23,12 @@ export interface TocEntry {
   level: number;
   text: string;
   anchor: string;
+}
+
+export interface MarkdownRendererOptions {
+  plugins?: {
+    taskList?: boolean;
+  };
 }
 
 const ASSET_PREFIX = 'asset:';
@@ -203,7 +210,11 @@ function isExternalLink(href: string): boolean {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href);
 }
 
-export function createMarkdownRenderer(pagePath: string, linkBase = '/wiki'): MarkdownIt {
+export function createMarkdownRenderer(
+  pagePath: string,
+  linkBase = '/wiki',
+  options?: MarkdownRendererOptions,
+): MarkdownIt {
   const md = new MarkdownIt({
     html: false,
     linkify: true,
@@ -224,6 +235,11 @@ export function createMarkdownRenderer(pagePath: string, linkBase = '/wiki'): Ma
       return `<pre class="language-${normalized}"><code class="language-${normalized}">${highlighted}</code></pre>`;
     },
   });
+
+  const taskListEnabled = options?.plugins?.taskList ?? true;
+  if (taskListEnabled) {
+    md.use(taskLists, { enabled: false });
+  }
 
   const defaultHeadingOpen = md.renderer.rules.heading_open;
   md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
