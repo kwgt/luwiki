@@ -124,6 +124,7 @@ fn create_server(
             .service(rest_api::create_api_scope())
 
             // Wiki閲覧用エンドポイント設定
+            .route("/", web::get().to(page_view::get_root_redirect))
             .route("/wiki", web::get().to(page_view::get_root))
             .route("/wiki/{page_path:.*}", web::get().to(page_view::get))
             .route("/edit", web::get().to(page_view::get_edit_root))

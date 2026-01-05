@@ -4,6 +4,7 @@ import {
   acquirePageLock,
   extendPageLock,
   fetchDeletedPageCandidates,
+  fetchPageLockInfo,
   fetchPageMeta,
   fetchPageSource,
   restorePagePath,
@@ -111,6 +112,8 @@ export function usePageEdit() {
   const amendChecked = ref(true);
   const amendUserTouched = ref(false);
   const suppressAutoAmend = ref(false);
+  const lastRevisionUsername = ref<string | null>(null);
+  const lockUsername = ref<string | null>(null);
   const newPageToastVisible = ref(false);
   const newPageToastMessage = ref('');
 
@@ -153,6 +156,12 @@ export function usePageEdit() {
     () => sourceCharDiff.value <= AMEND_MAX_CHAR_DIFF
       && sourceLineDiff.value <= AMEND_MAX_LINE_DIFF,
   );
+  const amendLocked = computed(() => {
+    if (!lastRevisionUsername.value || !lockUsername.value) {
+      return false;
+    }
+    return lastRevisionUsername.value !== lockUsername.value;
+  });
 
   const renderedHtml = ref('');
 
@@ -196,6 +205,9 @@ export function usePageEdit() {
   }
 
   function setAmendChecked(value: boolean): void {
+    if (amendLocked.value) {
+      return;
+    }
     amendUserTouched.value = true;
     amendChecked.value = value;
   }
@@ -283,6 +295,7 @@ export function usePageEdit() {
       applyPageMeta(meta);
       applySourceSnapshot(markdown);
       assets.value = pageAssets;
+      await refreshLockInfo();
       startLockExtend();
       restoreCandidates.value = [];
       restoreCandidateId.value = '';
@@ -326,6 +339,8 @@ export function usePageEdit() {
 
     if (!rawPageId) {
       pageId.value = '';
+      lastRevisionUsername.value = null;
+      lockUsername.value = null;
       applySourceSnapshot('');
       assets.value = [];
       draftCreated.value = false;
@@ -387,6 +402,7 @@ export function usePageEdit() {
       if (applyEditor) {
         applyEditor(source.value);
       }
+      await refreshLockInfo();
       startLockExtend();
     } catch (err: unknown) {
       errorMessage.value = toErrorMessage(err);
@@ -397,6 +413,30 @@ export function usePageEdit() {
 
   function applyPageMeta(meta: PageMetaResponse): void {
     pagePath.value = normalizeWikiPath(meta.page_info.path.value);
+    lastRevisionUsername.value = meta.revision_info?.username ?? null;
+  }
+
+  async function refreshLockInfo(): Promise<void> {
+    if (!pageId.value) {
+      lockUsername.value = null;
+      return;
+    }
+    try {
+      const info = await fetchPageLockInfo(pageId.value);
+      lockUsername.value = info.username;
+    } catch {
+      lockUsername.value = null;
+    } finally {
+      applyAmendLockState();
+    }
+  }
+
+  function applyAmendLockState(): void {
+    if (!amendLocked.value) {
+      return;
+    }
+    amendUserTouched.value = false;
+    amendChecked.value = false;
   }
 
   async function savePage(content?: string): Promise<void> {
@@ -421,7 +461,7 @@ export function usePageEdit() {
         }
         await updatePageSource(pageId.value, editorSource, lockToken.value);
       } else {
-        const amend = amendChecked.value;
+        const amend = !amendLocked.value && amendChecked.value;
         await updatePageSource(pageId.value, editorSource, lockToken.value, amend);
         if (amend) {
           const refreshKey = buildAmendRefreshKey(pageId.value);
@@ -645,6 +685,10 @@ export function usePageEdit() {
   }
 
   function applyAutoAmendState(): void {
+    if (amendLocked.value) {
+      amendChecked.value = false;
+      return;
+    }
     if (amendUserTouched.value || suppressAutoAmend.value || isLoading.value) {
       return;
     }
@@ -720,6 +764,7 @@ export function usePageEdit() {
     isDraftPage,
     canSave,
     amendChecked,
+    amendLocked,
     applyEditorValue,
     loadPage,
     savePage,

@@ -36,6 +36,11 @@ export interface CreatePageResponse {
   lockToken: string;
 }
 
+export interface PageLockInfo {
+  expire: string;
+  username: string;
+}
+
 function parseLockToken(headerValue: string): string | null {
   const parts = headerValue.split(/\s+/);
   for (const part of parts) {
@@ -327,4 +332,22 @@ export async function unlockPageLock(
   if (res.status >= 400) {
     throw buildRequestError(res.status, res.data);
   }
+}
+
+/**
+ * ページロック情報を取得する
+ */
+export async function fetchPageLockInfo(
+  pageId: string,
+): Promise<PageLockInfo> {
+  const res = await apiClient.get<PageLockInfo>(
+    `/pages/${pageId}/lock`,
+    {
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+  return res.data;
 }

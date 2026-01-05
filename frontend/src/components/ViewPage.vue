@@ -95,7 +95,9 @@ const breadcrumbItems = computed(() => {
 });
 const editUrl = computed(() => buildEditUrl(pagePath.value));
 const canDeletePage = computed(
-  () => !interactionDisabled.value && !pageMeta.value?.page_info.deleted,
+  () => !interactionDisabled.value
+    && !pageMeta.value?.page_info.deleted
+    && (pagePath.value || '/') !== '/',
 );
 
 function applySidePanelCollapsed(value: boolean): void {

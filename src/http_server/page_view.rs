@@ -28,6 +28,15 @@ pub(crate) async fn get_root(
 }
 
 ///
+/// ルートパスのリダイレクト
+///
+pub(crate) async fn get_root_redirect() -> HttpResponse {
+    HttpResponse::Found()
+        .insert_header((header::LOCATION, "/wiki/"))
+        .finish()
+}
+
+///
 /// 任意ページ表示
 ///
 pub(crate) async fn get(

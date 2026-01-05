@@ -45,6 +45,7 @@ const {
   isNewPage,
   isDraftPage,
   amendChecked,
+  amendLocked,
   loadPage,
   savePage,
   cancelEdit,
@@ -462,7 +463,7 @@ function buildAssetDownloadUrl(fileName: string): string {
         </button>
 
           <label
-            v-if="!isNewPage && !isDraftPage"
+            v-if="!isNewPage && !isDraftPage && !amendLocked"
             class="flex items-center gap-1 text-xs ml-auto text-base-content/70"
           >
             <input
