@@ -12,7 +12,9 @@ pub(crate) mod app_state;
 pub(crate) mod logger;
 pub(crate) mod page_view;
 pub(crate) mod static_files;
+pub(crate) mod tls;
 
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -54,6 +56,9 @@ pub(crate) fn run(
     port: u16,
     manager: DatabaseManager,
     frontend_config: FrontendConfig,
+    use_tls: bool,
+    cert_path: PathBuf,
+    cert_is_explicit: bool,
 ) -> Result<()> {
     /*
      * Tokioランタイムの構築
@@ -70,7 +75,14 @@ pub(crate) fn run(
         manager,
         frontend_config,
     ))));
-    let server = create_server(addr, port, state.clone())?;
+    let server = create_server(
+        addr,
+        port,
+        state.clone(),
+        use_tls,
+        cert_path,
+        cert_is_explicit,
+    )?;
 
     /*
      * ロック期限切れ監視タスクの起動
@@ -107,6 +119,9 @@ fn create_server(
     addr: String,
     port: u16,
     state: web::Data<Arc<RwLock<AppState>>>,
+    use_tls: bool,
+    cert_path: PathBuf,
+    cert_is_explicit: bool,
 ) -> Result<Server> {
     let payload_limit = 10 * 1024 * 1024;
     let server = HttpServer::new(move || {
@@ -135,8 +150,15 @@ fn create_server(
 
             // root空間に展開されるその他のエンドポイント設定
             //.servcie(...)
-    })
-    .bind(format!("{}:{}", addr, port))?;
+    });
+
+    let bind_addr = format!("{}:{}", addr, port);
+    let server = if use_tls {
+        let tls_config = tls::load_server_config(&cert_path, cert_is_explicit)?;
+        server.bind_rustls_0_23(bind_addr, tls_config)?
+    } else {
+        server.bind(bind_addr)?
+    };
 
     Ok(server.run())
 }

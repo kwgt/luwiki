@@ -15,7 +15,13 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{default_log_path, default_db_path, default_assets_path, LogLevel};
+use super::{
+    default_assets_path,
+    default_cert_path,
+    default_db_path,
+    default_log_path,
+    LogLevel,
+};
 use crate::cmd_args::{
     AssetListSortMode,
     LockListSortMode,
@@ -90,6 +96,22 @@ impl Config {
     pub(super) fn set_assets_path(&mut self, path: PathBuf) {
         let global = self.ensure_global();
         global.assets_path = Some(path);
+    }
+
+    ///
+    /// グローバル設定のTLS使用フラグを更新
+    ///
+    pub(super) fn set_use_tls(&mut self, use_tls: bool) {
+        let global = self.ensure_global();
+        global.use_tls = Some(use_tls);
+    }
+
+    ///
+    /// グローバル設定のサーバ証明書パスを更新
+    ///
+    pub(super) fn set_server_cert(&mut self, path: PathBuf) {
+        let global = self.ensure_global();
+        global.server_cert = Some(path);
     }
 
     ///
@@ -262,6 +284,25 @@ impl Config {
         self.global
             .as_ref()
             .and_then(|global| global.assets_path.as_ref())
+            .map(|path| self.resolve_path(path))
+    }
+
+    ///
+    /// TLS使用フラグへのアクセサ
+    ///
+    pub(super) fn use_tls(&self) -> Option<bool> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.use_tls)
+    }
+
+    ///
+    /// サーバ証明書パスへのアクセサ
+    ///
+    pub(super) fn server_cert(&self) -> Option<PathBuf> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.server_cert.as_ref())
             .map(|path| self.resolve_path(path))
     }
 
@@ -485,6 +526,8 @@ impl Config {
                 log_output: None,
                 db_path: None,
                 assets_path: None,
+                use_tls: None,
+                server_cert: None,
             });
         }
 
@@ -715,6 +758,8 @@ impl Default for Config {
                 log_output: Some(default_log_path()),
                 db_path: Some(default_db_path()),
                 assets_path: Some(default_assets_path()),
+                use_tls: Some(false),
+                server_cert: Some(default_cert_path()),
             }),
 
             run: Some(RunInfo {
@@ -785,6 +830,12 @@ struct GlobalInfo {
 
     /// アセットデータ格納ディレクトリのパス
     assets_path: Option<PathBuf>,
+
+    /// TLSの使用
+    use_tls: Option<bool>,
+
+    /// サーバ証明書ファイルのパス
+    server_cert: Option<PathBuf>,
 }
 
 ///
@@ -1076,6 +1127,8 @@ mod tests {
             log_output = "log"
             db_path = "./db/database.redb"
             assets_path = "../assets"
+            use_tls = true
+            server_cert = "certs/server.pem"
         "#;
 
         let mut config: Config = toml::from_str(toml_str).expect("parse failed");
@@ -1092,6 +1145,11 @@ mod tests {
         assert_eq!(
             config.assets_path(),
             Some(PathBuf::from("/tmp/assets"))
+        );
+        assert_eq!(config.use_tls(), Some(true));
+        assert_eq!(
+            config.server_cert(),
+            Some(PathBuf::from("/tmp/config/certs/server.pem"))
         );
     }
 
@@ -1128,6 +1186,8 @@ mod tests {
             log_output = "log"
             db_path = "db/database.redb"
             assets_path = "assets"
+            use_tls = true
+            server_cert = "certs/server.pem"
         "#;
 
         let config: Config = toml::from_str(toml_str).expect("parse failed");
@@ -1137,5 +1197,10 @@ mod tests {
             Some(PathBuf::from("db/database.redb"))
         );
         assert_eq!(config.assets_path(), Some(PathBuf::from("assets")));
+        assert_eq!(config.use_tls(), Some(true));
+        assert_eq!(
+            config.server_cert(),
+            Some(PathBuf::from("certs/server.pem"))
+        );
     }
 }

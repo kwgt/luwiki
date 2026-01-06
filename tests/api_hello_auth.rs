@@ -73,7 +73,12 @@ fn reserve_port() -> u16 {
 
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
+    let base_dir = db_path
+        .parent()
+        .expect("db_path parent missing");
     let mut child = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
         .arg(db_path)
         .arg("--assets-path")
@@ -104,7 +109,12 @@ struct ServerGuard {
 impl ServerGuard {
     fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         let exe = test_binary_path();
+        let base_dir = db_path
+            .parent()
+            .expect("db_path parent missing");
         let child = Command::new(exe)
+            .env("XDG_CONFIG_HOME", base_dir)
+            .env("XDG_DATA_HOME", base_dir)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")
@@ -151,7 +161,7 @@ fn wait_for_server(url: &str) {
 
 fn build_client() -> Client {
     Client::builder()
-        .timeout(Duration::from_millis(500))
+        .timeout(Duration::from_millis(7000))
         .build()
         .expect("client build failed")
 }

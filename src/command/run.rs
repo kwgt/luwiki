@@ -36,6 +36,15 @@ struct RunCommandContext {
     /// frontend設定
     frontend_config: FrontendConfig,
 
+    /// TLSの使用フラグ
+    use_tls: bool,
+
+    /// サーバ証明書ファイルのパス
+    cert_path: PathBuf,
+
+    /// サーバ証明書パスの明示指定フラグ
+    cert_is_explicit: bool,
+
     /// 起動時にブラウザを開くか否かのフラグ
     #[allow(dead_code)]
     open_browser: bool,
@@ -52,6 +61,9 @@ impl RunCommandContext {
             bind_addr: sub_opts.bind_addr(),
             bind_port: sub_opts.bind_port(),
             frontend_config: opts.frontend_config()?,
+            use_tls: opts.use_tls(),
+            cert_path: opts.cert_path(),
+            cert_is_explicit: opts.is_cert_path_explicit(),
             open_browser: sub_opts.is_browser_open(),
         })
     }
@@ -71,6 +83,9 @@ impl CommandContext for RunCommandContext {
             self.bind_port,
             manager,
             self.frontend_config.clone(),
+            self.use_tls,
+            self.cert_path.clone(),
+            self.cert_is_explicit,
         )
     }
 }

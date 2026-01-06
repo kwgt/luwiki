@@ -128,7 +128,12 @@ fn unique_suffix() -> String {
 /// * `assets_dir` - アセットディレクトリのパス
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
+    let base_dir = db_path
+        .parent()
+        .expect("db_path parent missing");
     let mut child = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
         .arg(db_path)
         .arg("--assets-path")
@@ -176,7 +181,12 @@ fn run_page_add(
 ) -> String {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
+    let base_dir = db_path
+        .parent()
+        .expect("db_path parent missing");
     command
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
         .arg(db_path)
         .arg("--assets-path")
@@ -220,7 +230,12 @@ fn run_page_add(
 /// 標準出力を返す。
 fn run_page_list(db_path: &Path, assets_dir: &Path) -> String {
     let exe = test_binary_path();
+    let base_dir = db_path
+        .parent()
+        .expect("db_path parent missing");
     let output = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
         .arg(db_path)
         .arg("--assets-path")

@@ -419,7 +419,7 @@ watch(sidePanelCollapsed, (value) => {
       </div>
 
       <main
-        class="grid items-stretch gap-1"
+        class="grid min-h-[calc(100vh-11.2em)] lg:min-h-[calc(100vh-12.8em)] items-stretch gap-1"
         :class="
           sidePanelCollapsed
             ? 'lg:grid-cols-[minmax(0,1fr)]'
@@ -453,26 +453,33 @@ watch(sidePanelCollapsed, (value) => {
         </aside>
 
         <div
-          class="order-1 flex h-full flex-col gap-1 lg:order-2"
+          class="order-1 flex h-full min-h-full flex-col gap-1 lg:order-2"
           :class="{ 'pointer-events-none opacity-50': interactionDisabled }"
         >
-          <section class="border border-base-300 bg-transparent shadow-sm">
-            <div class="flex items-center justify-between">
-              <span v-if="isLoading" class="badge badge-outline badge-sm">
-                読み込み中
-              </span>
-            </div>
+          <section class="flex min-h-0 flex-1 border border-base-300 bg-transparent shadow-sm">
             <article
-              class="markdown-body p-4"
+              class="markdown-body h-full flex-1 p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"
               v-html="renderedHtml"
             />
           </section>
+        </div>
+      </main>
 
+      <footer>
+        <div
+          class="grid items-stretch gap-1"
+          :class="
+            sidePanelCollapsed
+              ? 'lg:grid-cols-[minmax(0,1fr)]'
+              : 'lg:grid-cols-[220px_minmax(0,1fr)]'
+          "
+        >
           <section
             class="border p-4 shadow-sm transition-colors"
             :class="[
+              sidePanelCollapsed ? 'lg:col-start-1' : 'lg:col-start-2',
               assetInteractionDisabled ? 'pointer-events-none opacity-50' : '',
               isAssetDragging
                 ? 'border-info/70 bg-info/10'
@@ -553,7 +560,7 @@ watch(sidePanelCollapsed, (value) => {
             </div>
           </section>
         </div>
-      </main>
+      </footer>
     </div>
 
     <div v-if="settingsOpen" class="modal modal-open">

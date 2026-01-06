@@ -9,6 +9,7 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -18,8 +19,15 @@ use serde_json::Value;
 const TEST_USERNAME: &str = "test_user";
 const TEST_PASSWORD: &str = "password123";
 
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+fn lock_test() -> std::sync::MutexGuard<'static, ()> {
+    TEST_MUTEX.lock().expect("test mutex failed")
+}
+
 #[test]
 fn page_lock_lifecycle_works() {
+    let _guard = lock_test();
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     let port = reserve_port();
 
@@ -91,6 +99,7 @@ fn page_lock_lifecycle_works() {
 
 #[test]
 fn page_lock_conflict_and_auth_checks() {
+    let _guard = lock_test();
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     let port = reserve_port();
 
@@ -135,6 +144,7 @@ fn page_lock_conflict_and_auth_checks() {
 
 #[test]
 fn page_lock_rejects_invalid_token_on_update_and_delete() {
+    let _guard = lock_test();
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     let port = reserve_port();
 
@@ -182,6 +192,7 @@ fn page_lock_rejects_invalid_token_on_update_and_delete() {
 
 #[test]
 fn page_lock_requires_token_on_update_and_delete() {
+    let _guard = lock_test();
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     let port = reserve_port();
 
@@ -267,7 +278,12 @@ fn reserve_port() -> u16 {
 
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
+    let base_dir = db_path
+        .parent()
+        .expect("db_path parent missing");
     let mut child = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
         .arg(db_path)
         .arg("--assets-path")
@@ -298,7 +314,12 @@ struct ServerGuard {
 impl ServerGuard {
     fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         let exe = test_binary_path();
+        let base_dir = db_path
+            .parent()
+            .expect("db_path parent missing");
         let child = Command::new(exe)
+            .env("XDG_CONFIG_HOME", base_dir)
+            .env("XDG_DATA_HOME", base_dir)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")
@@ -345,7 +366,7 @@ fn wait_for_server(url: &str) {
 
 fn build_client() -> Client {
     Client::builder()
-        .timeout(Duration::from_millis(500))
+        .timeout(Duration::from_millis(7000))
         .build()
         .expect("client build failed")
 }

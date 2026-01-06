@@ -15,9 +15,11 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
-| `-c`, `--config-path` | デフォルト設定ファイルのパスを指定する | $XDG_CONFIG_HOME/luwiki/config.toml
+| `-c`, `--config-path FILE` | デフォルト設定ファイルのパスを指定する | $XDG_CONFIG_HOME/luwiki/config.toml
 | `-l`, `--log-level LEVEL`  | ログレベルを指定する | "info"
 | `-L`, `--log-output PATH`  | ログレベルの出力先を指定する | $XDG_DATA_HOME/luwiki/log/
+| `-T`, `--tls` | サーバをHTTPSで起動させる |
+| `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
 | `-d`, `--db-path` | データベースファイルのパスを指定する | $XDG_DATA_HOME/luwiki/database.redb
 | `-a`, `--assets-path` | アセットデータ格納パスを指定する | $XDG_DATA_HOME/luwiki/assets
 |       `--show-options` | 設定情報の表示 |
@@ -25,6 +27,10 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 | `-h`, `--help`          | ヘルプメッセージの表示 |
 | `-v`, `--version`       | プログラムのバージョン番号の表示 |
 
+`--tls`オプションを指定した場合、サーバはHTTPSでの通信を行う。このとき`--cert`オプションで指定されたサーバ証明書を用いる。`--cert`が指定されていない場合は規定のパスに置かれた証明書を使用するが、このファイルも存在しない場合は証明書を自動的に生成する(`--cert`オプションが指定され、そのファイルが存在しない場合はエラー)。
+
+`--cert`で指定するファイルはPEM形式とする。PEMにはサーバ証明書と秘密鍵を含めるものとする。
+証明書を自動生成する場合、生成物は`$XDG_DATA_HOME/luwiki/server.pem`（PEM）に保存する。PEM以外の補助ファイルが必要な場合は、`$XDG_DATA_HOME/luwiki/cert/`配下に保存する。
 
 `--log-level`オプションの`<LEVEL>`には以下の値が設定可能。
 
@@ -95,7 +101,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 
 <a id="run"></a>
 ### runコマンド
-HTTPサーバを起動する。
+HTTP/HTTPSサーバを起動する。
 
 #### コマンドライン
 ```sh
@@ -109,7 +115,7 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 | `-b`, `--open-browser` | サーバ起動時にブラウザを起動する |
  
 #### 概要
-引数`BIND-ADDR:PORT`でアドレスにバインドしHTTPサーバを起動する(デフォルトは"0.0.0.0:8080")。
+引数`BIND-ADDR:PORT`でアドレスにバインドしHTTP/HTTPSサーバを起動する(デフォルトは"0.0.0.0:8080")。
 
 `--open-browser`オプションが指定された場合は、同時に規定のブラウザを起動する（デスクトップ環境でのみ有効）。
 
@@ -629,6 +635,8 @@ luwiki [OPTIONS] asset move_to <ASSET-ID> <PAGE-ID|PAGE-PATH>
 |:--|:--|:--|:--
 | `log_level` | ログレベル | `--log-level` | "info"
 | `log_output` | ログの出力先 | `--log-output` | `$XDG_DATA_HOME/luwiki/log`
+| `use_tls` | TLSの使用 | `--tls` | false
+| `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
 | `db_path` | データベースファイルのパス | `--db-path` | `$XDG_DATA_HOME/luwiki/database.redb`
 | `assets_path` | アセットデータ格納ディレクトリのパス | `--assets-path` | `$XDG_DATA_HOME/luwiki/assets/`
 

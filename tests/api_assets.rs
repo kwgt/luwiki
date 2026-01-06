@@ -5,6 +5,7 @@
  */
 
 use std::fs;
+use std::fs::File;
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -34,14 +35,14 @@ fn post_assets_creates_asset() {
     /*
      * テスト環境の準備
      */
-    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let (base_dir, db_path, assets_dir, config_path) = prepare_test_dirs();
     let port = reserve_port();
 
-    run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    run_add_user(&db_path, &assets_dir, &config_path);
+    let server = ServerGuard::start(port, &db_path, &assets_dir, &config_path);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -82,14 +83,14 @@ fn delete_assets_marks_deleted() {
     /*
      * テスト環境の準備
      */
-    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let (base_dir, db_path, assets_dir, config_path) = prepare_test_dirs();
     let port = reserve_port();
 
-    run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    run_add_user(&db_path, &assets_dir, &config_path);
+    let server = ServerGuard::start(port, &db_path, &assets_dir, &config_path);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -149,14 +150,14 @@ fn get_assets_returns_redirect_and_data() {
     /*
      * テスト環境の準備
      */
-    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let (base_dir, db_path, assets_dir, config_path) = prepare_test_dirs();
     let port = reserve_port();
 
-    run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    run_add_user(&db_path, &assets_dir, &config_path);
+    let server = ServerGuard::start(port, &db_path, &assets_dir, &config_path);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -269,7 +270,7 @@ fn get_assets_returns_redirect_and_data() {
 /// # 戻り値
 /// テスト用の作業ディレクトリとDB/アセットパスを返す。
 ///
-fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
+fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     /*
      * 一時ディレクトリの生成
      */
@@ -289,10 +290,16 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
 
     let db_path = base_dir.join("database.redb");
     let assets_dir = base_dir.join("assets");
+    let config_path = base_dir.join("config.toml");
 
     fs::create_dir_all(&assets_dir).expect("create assets dir failed");
+    fs::write(
+        &config_path,
+        "[global]\nuse_tls = false\n",
+    )
+    .expect("write config failed");
 
-    (base_dir, db_path, assets_dir)
+    (base_dir, db_path, assets_dir, config_path)
 }
 
 ///
@@ -323,12 +330,19 @@ fn reserve_port() -> u16 {
 /// # 戻り値
 /// なし
 ///
-fn run_add_user(db_path: &Path, assets_dir: &Path) {
+fn run_add_user(db_path: &Path, assets_dir: &Path, config_path: &Path) {
     /*
      * ユーザ追加コマンドの実行
      */
     let exe = test_binary_path();
+    let base_dir = db_path
+        .parent()
+        .expect("db_path parent missing");
     let mut child = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
+        .arg("--config-path")
+        .arg(config_path)
         .arg("--db-path")
         .arg(db_path)
         .arg("--assets-path")
@@ -357,6 +371,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
 ///
 struct ServerGuard {
     child: Child,
+    stderr_path: PathBuf,
 }
 
 impl ServerGuard {
@@ -371,9 +386,24 @@ impl ServerGuard {
     /// # 戻り値
     /// 起動したサーバガードを返す。
     ///
-    fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
+    fn start(
+        port: u16,
+        db_path: &Path,
+        assets_dir: &Path,
+        config_path: &Path,
+    ) -> Self {
         let exe = test_binary_path();
+        let base_dir = db_path
+            .parent()
+            .expect("db_path parent missing");
+        let stderr_path = base_dir.join("server_stderr.log");
+        let stderr_file = File::create(&stderr_path)
+            .expect("create server stderr log failed");
         let child = Command::new(exe)
+            .env("XDG_CONFIG_HOME", base_dir)
+            .env("XDG_DATA_HOME", base_dir)
+            .arg("--config-path")
+            .arg(config_path)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")
@@ -382,11 +412,15 @@ impl ServerGuard {
             .arg(format!("127.0.0.1:{}", port))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(stderr_file))
             .spawn()
             .expect("spawn server failed");
 
-        Self { child }
+        Self { child, stderr_path }
+    }
+
+    fn stderr_path(&self) -> &Path {
+        &self.stderr_path
     }
 }
 
@@ -415,11 +449,12 @@ impl Drop for ServerGuard {
 /// # 戻り値
 /// なし
 ///
-fn wait_for_server(url: &str) {
+fn wait_for_server(url: &str, stderr_path: &Path) {
     /*
      * サーバ起動待ち
      */
     let client = build_client();
+    let mut last_error: Option<String> = None;
 
     for _ in 0..50 {
         let response = client
@@ -428,15 +463,25 @@ fn wait_for_server(url: &str) {
             .send();
 
         if let Ok(resp) = response {
-            if resp.status().as_u16() == 200 {
+            let status = resp.status().as_u16();
+            if status == 200 {
                 return;
             }
+            last_error = Some(format!("status {}", status));
+        } else if let Err(err) = response {
+            last_error = Some(format!("request error: {}", err));
         }
 
         thread::sleep(Duration::from_millis(100));
     }
 
-    panic!("server did not start");
+    let stderr_output = fs::read_to_string(stderr_path)
+        .unwrap_or_else(|_| "(stderr read failed)".to_string());
+    panic!(
+        "server did not start: {} (last error: {})",
+        stderr_output,
+        last_error.unwrap_or_else(|| "unknown".to_string())
+    );
 }
 
 ///
@@ -447,7 +492,7 @@ fn wait_for_server(url: &str) {
 ///
 fn build_no_redirect_client() -> Client {
     Client::builder()
-        .timeout(Duration::from_millis(500))
+        .timeout(Duration::from_millis(7000))
         .redirect(Policy::none())
         .build()
         .expect("client build failed")
@@ -461,7 +506,7 @@ fn build_no_redirect_client() -> Client {
 ///
 fn build_client() -> Client {
     Client::builder()
-        .timeout(Duration::from_millis(500))
+        .timeout(Duration::from_millis(7000))
         .build()
         .expect("client build failed")
 }

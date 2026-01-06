@@ -478,7 +478,7 @@ function buildAssetDownloadUrl(fileName: string): string {
 
 
       <main
-        class="grid min-h-0 flex-1 items-stretch gap-1"
+        class="grid min-h-0 flex-1 items-stretch gap-1 md:min-h-[calc(100vh-12.8em)] md:max-h-[calc(100vh-12.8em)] md:overflow-hidden"
         :class="
           sidePanelCollapsed
             ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
@@ -513,17 +513,48 @@ function buildAssetDownloadUrl(fileName: string): string {
           v-if="showEditorPanel"
           class="order-1 flex min-h-0 flex-col gap-1 md:order-2"
         >
-          <section class="flex min-h-0 flex-1 border border-base-300 bg-base-100 shadow-sm">
+          <section
+            class="flex min-h-[calc(100vh-12.8em)] flex-1 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
+          >
             <textarea
               v-model="sourceText"
               placeholder="Markdownを入力してください"
               class="h-full w-full resize-none bg-base-100 p-3 text-sm"
             />
           </section>
+        </div>
 
+        <div
+          v-if="showPreviewPanel"
+          class="order-3 flex min-h-0 flex-col gap-1 md:order-3"
+          :class="{ 'md:col-span-1 lg:col-span-1': !sidePanelCollapsed }"
+        >
+          <section
+            class="flex min-h-[calc(100vh-12.8em)] flex-1 overflow-hidden border border-base-300 bg-transparent shadow-sm md:min-h-0"
+          >
+            <article
+              class="markdown-body flex-1 w-full overflow-auto p-4"
+              :class="[markdownThemeClass, prismThemeClass]"
+              :style="markdownStyle"
+              v-html="renderedHtml"
+            />
+          </section>
+        </div>
+      </main>
+
+      <footer>
+        <div
+          class="grid items-stretch gap-1"
+          :class="
+            sidePanelCollapsed
+              ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
+              : 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]'
+          "
+        >
           <section
             class="border p-4 shadow-sm transition-colors"
             :class="[
+              sidePanelCollapsed ? 'lg:col-start-1' : 'md:col-start-2 lg:col-start-2',
               assetInteractionDisabled ? 'pointer-events-none opacity-50' : '',
               isAssetDragging
                 ? 'border-info/70 bg-info/10'
@@ -601,22 +632,7 @@ function buildAssetDownloadUrl(fileName: string): string {
             </div>
           </section>
         </div>
-
-        <div
-          v-if="showPreviewPanel"
-          class="order-3 flex min-h-0 flex-col gap-1 md:order-3"
-          :class="{ 'md:col-span-1 lg:col-span-1': !sidePanelCollapsed }"
-        >
-          <section class="flex min-h-0 flex-1 overflow-hidden border border-base-300 bg-transparent shadow-sm">
-            <article
-              class="markdown-body flex-1 w-full overflow-auto p-4"
-              :class="[markdownThemeClass, prismThemeClass]"
-              :style="markdownStyle"
-              v-html="renderedHtml"
-            />
-          </section>
-        </div>
-      </main>
+      </footer>
 
       <div v-if="errorMessage" class="alert alert-error">
         {{ errorMessage }}

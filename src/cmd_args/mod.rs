@@ -93,6 +93,16 @@ fn default_assets_path() -> PathBuf {
     DEFAULT_DATA_PATH.join("assets")
 }
 
+///
+/// デフォルトのサーバ証明書ファイルのパス情報を生成
+///
+/// # 戻り値
+/// サーバ証明書ファイルのパス情報
+///
+fn default_cert_path() -> PathBuf {
+    DEFAULT_DATA_PATH.join("server.pem")
+}
+
 /// アセットの最大サイズ(10MiB)
 const MAX_ASSET_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -212,6 +222,14 @@ pub struct Options {
     #[arg(long = "log-tee")]
     log_tee: bool,
 
+    /// TLSでの通信を有効にする
+    #[arg(short = 'T', long = "tls")]
+    use_tls: bool,
+
+    /// TLS用のサーバ証明書ファイルのパス
+    #[arg(short = 'C', long = "cert", value_name = "FILE")]
+    cert_path: Option<PathBuf>,
+
     /// データベースファイルのパス
     #[arg(short = 'd', long = "db-path")]
     db_path: Option<PathBuf>,
@@ -300,6 +318,41 @@ impl Options {
         } else {
             default_assets_path()
         }
+    }
+
+    ///
+    /// TLS有効フラグへのアクセサ
+    ///
+    /// # 戻り値
+    /// TLSが有効ならtrueを返す。
+    ///
+    pub(crate) fn use_tls(&self) -> bool {
+        self.use_tls
+    }
+
+    ///
+    /// サーバ証明書ファイルのパスへのアクセサ
+    ///
+    /// # 戻り値
+    /// オプションで指定された証明書パスを返す。未指定の場合はデフォルトのパス
+    /// を返す。
+    ///
+    pub(crate) fn cert_path(&self) -> PathBuf {
+        if let Some(path) = &self.cert_path {
+            path.clone()
+        } else {
+            default_cert_path()
+        }
+    }
+
+    ///
+    /// サーバ証明書パスの明示指定フラグへのアクセサ
+    ///
+    /// # 戻り値
+    /// 証明書パスが明示指定されている場合はtrueを返す。
+    ///
+    pub(crate) fn is_cert_path_explicit(&self) -> bool {
+        self.cert_path.is_some()
     }
 
     ///
@@ -400,6 +453,18 @@ impl Options {
                 if self.assets_path.is_none() {
                     if let Some(path) = &config.assets_path() {
                         self.assets_path = Some(path.clone());
+                    }
+                }
+
+                if !self.use_tls {
+                    if let Some(use_tls) = config.use_tls() {
+                        self.use_tls = use_tls;
+                    }
+                }
+
+                if self.cert_path.is_none() {
+                    if let Some(path) = &config.server_cert() {
+                        self.cert_path = Some(path.clone());
                     }
                 }
 
@@ -522,6 +587,8 @@ impl Options {
         println!("   log level:        {}", self.log_level().as_ref());
         println!("   log output:       {}", self.log_output().display());
         println!("   log tee:          {}", self.log_tee());
+        println!("   tls enabled:      {}", self.use_tls());
+        println!("   cert path:        {}", self.cert_path().display());
         println!("   assets directory: {}", self.assets_path().display());
 
         // サブコマンドが指定されており、そのサブコマンドがオプションを持つなら
@@ -2371,6 +2438,8 @@ fn save_config(opts: &Options) -> Result<()> {
     config.set_log_output(opts.log_output());
     config.set_db_path(opts.db_path());
     config.set_assets_path(opts.assets_path());
+    config.set_use_tls(opts.use_tls());
+    config.set_server_cert(opts.cert_path());
 
     match &opts.command {
         Some(Command::Run(opts)) => {
@@ -2490,4 +2559,49 @@ where
 
     let ans = buf.trim().to_lowercase();
     Ok(ans == "y" || ans == "yes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parse_tls_and_cert_options() {
+        let dir = TempDir::new().expect("temp dir");
+        let cert_path = dir.path().join("server.pem");
+        let cert_arg = cert_path.to_string_lossy().to_string();
+        let args = ["luwiki", "--tls", "--cert", &cert_arg, "run"];
+
+        let opts = Options::try_parse_from(args).expect("parse failed");
+        assert!(opts.use_tls());
+        assert!(opts.is_cert_path_explicit());
+        assert_eq!(opts.cert_path(), cert_path);
+    }
+
+    #[test]
+    fn save_config_writes_tls_settings() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        let config_arg = config_path.to_string_lossy().to_string();
+        let cert_path = dir.path().join("certs/server.pem");
+        let cert_arg = cert_path.to_string_lossy().to_string();
+        let args = [
+            "luwiki",
+            "--tls",
+            "--cert",
+            &cert_arg,
+            "--config-path",
+            &config_arg,
+            "run",
+        ];
+
+        let opts = Options::try_parse_from(args).expect("parse failed");
+        save_config(&opts).expect("save failed");
+
+        let config = config::load(&config_path).expect("load failed");
+        assert_eq!(config.use_tls(), Some(true));
+        assert_eq!(config.server_cert(), Some(cert_path));
+    }
 }
