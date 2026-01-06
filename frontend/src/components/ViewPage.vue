@@ -33,6 +33,7 @@ const {
   errorMessage,
   pageDeleteOpen,
   pageDeleteLoading,
+  pageDeleteRecursive,
   loadPage,
   uploadAssets,
   openPageMeta,
@@ -708,9 +709,19 @@ watch(sidePanelCollapsed, (value) => {
     <div v-if="pageDeleteOpen" class="modal modal-open">
       <div class="modal-box space-y-4">
         <h3 class="text-lg font-bold">ページ削除</h3>
-        <p class="text-sm text-base-content/70">
-          "{{ pageTitle }}" を削除しますか？
-        </p>
+        <div class="flex justify-between">
+          <p class="text-sm text-base-content/70">
+            "{{ pageTitle }}" を削除しますか？
+          </p>
+          <label class="flex items-center gap-2 text-sm text-base-content/70">
+            <input
+              v-model="pageDeleteRecursive"
+              class="checkbox checkbox-ghost checkbox-xs"
+              type="checkbox"
+            />
+            <span>子ページも削除（再帰）</span>
+          </label>
+        </div>
         <div class="modal-action">
           <button class="btn" type="button" @click="dismissPageDeleteConfirm">
             キャンセル

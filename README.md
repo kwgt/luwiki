@@ -39,6 +39,12 @@ Options:
       --log-tee
           ログを標準出力にも同時出力するか否か
 
+  -T, --tls
+          TLSでの通信を有効にする
+
+  -C, --cert <FILE>
+          TLS用のサーバ証明書ファイルのパス
+
   -d, --db-path <DB_PATH>
           データベースファイルのパス
 

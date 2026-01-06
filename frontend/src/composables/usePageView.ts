@@ -74,6 +74,7 @@ export function usePageView() {
   const assetDeleteLoading = ref(false);
   const pageDeleteOpen = ref(false);
   const pageDeleteLoading = ref(false);
+  const pageDeleteRecursive = ref(false);
   const errorMessage = ref('');
 
   const pageTitle = computed(() => extractTitle(source.value, pagePath.value));
@@ -251,11 +252,13 @@ export function usePageView() {
       reportError(new Error('page id not found'));
       return;
     }
+    pageDeleteRecursive.value = false;
     pageDeleteOpen.value = true;
   }
 
   function dismissPageDeleteConfirm(): void {
     pageDeleteOpen.value = false;
+    pageDeleteRecursive.value = false;
   }
 
   async function confirmPageDelete(): Promise<void> {
@@ -273,7 +276,7 @@ export function usePageView() {
       }
       const tokenKey = buildLockTokenKey(pageId.value);
       const lockToken = sessionStorage.getItem(tokenKey) ?? undefined;
-      await deletePage(pageId.value, lockToken);
+      await deletePage(pageId.value, lockToken, pageDeleteRecursive.value);
       const nextUrl = redirectPath === '/' ? '/wiki/' : `/wiki${redirectPath}`;
       window.location.replace(nextUrl);
     } catch (err: unknown) {
@@ -393,6 +396,7 @@ export function usePageView() {
     errorMessage,
     pageDeleteOpen,
     pageDeleteLoading,
+    pageDeleteRecursive,
     loadPage,
     uploadAssets,
     openPageMeta,

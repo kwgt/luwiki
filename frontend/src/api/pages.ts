@@ -150,6 +150,7 @@ export async function restorePagePath(
 export async function deletePage(
   pageId: string,
   lockToken?: string,
+  recursive?: boolean,
 ): Promise<void> {
   const headers: Record<string, string> = {};
   if (lockToken) {
@@ -159,6 +160,7 @@ export async function deletePage(
     `/pages/${pageId}`,
     {
       headers,
+      params: recursive ? { recursive: true } : undefined,
       validateStatus: () => true,
     },
   );

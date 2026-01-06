@@ -21,12 +21,16 @@ use std::time::Duration;
 use anyhow::Result;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use actix_web::dev::ServiceResponse;
+#[cfg(target_os="windows")]
+use actix_web::dev::ServerHandle;
 use actix_web::http::StatusCode;
 use actix_web::middleware::{ErrorHandlerResponse, ErrorHandlers};
 use actix_web::dev::Server;
 use log::{info, warn};
 use tokio::runtime::Builder;
 use tokio::time;
+#[cfg(target_os="windows")]
+use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
 
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
@@ -94,7 +98,12 @@ pub(crate) fn run(
      */
     info!("HTTP server start");
 
-    match rt.block_on(async {server.await}) {
+    match rt.block_on(async {
+        #[cfg(target_os = "windows")]
+        windows_event_fook(server.handle());
+
+        server.await
+    }) {
         Ok(()) => {
             info!("HTTP server exit");
             Ok(())
@@ -160,7 +169,34 @@ fn create_server(
         server.bind(bind_addr)?
     };
 
-    Ok(server.run())
+    Ok(server.shutdown_timeout(10).run())
+}
+
+///
+/// Windows用イベントフック
+///
+/// # 引数
+/// * `handle` - フックを登録するハンドル
+///
+/// # 戻り値
+/// なし
+///
+#[cfg(target_os = "windows")]
+fn windows_event_fook(handle: ServerHandle) {
+    let mut close = ctrl_close().expect("failed to install CLOSE handler");
+    let mut logoff = ctrl_logoff().expect("failed to install LOGOFF handler");
+    let mut shutdown = ctrl_shutdown().expect("failed to install SHUTDOWN handler");
+
+    tokio::spawn(async move {
+        // どれか来たら終了
+        tokio::select! {
+            _ = close.recv() => info!("caught CLOSE event"),
+            _ = logoff.recv() => info!("caught LOGOFF event"),
+            _ = shutdown.recv() => info!("caught SHUTDOWN event"),
+        };
+
+        handle.stop(true).await;
+    });
 }
 
 ///
