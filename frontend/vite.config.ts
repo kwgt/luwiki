@@ -14,13 +14,15 @@ export default defineConfig({
         index: path.resolve(__dirname, 'index.html'),
       },
       output: {
-        entryFileNames: (chunk) => (chunk.name === 'index' ? 'app.js' : '[name].js'),
-        chunkFileNames: 'chunk-[name].js',
+        entryFileNames: (chunk) =>
+					(chunk.name === 'index' ? 'app.[hash].js' : '[name].[hash].js'),
+
+        chunkFileNames: 'chunk-[name].[hash].js',
         assetFileNames: (assetInfo) => {
           if (assetInfo.name && assetInfo.name.endsWith('.css')) {
-            return 'app.css';
+            return 'app.[hash].css';
           }
-          return 'assets/[name][extname]';
+          return 'assets/[name].[hash][extname]';
         },
       },
     },

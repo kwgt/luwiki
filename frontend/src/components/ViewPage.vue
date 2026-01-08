@@ -338,7 +338,7 @@ watch(sidePanelCollapsed, (value) => {
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
             LUWIKI VIEW
           </p>
-          <h1 class="text-3xl font-bold leading-tight sm:text-4xl mt-3 mb-2" :title="pageTitle">
+          <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2" :title="pageTitle">
             {{ pageTitle }}
           </h1>
           <nav

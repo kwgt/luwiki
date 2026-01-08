@@ -48,12 +48,14 @@ fn page_delete_cli_soft_delete_fails_on_second_try() {
         &assets_dir,
         false,
         false,
+        false,
         "/soft-delete",
     );
 
     run_page_delete_expect_fail(
         &db_path,
         &assets_dir,
+        false,
         false,
         false,
         "/soft-delete",
@@ -92,6 +94,7 @@ fn page_delete_cli_hard_delete_removes_page() {
         &assets_dir,
         true,
         false,
+        false,
         "/hard-delete",
     );
 
@@ -101,6 +104,7 @@ fn page_delete_cli_hard_delete_removes_page() {
     run_page_delete_expect_fail(
         &db_path,
         &assets_dir,
+        false,
         false,
         false,
         "/hard-delete",
@@ -139,6 +143,7 @@ fn page_delete_cli_hard_delete_after_soft_delete_removes_page() {
         &assets_dir,
         false,
         false,
+        false,
         "/soft-hard-delete",
     );
 
@@ -146,6 +151,7 @@ fn page_delete_cli_hard_delete_after_soft_delete_removes_page() {
         &db_path,
         &assets_dir,
         true,
+        false,
         false,
         &page_id,
     );
@@ -185,12 +191,106 @@ fn page_delete_cli_force_releases_lock() {
         &db_path,
         &assets_dir,
         false,
+        false,
         true,
         "/force-delete",
     );
 
     let lock_output = run_lock_list(&db_path, &assets_dir);
     assert!(!lock_output.contains("/force-delete"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+///
+/// page delete --recursive が配下ページを削除することを確認する。
+///
+/// # 注記
+/// 1) テスト用ユーザを作成する
+/// 2) 親子ページを作成する
+/// 3) page delete --recursive を実行する
+/// 4) page list に対象が含まれないことを確認する
+fn page_delete_cli_recursive_deletes_children() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let md_path = base_dir.join("page.md");
+    fs::write(&md_path, "# delete\n").expect("write markdown failed");
+
+    let _ = run_page_add(
+        &db_path,
+        &assets_dir,
+        TEST_USERNAME,
+        &md_path,
+        "/recursive-delete",
+    );
+    let _ = run_page_add(
+        &db_path,
+        &assets_dir,
+        TEST_USERNAME,
+        &md_path,
+        "/recursive-delete/child",
+    );
+
+    run_page_delete(
+        &db_path,
+        &assets_dir,
+        false,
+        true,
+        false,
+        "/recursive-delete",
+    );
+
+    let list_output = run_page_list(&db_path, &assets_dir);
+    assert!(list_output.contains("[/recursive-delete]"));
+    assert!(list_output.contains("[/recursive-delete/child]"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+///
+/// page delete --recursive がロック中ページを検出した場合に失敗することを確認する。
+///
+/// # 注記
+/// 1) テスト用ユーザを作成する
+/// 2) APIで親子ページを作成し子ページをロックする
+/// 3) page delete --recursive を実行する
+/// 4) page list に対象が残っていることを確認する
+fn page_delete_cli_recursive_fails_when_child_locked() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+
+    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
+    wait_for_server(&hello_url);
+
+    let api_url = format!("http://127.0.0.1:{}/api", port);
+    let _parent_id = create_page(&api_url, "/recursive-locked", "body");
+    let child_id = create_page(
+        &api_url,
+        "/recursive-locked/child",
+        "body",
+    );
+    lock_page(&api_url, &child_id);
+
+    drop(server);
+
+    run_page_delete_expect_fail(
+        &db_path,
+        &assets_dir,
+        false,
+        true,
+        false,
+        "/recursive-locked",
+    );
+
+    let list_output = run_page_list(&db_path, &assets_dir);
+    assert!(list_output.contains("/recursive-locked"));
+    assert!(list_output.contains("/recursive-locked/child"));
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -324,12 +424,14 @@ fn run_page_add(
 /// * `db_path` - DBファイルのパス
 /// * `assets_dir` - アセットディレクトリのパス
 /// * `hard_delete` - ハードデリート指定
+/// * `recursive` - 再帰削除指定
 /// * `force` - ロック強制解除指定
 /// * `target` - 削除対象のページIDまたはページパス
 fn run_page_delete(
     db_path: &Path,
     assets_dir: &Path,
     hard_delete: bool,
+    recursive: bool,
     force: bool,
     target: &str,
 ) {
@@ -350,6 +452,10 @@ fn run_page_delete(
 
     if hard_delete {
         command.arg("--hard-delete");
+    }
+
+    if recursive {
+        command.arg("--recursive");
     }
 
     if force {
@@ -376,12 +482,14 @@ fn run_page_delete(
 /// * `db_path` - DBファイルのパス
 /// * `assets_dir` - アセットディレクトリのパス
 /// * `hard_delete` - ハードデリート指定
+/// * `recursive` - 再帰削除指定
 /// * `force` - ロック強制解除指定
 /// * `target` - 削除対象のページIDまたはページパス
 fn run_page_delete_expect_fail(
     db_path: &Path,
     assets_dir: &Path,
     hard_delete: bool,
+    recursive: bool,
     force: bool,
     target: &str,
 ) {
@@ -402,6 +510,10 @@ fn run_page_delete_expect_fail(
 
     if hard_delete {
         command.arg("--hard-delete");
+    }
+
+    if recursive {
+        command.arg("--recursive");
     }
 
     if force {

@@ -73,19 +73,6 @@ pub async fn delete(
     };
 
     /*
-     * 認証ユーザ取得
-     */
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(user) => user.user_id().to_string(),
-        None => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "auth context missing",
-            ));
-        }
-    };
-
-    /*
      * 共有状態取得
      */
     let state = match state.read() {
@@ -131,7 +118,64 @@ pub async fn delete(
         ));
     }
 
+    /*
+     * 再帰削除指定がある場合の処理
+     * ※処理は個々で完結する
+     */
     let recursive = query.recursive.unwrap_or(false);
+
+    if recursive {
+        if let Err(err) = state.db().delete_pages_recursive_by_id(
+            &page_id,
+            false,
+        ) {
+            if let Some(DbError::PageNotFound) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "page not found",
+                ));
+            }
+            if let Some(DbError::RootPageProtected) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::BAD_REQUEST,
+                    "root page is protected",
+                ));
+            }
+            if let Some(DbError::PageLocked) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::LOCKED,
+                    "page locked",
+                ));
+            }
+
+            return Ok(resp_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "page delete failed",
+            ));
+        }
+
+        return Ok(HttpResponse::NoContent().finish());
+    }
+
+    /*
+     * 認証ユーザ取得
+     */
+    let auth_user = match req.extensions().get::<AuthUser>() {
+        Some(user) => user.user_id().to_string(),
+        None => {
+            return Ok(resp_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "auth context missing",
+            ));
+        }
+    };
+
     let user_id = match state.db().get_user_id_by_name(&auth_user) {
         Ok(Some(user_id)) => user_id,
         Ok(None) => {
@@ -148,136 +192,19 @@ pub async fn delete(
         }
     };
 
-    if recursive {
-        let base_path = match page_index.current_path() {
-            Some(path) => path.to_string(),
-            None => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "page path not found",
-                ));
-            }
-        };
-        let prefix = format!("{}/", base_path.trim_end_matches('/'));
-
-        let pages = match state.db().list_pages() {
-            Ok(pages) => pages,
-            Err(_) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "page list failed",
-                ));
-            }
-        };
-
-        let mut targets = Vec::new();
-        for page in pages {
-            if page.deleted() {
-                continue;
-            }
-            let path = page.path();
-            if path == base_path || path.starts_with(&prefix) {
-                targets.push(page.id());
-            }
-        }
-
-        for target_id in &targets {
-            let lock_info = match state.db().get_page_lock_info(target_id) {
-                Ok(info) => info,
-                Err(_) => {
-                    return Ok(resp_error_json(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "lock lookup failed",
-                    ));
-                }
-            };
-            if let Some(lock_info) = lock_info {
-                let reason = if lock_info.user() == user_id {
-                    "page locked by you"
-                } else {
-                    "page locked by other user"
-                };
-                return Ok(resp_error_json(StatusCode::LOCKED, reason));
-            }
-        }
-
-        for target_id in targets {
-            if let Err(err) = state.db().delete_page_by_id(&target_id) {
-                if let Some(DbError::PageNotFound) =
-                    err.downcast_ref::<DbError>()
-                {
-                    return Ok(resp_error_json(
-                        StatusCode::NOT_FOUND,
-                        "page not found",
-                    ));
-                }
-                if let Some(DbError::RootPageProtected) =
-                    err.downcast_ref::<DbError>()
-                {
-                    return Ok(resp_error_json(
-                        StatusCode::BAD_REQUEST,
-                        "root page is protected",
-                    ));
-                }
-
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "page delete failed",
-                ));
-            }
-        }
-
-        return Ok(HttpResponse::NoContent().finish());
-    }
-
-    /*
-     * ロック検証
-     */
-    let lock_info = match state.db().get_page_lock_info(&page_id) {
-        Ok(info) => info,
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock lookup failed",
-            ));
-        }
-    };
-
-    if let Some(lock_info) = lock_info {
-        /*
-         * ロックトークンの取得
-         */
-        if !req.headers().contains_key(LOCK_AUTH_HEADER) {
-            return Ok(resp_error_json(
-                StatusCode::LOCKED,
-                "page locked",
-            ));
-        }
-
-        let token = match parse_lock_token(&req) {
-            Ok(token) => token,
-            Err(resp) => return Ok(resp),
-        };
-
-        if lock_info.token() != token {
-            return Ok(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-
-        if lock_info.user() != user_id {
-            return Ok(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock forbidden",
-            ));
-        }
-    }
-
     /*
      * ページ削除
      */
-    match state.db().delete_page_by_id(&page_id) {
+    let token = match parse_lock_token_optional(&req) {
+        Ok(token) => token,
+        Err(resp) => return Ok(resp),
+    };
+
+    match state.db().delete_page_by_id_with_lock_token(
+        &page_id,
+        &user_id,
+        token.as_ref(),
+    ) {
         Ok(()) => {}
         Err(err) => {
             if let Some(DbError::PageNotFound) =
@@ -294,6 +221,22 @@ pub async fn delete(
                 return Ok(resp_error_json(
                     StatusCode::BAD_REQUEST,
                     "root page is protected",
+                ));
+            }
+            if let Some(DbError::PageLocked) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::LOCKED,
+                    "page locked",
+                ));
+            }
+            if let Some(DbError::LockForbidden) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::FORBIDDEN,
+                    "lock forbidden",
                 ));
             }
 
@@ -387,4 +330,26 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
             "lock token invalid",
         )),
     }
+}
+
+///
+/// ロック解除トークンの解析（任意）
+///
+/// # 概要
+/// ヘッダが存在する場合のみロック解除トークンを解析する。
+///
+/// # 引数
+/// * `req` - HTTPリクエスト
+///
+/// # 戻り値
+/// トークンが指定されていない場合は`Ok(None)`を返す。
+///
+fn parse_lock_token_optional(
+    req: &HttpRequest,
+) -> Result<Option<LockToken>, HttpResponse> {
+    if !req.headers().contains_key(LOCK_AUTH_HEADER) {
+        return Ok(None);
+    }
+
+    parse_lock_token(req).map(Some)
 }

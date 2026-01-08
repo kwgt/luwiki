@@ -14,6 +14,7 @@ import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-rust';
 import 'prismjs/components/prism-go';
+import 'prismjs/components/prism-csharp';
 import 'prismjs/components/prism-toml';
 import 'prismjs/components/prism-diff';
 import 'prismjs/components/prism-css';

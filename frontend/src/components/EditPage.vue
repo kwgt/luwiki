@@ -385,7 +385,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
             LUWIKI EDIT
           </p>
-          <h1 class="text-3xl font-bold leading-tight sm:text-4xl mt-3 mb-2">
+          <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2">
             {{ editorTitle || '編集画面' }}
           </h1>
           <nav
@@ -478,7 +478,7 @@ function buildAssetDownloadUrl(fileName: string): string {
 
 
       <main
-        class="grid min-h-0 flex-1 items-stretch gap-1 md:min-h-[calc(100vh-12.8em)] md:max-h-[calc(100vh-12.8em)] md:overflow-hidden"
+        class="grid min-h-0 flex-1 items-stretch gap-1 md:flex-none md:h-[calc(100vh-12.8em)] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden"
         :class="
           sidePanelCollapsed
             ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
@@ -487,9 +487,11 @@ function buildAssetDownloadUrl(fileName: string): string {
       >
         <aside
           v-if="!sidePanelCollapsed"
-          class="order-2 hidden flex-col gap-1 md:flex md:order-1"
+          class="order-2 hidden min-h-0 flex-col gap-1 md:flex md:order-1"
         >
-          <section class="h-full overflow-auto border border-base-300 bg-base-100 p-3 shadow-sm">
+          <section
+            class="flex-1 min-h-0 overflow-auto border border-base-300 bg-base-100 p-3 shadow-sm"
+          >
             <h2 class="mb-3 text-lg font-semibold">TOC</h2>
             <ul v-if="tocItems.length > 0" class="flex flex-col gap-1 text-sm">
               <li v-for="entry in tocItems" :key="entry.anchor">
@@ -514,7 +516,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           class="order-1 flex min-h-0 flex-col gap-1 md:order-2"
         >
           <section
-            class="flex min-h-[calc(100vh-12.8em)] flex-1 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
+            class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
           >
             <textarea
               v-model="sourceText"
@@ -530,10 +532,10 @@ function buildAssetDownloadUrl(fileName: string): string {
           :class="{ 'md:col-span-1 lg:col-span-1': !sidePanelCollapsed }"
         >
           <section
-            class="flex min-h-[calc(100vh-12.8em)] flex-1 overflow-hidden border border-base-300 bg-transparent shadow-sm md:min-h-0"
+            class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 overflow-hidden border border-base-300 bg-transparent shadow-sm md:min-h-0"
           >
             <article
-              class="markdown-body flex-1 w-full overflow-auto p-4"
+              class="markdown-body flex-1 min-h-0 w-full overflow-auto p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"
               v-html="renderedHtml"

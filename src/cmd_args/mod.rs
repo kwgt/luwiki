@@ -1625,6 +1625,10 @@ pub(crate) struct PageDeleteOpts {
     #[arg(short = 'H', long = "hard-delete")]
     hard_delete: bool,
 
+    /// 配下ページを含めて削除する
+    #[arg(short = 'r', long = "recursive")]
+    recursive: bool,
+
     /// ロック中でも強制的に削除を行う
     #[arg(short = 'f', long = "force")]
     force: bool,
@@ -1643,6 +1647,16 @@ impl PageDeleteOpts {
     ///
     pub(crate) fn is_hard_delete(&self) -> bool {
         self.hard_delete
+    }
+
+    ///
+    /// 再帰削除指定へのアクセサ
+    ///
+    /// # 戻り値
+    /// 再帰削除が指定されている場合はtrue
+    ///
+    pub(crate) fn is_recursive(&self) -> bool {
+        self.recursive
     }
 
     ///
@@ -1671,6 +1685,7 @@ impl ShowOptions for PageDeleteOpts {
     fn show_options(&self) {
         println!("page delete command options");
         println!("   hard_delete: {:?}", self.is_hard_delete());
+        println!("   recursive:   {:?}", self.is_recursive());
         println!("   force:       {:?}", self.is_force());
         println!("   target:      {}", self.target());
     }

@@ -23,6 +23,7 @@ struct PageDeleteCommandContext {
     manager: DatabaseManager,
     target: String,
     hard_delete: bool,
+    recursive: bool,
     force: bool,
 }
 
@@ -35,6 +36,7 @@ impl PageDeleteCommandContext {
             manager: opts.open_database()?,
             target: sub_opts.target(),
             hard_delete: sub_opts.is_hard_delete(),
+            recursive: sub_opts.is_recursive(),
             force: sub_opts.is_force(),
         })
     }
@@ -43,6 +45,9 @@ impl PageDeleteCommandContext {
 // CommandContextの実装
 impl CommandContext for PageDeleteCommandContext {
     fn exec(&self) -> Result<()> {
+        /*
+         * 削除対象の解決
+         */
         let (page_id, index) = if let Ok(page_id) = PageId::from_string(&self.target) {
             self.manager
                 .get_page_index_entry_by_id(&page_id)?
@@ -61,10 +66,31 @@ impl CommandContext for PageDeleteCommandContext {
             (page_id, index)
         };
 
+        /*
+         * 削除条件の検証
+         */
         if index.deleted() && !self.hard_delete {
             return Err(anyhow!("page already deleted"));
         }
 
+        if self.recursive && index.is_draft() {
+            return Err(anyhow!("draft page cannot be deleted recursively"));
+        }
+
+        /*
+         * 再帰削除
+         */
+        if self.recursive {
+            self.manager.delete_pages_recursive_by_id(
+                &page_id,
+                self.hard_delete,
+            )?;
+            return Ok(());
+        }
+
+        /*
+         * ロック検証
+         */
         if !self.force {
             let lock_info = self.manager.get_page_lock_info(&page_id)?;
             if lock_info.is_some() {
@@ -72,6 +98,9 @@ impl CommandContext for PageDeleteCommandContext {
             }
         }
 
+        /*
+         * ページ削除
+         */
         if self.hard_delete {
             self.manager.delete_page_by_id_hard(&page_id)?;
         } else {
