@@ -56,10 +56,13 @@ const {
 const {
   themeOptions,
   fontOptions,
+  editorKeymapOptions,
   selectedTheme,
   selectedFont,
   selectedFontSize,
   selectedCodeFontSize,
+  selectedEditorKeymap,
+  selectedEditorLineNumbers,
   markdownThemeClass,
   prismThemeClass,
   markdownStyle,
@@ -588,6 +591,31 @@ watch(sidePanelCollapsed, (value) => {
                 {{ font.label }}
               </option>
             </select>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">エディタキーバインド</span>
+            </div>
+            <select v-model="selectedEditorKeymap" class="select select-bordered">
+              <option v-for="option in editorKeymapOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">行番号表示</span>
+            </div>
+            <label class="label cursor-pointer justify-start gap-3">
+              <input
+                v-model="selectedEditorLineNumbers"
+                class="toggle toggle-sm"
+                type="checkbox"
+              />
+              <span class="label-text text-sm">表示する</span>
+            </label>
           </label>
 
           <label class="form-control w-full">

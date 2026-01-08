@@ -9,11 +9,20 @@ type FontFamilyMap = {
   code: string;
 };
 
+type EditorKeymap = 'default' | 'vim' | 'emacs' | 'vscode';
+
 const THEME_OPTIONS = ['light', 'dark'];
 const FONT_OPTIONS = [
   { value: 'sans', label: 'Sans' },
   { value: 'serif', label: 'Serif' },
   { value: 'mono', label: 'Mono' },
+];
+
+const EDITOR_KEYMAP_OPTIONS = [
+  { value: 'default', label: 'Default' },
+  { value: 'vim', label: 'Vim' },
+  { value: 'emacs', label: 'Emacs' },
+  { value: 'vscode', label: 'VSCode' },
 ];
 
 function applyTheme(theme: string): void {
@@ -60,6 +69,8 @@ export function useUiSettings() {
   const selectedFont = ref(FONT_OPTIONS[0].value);
   const selectedFontSize = ref(15);
   const selectedCodeFontSize = ref(15);
+  const selectedEditorKeymap = ref<EditorKeymap>('default');
+  const selectedEditorLineNumbers = ref(true);
   const fontFamilyMap = ref<FontFamilyMap>({
     ui: 'sans-serif',
     sans: 'sans-serif',
@@ -76,6 +87,12 @@ export function useUiSettings() {
   const prismThemeClass = computed(() =>
     selectedTheme.value === 'dark' ? 'prism-theme-dark' : 'prism-theme-light',
   );
+  const codeFontFamily = computed(() => fontFamilyMap.value.code);
+  const editorStyle = computed(() => ({
+    '--cm-font-family': codeFontFamily.value,
+    '--cm-font-size': `${selectedCodeFontSize.value}px`,
+  }));
+
   const markdownStyle = computed(() => ({
     '--md-font-family': resolveFontFamily(selectedFont.value, fontFamilyMap.value),
     '--md-code-font-family': fontFamilyMap.value.code,
@@ -111,6 +128,14 @@ export function useUiSettings() {
     } else {
       selectedCodeFontSize.value = selectedFontSize.value;
     }
+    const savedKeymap = localStorage.getItem('luwiki-editor-keymap');
+    if (savedKeymap && EDITOR_KEYMAP_OPTIONS.some((option) => option.value === savedKeymap)) {
+      selectedEditorKeymap.value = savedKeymap as EditorKeymap;
+    }
+    const savedLineNumbers = localStorage.getItem('luwiki-editor-line-numbers');
+    if (savedLineNumbers !== null) {
+      selectedEditorLineNumbers.value = savedLineNumbers === '1';
+    }
     applyTheme(selectedTheme.value);
     applyFontSettings(selectedFont.value, selectedFontSize.value);
     applyCodeFontSettings(selectedCodeFontSize.value);
@@ -128,13 +153,26 @@ export function useUiSettings() {
     applyCodeFontSettings(size);
   });
 
+  watch(selectedEditorKeymap, (value) => {
+    localStorage.setItem('luwiki-editor-keymap', value);
+  });
+
+  watch(selectedEditorLineNumbers, (value) => {
+    localStorage.setItem('luwiki-editor-line-numbers', value ? '1' : '0');
+  });
+
   return {
     themeOptions: THEME_OPTIONS,
     fontOptions: FONT_OPTIONS,
+    editorKeymapOptions: EDITOR_KEYMAP_OPTIONS,
     selectedTheme,
     selectedFont,
     selectedFontSize,
     selectedCodeFontSize,
+    selectedEditorKeymap,
+    selectedEditorLineNumbers,
+    codeFontFamily,
+    editorStyle,
     markdownThemeClass,
     prismThemeClass,
     markdownStyle,

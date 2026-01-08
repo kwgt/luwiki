@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePageEdit } from '../composables/usePageEdit';
 import { useUiSettings } from '../composables/useUiSettings';
+import EditorPane from './EditorPane.vue';
 import {
   createMarkdownRenderer,
   extractTitle,
@@ -66,6 +67,7 @@ const {
 } = usePageEdit();
 
 const sidePanelCollapsed = ref(false);
+const settingsOpen = ref(false);
 const sourceStatus = ref('未読込');
 const autoLoadSource = true;
 
@@ -80,7 +82,16 @@ let derivedTimer: number | null = null;
 const previewMode = ref(false);
 
 const {
+  themeOptions,
+  fontOptions,
+  editorKeymapOptions,
   selectedTheme,
+  selectedFont,
+  selectedFontSize,
+  selectedCodeFontSize,
+  selectedEditorKeymap,
+  selectedEditorLineNumbers,
+  editorStyle,
   markdownThemeClass,
   prismThemeClass,
   markdownStyle,
@@ -436,6 +447,13 @@ function buildAssetDownloadUrl(fileName: string): string {
           >
             キャンセル
           </button>
+          <button
+            class="btn btn-link btn-sm pr-1 text-info ml-auto"
+            type="button"
+            @click="settingsOpen = true"
+          >
+            設定
+          </button>
         </nav>
         <input
           ref="assetInputRef"
@@ -518,10 +536,14 @@ function buildAssetDownloadUrl(fileName: string): string {
           <section
             class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
           >
-            <textarea
+            <EditorPane
               v-model="sourceText"
               placeholder="Markdownを入力してください"
-              class="h-full w-full resize-none bg-base-100 p-3 text-sm"
+              :theme="selectedTheme"
+              :keymap="selectedEditorKeymap"
+              :line-numbers="selectedEditorLineNumbers"
+              :editor-style="editorStyle"
+              class="h-full w-full"
             />
           </section>
         </div>
@@ -695,6 +717,96 @@ function buildAssetDownloadUrl(fileName: string): string {
             @click="confirmRestoreCandidate"
           >
             復活して編集
+          </button>
+        </div>
+      </div>
+    </div>
+
+
+    <div v-if="settingsOpen" class="modal modal-open">
+      <div class="modal-box space-y-4">
+        <h3 class="text-lg font-bold">表示設定</h3>
+        <div class="space-y-3">
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">画面テーマ</span>
+            </div>
+            <select v-model="selectedTheme" class="select select-bordered">
+              <option v-for="theme in themeOptions" :key="theme" :value="theme">
+                {{ theme }}
+              </option>
+            </select>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">Markdownフォント</span>
+            </div>
+            <select v-model="selectedFont" class="select select-bordered">
+              <option v-for="font in fontOptions" :key="font.value" :value="font.value">
+                {{ font.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">エディタキーバインド</span>
+            </div>
+            <select v-model="selectedEditorKeymap" class="select select-bordered">
+              <option v-for="option in editorKeymapOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">行番号表示</span>
+            </div>
+            <label class="label cursor-pointer justify-start gap-3">
+              <input
+                v-model="selectedEditorLineNumbers"
+                class="toggle toggle-sm"
+                type="checkbox"
+              />
+              <span class="label-text text-sm">表示する</span>
+            </label>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">Markdownフォントサイズ</span>
+              <span class="label-text-alt">{{ selectedFontSize }}px</span>
+            </div>
+            <input
+              v-model.number="selectedFontSize"
+              type="range"
+              min="12"
+              max="22"
+              step="1"
+              class="range range-sm"
+            />
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">コードブロック文字サイズ</span>
+              <span class="label-text-alt">{{ selectedCodeFontSize }}px</span>
+            </div>
+            <input
+              v-model.number="selectedCodeFontSize"
+              type="range"
+              min="12"
+              max="22"
+              step="1"
+              class="range range-sm"
+            />
+          </label>
+        </div>
+        <div class="modal-action">
+          <button class="btn" type="button" @click="settingsOpen = false">
+            閉じる
           </button>
         </div>
       </div>
