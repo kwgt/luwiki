@@ -27,6 +27,7 @@ const CACHE_CONTROL_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 struct RenameQuery {
     rename_to: Option<String>,
     restore_to: Option<String>,
+    recursive: Option<bool>,
 }
 
 ///
@@ -152,29 +153,26 @@ pub async fn post(
         }
     };
 
-    let has_rename = query.rename_to.as_ref().is_some();
-    let has_restore = query.restore_to.as_ref().is_some();
-    if has_rename == has_restore {
+    // rename_toかrestore_toかの判断
+    let (target_path, is_restore) = if
+        let (Some(path), None) = (&query.rename_to, &query.restore_to)
+    {
+        (path.to_owned(), false)
+
+    } else if let (None, Some(path)) = (&query.rename_to, &query.restore_to) {
+        (path.to_owned(), true)
+
+    } else {
+        // `rename_to`と`restore_to`のどちらも指定されていないか、両方指定されて
+        // いる場合はエラー
         return Ok(resp_error_json(
             StatusCode::BAD_REQUEST,
             "invalid query parameter: rename_to or restore_to",
         ));
-    }
-
-    let (target_path, is_restore) = if let Some(rename_to) = query.rename_to.as_deref() {
-        (rename_to.to_string(), false)
-    } else {
-        let restore_to = match query.restore_to.as_deref() {
-            Some(restore_to) => restore_to.to_string(),
-            None => {
-                return Ok(resp_error_json(
-                    StatusCode::BAD_REQUEST,
-                    "invalid query parameter: restore_to",
-                ));
-            }
-        };
-        (restore_to, true)
     };
+
+    // 再帰指定されているか否かの取得
+    let recursive = query.recursive.unwrap_or(false);
 
     if let Err(message) = super::validate_page_path(&target_path) {
         return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
@@ -226,13 +224,15 @@ pub async fn post(
         }
     };
 
-    if page_index.deleted() && !is_restore {
+    // 移動の場合で対象ページが削除されている場合はエラー
+    if !is_restore && page_index.deleted() {
         return Ok(resp_error_json(
             StatusCode::GONE,
             "page deleted",
         ));
     }
 
+    // 対象ページがドラフト状態の場合はエラー
     if page_index.is_draft() {
         return Ok(resp_error_json(
             StatusCode::BAD_REQUEST,
@@ -240,14 +240,8 @@ pub async fn post(
         ));
     }
 
-    if !is_restore && page_index.path() == "/" {
-        return Ok(resp_error_json(
-            StatusCode::BAD_REQUEST,
-            "root page is protected",
-        ));
-    }
-
-    if target_path == "/" {
+    // 対象ページがrootの場合はエラー
+    if page_index.path() == "/" {
         return Ok(resp_error_json(
             StatusCode::BAD_REQUEST,
             "root page is protected",
@@ -257,9 +251,21 @@ pub async fn post(
     /*
      * ロック検証
      */
-    let lock_info = match state.db().get_page_lock_info(&page_id) {
-        Ok(info) => info,
+    match state.db().get_page_lock_info(&page_id) {
+        Ok(Some(_)) => {
+            // ロックされている場合はエラー
+            return Ok(resp_error_json(
+                StatusCode::LOCKED,
+                "page locked",
+            ));
+        }
+
+        Ok(None) => {
+            // ロックされていなければ正常
+        }
+
         Err(_) => {
+            // DBからの読み出しに失敗した場合はエラー
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "lock lookup failed",
@@ -267,13 +273,9 @@ pub async fn post(
         }
     };
 
-    if lock_info.is_some() {
-        return Ok(resp_error_json(
-            StatusCode::LOCKED,
-            "page locked",
-        ));
-    }
-
+    /*
+     * 同一パスの場合は何もしなくてもよい
+     */
     if !is_restore && page_index.path() == target_path {
         return Ok(HttpResponse::NoContent().finish());
     }
@@ -282,29 +284,51 @@ pub async fn post(
      * パス更新実行
      */
     let result = if is_restore {
+        // ページが作成されていない場合はエラー
         if !page_index.deleted() {
             return Ok(resp_error_json(
                 StatusCode::CONFLICT,
                 "page not deleted",
             ));
         }
-        state.db().undelete_page_by_id(&page_id, &target_path, true)
+
+        if recursive {
+            state.db().undelete_pages_recursive_by_id(
+                &page_id,
+                &target_path,
+                true,
+            )
+        } else {
+            state.db().undelete_page_by_id(&page_id, &target_path, true)
+        }
+
     } else {
-        let current_path = match page_index.current_path() {
-            Some(path) => path.to_string(),
-            None => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "page path not found",
-                ));
-            }
-        };
-        state.db().rename_page(current_path, target_path)
+        if recursive {
+            state.db().rename_pages_recursive_by_id(
+                &page_id,
+                &target_path
+            )
+
+        } else {
+            let current_path = match page_index.current_path() {
+                Some(path) => path.to_string(),
+                None => {
+                    return Ok(resp_error_json(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "page path not found",
+                    ));
+                }
+            };
+
+            state.db().rename_page(current_path, target_path)
+        }
     };
 
     match result {
         Ok(()) => {}
         Err(err) => {
+            log::error!("page rename failed: {:?}", err);
+
             if let Some(DbError::PageAlreadyExists) =
                 err.downcast_ref::<DbError>()
             {
@@ -313,12 +337,28 @@ pub async fn post(
                     "page already exists",
                 ));
             }
+            if let Some(DbError::PageLocked) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::LOCKED,
+                    "page locked",
+                ));
+            }
             if let Some(DbError::PageNotFound) =
                 err.downcast_ref::<DbError>()
             {
                 return Ok(resp_error_json(
                     StatusCode::NOT_FOUND,
                     "page not found",
+                ));
+            }
+            if let Some(DbError::InvalidMoveDestination) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::BAD_REQUEST,
+                    "invalid destination path",
                 ));
             }
             if let Some(DbError::RootPageProtected) =

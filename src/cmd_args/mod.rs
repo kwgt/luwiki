@@ -1505,6 +1505,10 @@ pub(crate) struct PageMoveToOpts {
     #[arg(short = 'f', long = "force")]
     force: bool,
 
+    /// 配下ページを含めて移動する
+    #[arg(short = 'r', long = "recursive")]
+    recursive: bool,
+
     /// 移動元のページパスまたはページID
     #[arg()]
     src_path: String,
@@ -1523,6 +1527,16 @@ impl PageMoveToOpts {
     ///
     pub(crate) fn is_force(&self) -> bool {
         self.force
+    }
+
+    ///
+    /// 再帰移動指定へのアクセサ
+    ///
+    /// # 戻り値
+    /// 再帰移動が指定されている場合はtrue
+    ///
+    pub(crate) fn is_recursive(&self) -> bool {
+        self.recursive
     }
 
     ///
@@ -1551,6 +1565,7 @@ impl ShowOptions for PageMoveToOpts {
     fn show_options(&self) {
         println!("page move_to command options");
         println!("   force:    {:?}", self.is_force());
+        println!("   recursive: {:?}", self.is_recursive());
         println!("   src_path: {}", self.src_path());
         println!("   dst_path: {}", self.dst_path());
     }
@@ -1564,6 +1579,10 @@ pub(crate) struct PageUndeleteOpts {
     /// アセットの復旧を行わない
     #[arg(long = "without-assets")]
     without_assets: bool,
+
+    /// 配下ページを含めて復帰する
+    #[arg(short = 'r', long = "recursive")]
+    recursive: bool,
 
     /// 復帰対象のページID
     #[arg()]
@@ -1583,6 +1602,16 @@ impl PageUndeleteOpts {
     ///
     pub(crate) fn is_without_assets(&self) -> bool {
         self.without_assets
+    }
+
+    ///
+    /// 再帰復帰指定へのアクセサ
+    ///
+    /// # 戻り値
+    /// 再帰復帰が指定されている場合はtrue
+    ///
+    pub(crate) fn is_recursive(&self) -> bool {
+        self.recursive
     }
 
     ///
@@ -1611,6 +1640,7 @@ impl ShowOptions for PageUndeleteOpts {
     fn show_options(&self) {
         println!("page undelete command options");
         println!("   without_assets: {:?}", self.is_without_assets());
+        println!("   recursive:      {:?}", self.is_recursive());
         println!("   target:         {}", self.target());
         println!("   restore_to:     {}", self.restore_to());
     }

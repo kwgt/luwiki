@@ -51,13 +51,14 @@ fn page_undelete_cli_restores_assets_by_default() {
 
     drop(server);
 
-    run_page_delete(&db_path, &assets_dir, &page_id);
+    run_page_delete(&db_path, &assets_dir, &page_id, false);
     run_page_undelete(
         &db_path,
         &assets_dir,
         false,
         &page_id,
         "/undelete-assets",
+        false,
     );
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
@@ -103,13 +104,14 @@ fn page_undelete_cli_without_assets_keeps_assets_deleted() {
 
     drop(server);
 
-    run_page_delete(&db_path, &assets_dir, &page_id);
+    run_page_delete(&db_path, &assets_dir, &page_id, false);
     run_page_undelete(
         &db_path,
         &assets_dir,
         true,
         &page_id,
         "/undelete-without-assets",
+        false,
     );
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
@@ -118,6 +120,57 @@ fn page_undelete_cli_without_assets_keeps_assets_deleted() {
     let assets = list_page_assets(&api_url, &page_id);
     assert!(assets.is_empty());
 
+    drop(server);
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+///
+/// page undelete -r が配下ページを復帰することを確認する。
+///
+/// # 注記
+/// 1) テスト用ユーザを作成する
+/// 2) APIで親子ページを作成する
+/// 3) page delete -r を実行する
+/// 4) page undelete -r を実行する
+/// 5) APIで親子ページのパスが復帰していることを確認する
+fn page_undelete_cli_recursive_restores_children() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+
+    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
+    wait_for_server(&hello_url);
+
+    let api_url = format!("http://127.0.0.1:{}/api", port);
+    let parent_id = create_page(&api_url, "/undelete-recursive", "body");
+    let child_id = create_page(
+        &api_url,
+        "/undelete-recursive/child",
+        "body",
+    );
+
+    drop(server);
+
+    run_page_delete(&db_path, &assets_dir, &parent_id, true);
+    run_page_undelete(
+        &db_path,
+        &assets_dir,
+        false,
+        &parent_id,
+        "/undelete-recursive-new",
+        true,
+    );
+
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    wait_for_server(&hello_url);
+
+    let parent_path = fetch_page_path(&api_url, &parent_id);
+    let child_path = fetch_page_path(&api_url, &child_id);
+    assert_eq!(parent_path, "/undelete-recursive-new");
+    assert_eq!(child_path, "/undelete-recursive-new/child");
     drop(server);
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -391,18 +444,40 @@ fn list_page_assets(api_url: &str, page_id: &str) -> Vec<Value> {
 }
 
 ///
+/// ページパスの取得
+fn fetch_page_path(api_url: &str, page_id: &str) -> String {
+    let client = build_client();
+    let response = client
+        .get(&format!("{}/pages/{}/meta", api_url, page_id))
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get page meta failed");
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = response.text().expect("read page meta failed");
+    let value: Value = serde_json::from_str(&body)
+        .expect("parse page meta failed");
+    value["page_info"]["path"]["value"]
+        .as_str()
+        .expect("path value missing")
+        .to_string()
+}
+
+///
 /// page delete を実行する。
 ///
 /// # 引数
 /// * `db_path` - DBファイルのパス
 /// * `assets_dir` - アセットディレクトリのパス
 /// * `page_id` - 対象ページID
-fn run_page_delete(db_path: &Path, assets_dir: &Path, page_id: &str) {
+/// * `recursive` - 再帰削除を行う場合はtrue
+fn run_page_delete(db_path: &Path, assets_dir: &Path, page_id: &str, recursive: bool) {
     let exe = test_binary_path();
     let base_dir = db_path
         .parent()
         .expect("db_path parent missing");
-    let output = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
@@ -410,7 +485,11 @@ fn run_page_delete(db_path: &Path, assets_dir: &Path, page_id: &str) {
         .arg("--assets-path")
         .arg(assets_dir)
         .arg("page")
-        .arg("delete")
+        .arg("delete");
+    if recursive {
+        command.arg("--recursive");
+    }
+    let output = command
         .arg(page_id)
         .output()
         .expect("page delete failed");
@@ -437,6 +516,7 @@ fn run_page_undelete(
     without_assets: bool,
     page_id: &str,
     restore_to: &str,
+    recursive: bool,
 ) {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
@@ -454,6 +534,9 @@ fn run_page_undelete(
         .arg("undelete");
     if without_assets {
         command.arg("--without-assets");
+    }
+    if recursive {
+        command.arg("--recursive");
     }
     let output = command
         .arg(page_id)

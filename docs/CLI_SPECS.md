@@ -371,9 +371,11 @@ luwiki [OPTIONS] page undelete <PAGE-ID> <PAGE-PATH>
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
 | `--without-assets` | 付随アセットの復旧を行わない | `page.undelete.with_assets`
+| `-r`, `--recursive` | 配下ページを含めて復帰する | false
 
 #### 概要
 `PAGE-ID`で指定されたページを削除状態から通常状態に復活させる。復帰先のパスは`PAGE-PATH`で指定する。
+`--recursive`が指定された場合は配下ページもまとめて復帰する。
 
 デフォルトでは付随アセットも復旧する。`--without-assets`が指定された場合はアセットの復旧を行わない。
 
@@ -382,6 +384,7 @@ luwiki [OPTIONS] page undelete <PAGE-ID> <PAGE-PATH>
   - 指定されたIDのページが存在しなかった
   - 指定されたIDのページが削除状態ではなかった
   - 指定されたパスにページが既に存在する
+  - `--recursive`指定時、配下にロック中のページが存在する
 
 <a id="page-move-to"></a>
 ### page move_toコマンド
@@ -396,13 +399,14 @@ luwiki [OPTIONS] page move_to [OPTIONS] <SRC_PAGE_PATH|SRC_PAGE-ID> <DST_PAGE_PA
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
 | `-f`, `--force` | ロック中でも強制的に移動を行う |
+| `-r`, `--recursive` | 配下ページを含めて移動を行う |
 
 #### 概要
 `SRC_PAGE_PATH`または`SRC_PAGE-ID`で指定されたページを`DST_PAGE_PATH`へ移動する。
 
 `--force`オプションが指定された場合はロック中でも強制的に移動を行う(ロック自体は解除されない)。
 
-削除済みページを移動した場合は削除状態を維持する(移動による復旧は行わない)。
+`--recursive`が指定された場合は配下ページもまとめて移動する。この場合、配下にロック中のページが存在すると失敗する。
 
 以下の場合はエラーとする。
 

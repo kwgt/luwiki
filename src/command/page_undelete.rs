@@ -22,6 +22,7 @@ struct PageUndeleteCommandContext {
     manager: DatabaseManager,
     page_id: PageId,
     restore_to: String,
+    recursive: bool,
     with_assets: bool,
 }
 
@@ -35,6 +36,7 @@ impl PageUndeleteCommandContext {
             manager: opts.open_database()?,
             page_id,
             restore_to: sub_opts.restore_to(),
+            recursive: sub_opts.is_recursive(),
             with_assets: !sub_opts.is_without_assets(),
         })
     }
@@ -43,11 +45,19 @@ impl PageUndeleteCommandContext {
 // CommandContextの実装
 impl CommandContext for PageUndeleteCommandContext {
     fn exec(&self) -> Result<()> {
-        self.manager.undelete_page_by_id(
-            &self.page_id,
-            &self.restore_to,
-            self.with_assets,
-        )
+        if self.recursive {
+            self.manager.undelete_pages_recursive_by_id(
+                &self.page_id,
+                &self.restore_to,
+                self.with_assets,
+            )
+        } else {
+            self.manager.undelete_page_by_id(
+                &self.page_id,
+                &self.restore_to,
+                self.with_assets,
+            )
+        }
     }
 }
 

@@ -10,7 +10,7 @@
 
 pub(crate) mod types;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -85,6 +85,9 @@ pub(crate) enum DbError {
     /// ページが存在しない
     PageNotFound,
 
+    /// 不正なパスが指定された
+    InvalidPath,
+
     /// ユーザが存在しない
     UserNotFound,
 
@@ -116,6 +119,9 @@ pub(crate) enum DbError {
     /// アセットの移動先ページが削除済み
     #[allow(dead_code)]
     AssetMovePageDeleted,
+
+    /// 移動先パスが不正
+    InvalidMoveDestination,
 }
 
 impl std::fmt::Display for DbError {
@@ -123,6 +129,7 @@ impl std::fmt::Display for DbError {
         match self {
             DbError::PageAlreadyExists => write!(f, "page already exists"),
             DbError::PageNotFound => write!(f, "page not found"),
+            DbError::InvalidPath => write!(f, "page path is invalid"),
             DbError::UserNotFound => write!(f, "user not found"),
             DbError::RootPageProtected => write!(f, "root page is protected"),
             DbError::PageLocked => write!(f, "page is locked"),
@@ -134,6 +141,9 @@ impl std::fmt::Display for DbError {
             DbError::AssetAlreadyExists => write!(f, "asset already exists"),
             DbError::AssetMovePageDeleted => {
                 write!(f, "asset move page deleted")
+            }
+            DbError::InvalidMoveDestination => {
+                write!(f, "invalid move destination")
             }
         }
     }
@@ -278,6 +288,11 @@ pub(crate) struct LockListEntry {
     page_path: String,
     expire: DateTime<Local>,
     user_name: String,
+}
+
+struct RecursivePageTarget {
+    page_id: PageId,
+    path: String,
 }
 
 ///
@@ -2691,7 +2706,7 @@ impl DatabaseManager {
             /*
              * 初期リネーム情報の生成
              */
-            let link_refs = build_link_refs(&txn, &path, &source)?;
+            let link_refs = build_link_refs_with_table(&path_table, &path, &source)?;
             let rename_info = RenameInfo::new(
                 None,
                 path.clone(),
@@ -3033,6 +3048,150 @@ impl DatabaseManager {
     }
 
     ///
+    /// 再帰対象ページのパスとIDを収集する
+    ///
+    /// # 概要
+    /// 配下ページのパスとIDを収集し、ドラフトやロック中が含まれる場合はエラー
+    /// を返す。
+    ///
+    /// # 引数
+    /// * `path_table` - ページパスインデックステーブル
+    /// * `index_table` - ページインデックステーブル
+    /// * `lock_table` - ロック情報テーブル
+    /// * `base_path` - 起点パス
+    ///
+    /// # 戻り値
+    /// 対象ページの一覧を返す。
+    ///
+    fn collect_recursive_page_targets_in_txn<'txn>(
+        path_table: &mut Table<'txn, String, PageId>,
+        index_table: &mut Table<'txn, PageId, PageIndex>,
+        lock_table: &mut Table<'txn, LockToken, LockInfo>,
+        base_path: &str,
+    ) -> Result<Vec<RecursivePageTarget>> {
+        /*
+         * 事前情報の準備
+         */
+        let prefix = Self::build_recursive_prefix(base_path);
+        let now = Local::now();
+        let mut targets = Vec::new();
+
+        /*
+         * 配下ページの収集とロック検証
+         */
+        let mut iter = path_table.range(base_path.to_string()..)?;
+        for entry in &mut iter {
+            let (path, page_id) = entry?;
+            let path = path.value();
+            if path != base_path && !path.starts_with(&prefix) {
+                break;
+            }
+
+            let page_id = page_id.value().clone();
+            let mut index = match index_table.get(page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!(DbError::PageNotFound)),
+            };
+
+            if index.is_draft() {
+                return Err(anyhow!(DbError::PageLocked));
+            }
+
+            if index.deleted() {
+                return Err(anyhow!("page already deleted"));
+            }
+
+            Self::verify_page_lock_in_txn(
+                &page_id,
+                &mut index,
+                index_table,
+                lock_table,
+                &now,
+            )?;
+
+            targets.push(RecursivePageTarget {
+                page_id,
+                path: path.to_string(),
+            });
+        }
+
+        Ok(targets)
+    }
+
+    ///
+    /// 削除済みページの再帰対象を収集する
+    ///
+    /// # 概要
+    /// 削除済みページパスのレンジ走査で対象パス配下を収集し、
+    /// ロックや未削除が混在している場合はエラーを返す。
+    ///
+    /// # 引数
+    /// * `deleted_path_table` - 削除済みページパスインデックステーブル
+    /// * `index_table` - ページインデックステーブル
+    /// * `lock_table` - ロック情報テーブル
+    /// * `base_path` - 起点パス
+    ///
+    /// # 戻り値
+    /// 対象ページの一覧を返す。
+    ///
+    fn collect_recursive_deleted_page_targets_in_txn<'txn>(
+        deleted_path_table: &mut MultimapTable<'txn, String, PageId>,
+        index_table: &mut Table<'txn, PageId, PageIndex>,
+        lock_table: &mut Table<'txn, LockToken, LockInfo>,
+        base_path: &str,
+    ) -> Result<Vec<RecursivePageTarget>> {
+        /*
+         * 事前情報の準備
+         */
+        let prefix = Self::build_recursive_prefix(base_path);
+        let now = Local::now();
+        let mut targets = Vec::new();
+
+        /*
+         * 配下ページの収集とロック検証
+         */
+        let mut iter = deleted_path_table.range(base_path.to_string()..)?;
+        for entry in &mut iter {
+            let (path, page_ids) = entry?;
+            let path = path.value();
+            if path != base_path && !path.starts_with(&prefix) {
+                break;
+            }
+
+            for page_id in page_ids {
+                let page_id = page_id?.value().clone();
+                let mut index = match index_table.get(page_id.clone())? {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!(DbError::PageNotFound)),
+                };
+
+                if index.is_draft() {
+                    return Err(anyhow!(DbError::PageLocked));
+                }
+
+                if !index.deleted() {
+                    return Err(anyhow!("page not deleted"));
+                }
+
+                Self::verify_page_lock_in_txn(
+                    &page_id,
+                    &mut index,
+                    index_table,
+                    lock_table,
+                    &now,
+                )?;
+
+                targets.push(RecursivePageTarget {
+                    page_id,
+                    path: path.to_string(),
+                });
+            }
+        }
+
+        Ok(targets)
+    }
+
+    ///
     /// ページのソフトデリート(トランザクション内部処理)
     ///
     /// # 概要
@@ -3363,6 +3522,186 @@ impl DatabaseManager {
     }
 
     ///
+    /// ページの再帰的リネーム
+    ///
+    /// # 概要
+    /// 指定ページと配下ページのパスを一括で更新する。
+    ///
+    /// # 引数
+    /// * `page_id` - 起点となるページID
+    /// * `rename_to` - 移動先のパス
+    ///
+    /// # 戻り値
+    /// 成功時は`Ok(())`を返す。
+    ///
+    pub(crate) fn rename_pages_recursive_by_id(
+        &self,
+        page_id: &PageId,
+        rename_to: &str,
+    ) -> Result<()> {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+
+        {
+            let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
+            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+
+            /*
+             * 起点ページの取得と検証
+             */
+            let base_index = match index_table.get(page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!(DbError::PageNotFound)),
+            };
+
+            if base_index.is_draft() {
+                return Err(anyhow!(DbError::PageLocked));
+            }
+
+            let rename_to = if
+                let Some(suffix) = Self::get_suffix(base_index.path())
+            {
+                if rename_to.ends_with('/') {
+                    format!("{}{}", rename_to, suffix)
+                } else {
+                    rename_to.to_string()
+                }
+            } else {
+                return Err(anyhow!(DbError::InvalidPath));
+            };
+
+            let base_path = match base_index.current_path() {
+                Some(path) => path.to_string(),
+                None => return Err(anyhow!("page path not found")),
+            };
+
+            if is_root_path(&base_path) {
+                return Err(anyhow!(DbError::RootPageProtected));
+            }
+
+            if base_path == rename_to {
+                return Ok(());
+            }
+
+            let base_prefix = Self::build_recursive_prefix(&base_path);
+            if rename_to.starts_with(&base_prefix) {
+                return Err(anyhow!(DbError::InvalidMoveDestination));
+            }
+
+            /*
+             * 再帰対象の収集
+             */
+            let targets = Self::collect_recursive_page_targets_in_txn(
+                &mut path_table,
+                &mut index_table,
+                &mut lock_table,
+                &base_path,
+            )?;
+
+            let target_ids: HashSet<PageId> =
+                targets.iter().map(|item| item.page_id.clone()).collect();
+
+            /*
+             * 衝突チェックと移動パス生成
+             */
+            let mut new_paths = HashSet::new();
+            let mut mappings: Vec<(PageId, String, String)> = Vec::new();
+            for target in &targets {
+                let new_path = if target.path == base_path {
+                    rename_to.clone()
+                } else {
+                    let suffix = target
+                        .path
+                        .strip_prefix(&base_prefix)
+                        .unwrap_or("");
+
+                    format!("{}/{}", rename_to, suffix)
+                };
+
+                if !new_paths.insert(new_path.clone()) {
+                    return Err(anyhow!(DbError::PageAlreadyExists));
+                }
+
+                if let Some(existing) = path_table.get(&new_path)? {
+                    let existing_id = existing.value();
+                    if !target_ids.contains(&existing_id) {
+                        return Err(anyhow!(DbError::PageAlreadyExists));
+                    }
+                }
+
+                mappings.push((
+                    target.page_id.clone(),
+                    target.path.clone(),
+                    new_path,
+                ));
+            }
+
+            /*
+             * リネーム実行
+             */
+            for (target_id, src_path, new_path) in mappings {
+                let mut index = match index_table.get(target_id.clone())? {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!(DbError::PageNotFound)),
+                };
+
+                if index.is_draft() {
+                    return Err(anyhow!(DbError::PageNotFound));
+                }
+
+                let latest = index.latest();
+                let latest_source = match source_table.get(
+                    (target_id.clone(), latest)
+                )? {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!("page source not found")),
+                };
+
+                let link_refs = {
+                    let path_table = &path_table;
+                    build_link_refs_with_table(
+                        path_table,
+                        &src_path,
+                        &latest_source.source(),
+                    )?
+                };
+                let rename_info = RenameInfo::new(
+                    Some(src_path.clone()),
+                    new_path.clone(),
+                    link_refs,
+                );
+                let revision = latest + 1;
+                let page_source = PageSource::new_revision(
+                    revision,
+                    latest_source.source(),
+                    latest_source.user(),
+                    Some(rename_info),
+                );
+
+                index.set_latest(revision);
+                index.set_path(new_path.clone());
+                index.push_rename_revision(revision);
+                index_table.insert(target_id.clone(), index)?;
+                source_table.insert((target_id.clone(), revision), page_source)?;
+
+                path_table.remove(&src_path)?;
+                path_table.insert(&new_path, target_id.clone())?;
+            }
+        }
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(())
+    }
+
+    ///
     /// ページの削除
     ///
     /// # 概要
@@ -3645,6 +3984,18 @@ impl DatabaseManager {
                 return Err(anyhow!(DbError::PageAlreadyExists));
             }
 
+            let restore_to = if
+                let Some(suffix) = Self::get_suffix(index.path())
+            {
+                if restore_to.ends_with('/') {
+                    format!("{}{}", restore_to, suffix)
+                } else {
+                    restore_to.to_string()
+                }
+            } else {
+                return Err(anyhow!(DbError::InvalidPath));
+            };
+
             /*
              * 削除フラグの更新
              */
@@ -3655,7 +4006,7 @@ impl DatabaseManager {
             index.set_path(restore_to.to_string());
             index_table.insert(page_id.clone(), index)?;
             let _ = deleted_path_table.remove(deleted_path, page_id.clone())?;
-            let _ = path_table.insert(restore_to.to_string(), page_id.clone())?;
+            let _ = path_table.insert(restore_to, page_id.clone())?;
 
             if with_assets {
                 /*
@@ -3680,6 +4031,176 @@ impl DatabaseManager {
                         (page_id.clone(), file_name),
                         asset_id.clone(),
                     )?;
+                }
+            }
+        }
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(())
+    }
+
+    ///
+    /// ページの再帰的復帰
+    ///
+    /// # 概要
+    /// 指定ページと配下ページを削除状態から復帰する。
+    ///
+    /// # 引数
+    /// * `page_id` - 復帰対象のページID
+    /// * `restore_to` - 復帰先のパス
+    /// * `with_assets` - 付随アセットの復帰を行う場合はtrue
+    ///
+    /// # 戻り値
+    /// 成功時は`Ok(())`を返す。
+    ///
+    pub(crate) fn undelete_pages_recursive_by_id(
+        &self,
+        page_id: &PageId,
+        restore_to: &str,
+        with_assets: bool,
+    ) -> Result<()> {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+
+        {
+            let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
+            let mut deleted_path_table =
+                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+            let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
+            let group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
+
+            /*
+             * 起点ページの取得と検証
+             */
+            let base_index = match index_table.get(page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!(DbError::PageNotFound)),
+            };
+
+            if base_index.is_draft() {
+                return Err(anyhow!(DbError::PageLocked));
+            }
+
+            if !base_index.deleted() {
+                return Err(anyhow!("page not deleted"));
+            }
+
+            let restore_to = if
+                let Some(suffix) = Self::get_suffix(base_index.path())
+            {
+                if restore_to.ends_with('/') {
+                    format!("{}{}", restore_to, suffix)
+                } else {
+                    restore_to.to_string()
+                }
+            } else {
+                return Err(anyhow!(DbError::InvalidPath));
+            };
+
+            let base_deleted_path = match base_index.last_deleted_path() {
+                Some(path) => path.to_string(),
+                None => return Err(anyhow!("deleted path not found")),
+            };
+
+            if path_table.get(&restore_to.to_string())?.is_some() {
+                return Err(anyhow!(DbError::PageAlreadyExists));
+            }
+
+            /*
+             * 再帰対象の収集
+             */
+            let targets = Self::collect_recursive_deleted_page_targets_in_txn(
+                &mut deleted_path_table,
+                &mut index_table,
+                &mut lock_table,
+                &base_deleted_path,
+            )?;
+
+            /*
+             * 衝突チェックと復帰先生成
+             */
+            let base_prefix = Self::build_recursive_prefix(&base_deleted_path);
+            let mut new_paths = HashSet::new();
+            let mut mappings: Vec<(PageId, String, String)> = Vec::new();
+
+            for target in &targets {
+                let new_path = if target.path == base_deleted_path {
+                    restore_to.clone()
+                } else {
+                    let suffix = target
+                        .path
+                        .strip_prefix(&base_prefix)
+                        .unwrap_or("");
+
+                    format!("{}/{}", restore_to, suffix)
+                };
+
+                if !new_paths.insert(new_path.clone()) {
+                    return Err(anyhow!(DbError::PageAlreadyExists));
+                }
+
+                if path_table.get(&new_path)?.is_some() {
+                    return Err(anyhow!(DbError::PageAlreadyExists));
+                }
+
+                mappings.push((
+                    target.page_id.clone(),
+                    target.path.clone(),
+                    new_path,
+                ));
+            }
+
+            /*
+             * 復帰実行
+             */
+            for (target_id, deleted_path, new_path) in mappings {
+                let mut index = match index_table.get(target_id.clone())? {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!(DbError::PageNotFound)),
+                };
+
+                if !index.deleted() {
+                    return Err(anyhow!("page not deleted"));
+                }
+
+                index.set_path(new_path.to_string());
+                index_table.insert(target_id.clone(), index)?;
+                let _ = deleted_path_table.remove(deleted_path, target_id.clone())?;
+                let _ = path_table.insert(new_path, target_id.clone())?;
+
+                if with_assets {
+                    /*
+                     * 付随アセットの復帰
+                     */
+                    for entry in group_table.get(target_id.clone())? {
+                        let asset_id = entry?.value();
+                        let mut asset_info = match asset_table.get(asset_id.clone())? {
+                            Some(info) => info.value(),
+                            None => return Err(anyhow!("asset info not found")),
+                        };
+
+                        if !asset_info.deleted() || asset_info.page_id().is_some() {
+                            continue;
+                        }
+
+                        let file_name = asset_info.file_name();
+                        asset_info.set_deleted(false);
+                        asset_info.set_page_id(target_id.clone());
+                        asset_table.insert(asset_id.clone(), asset_info)?;
+                        let _ = lookup_table.insert(
+                            (target_id.clone(), file_name),
+                            asset_id.clone(),
+                        )?;
+                    }
                 }
             }
         }
@@ -3785,6 +4306,23 @@ impl DatabaseManager {
     }
 
     ///
+    /// パス文字列の終端ページ名(サフィックスエレメント)を取得する
+    ///
+    /// # 引数
+    /// * `path` - 対象のパス
+    ///
+    /// # 戻り値
+    /// 取得できた終端ページ名を`Some()`でラップして返す。引数`path`で渡された
+    /// パスの終端がパスセパレータ("/")の場合は`None`を返す。
+    ///
+    fn get_suffix<S>(path: S) -> Option<String>
+    where 
+        S: AsRef<str>
+    {
+        path.as_ref().rsplit('/').find(|s| !s.is_empty()).map(|s| s.to_string())
+    }
+
+    ///
     /// ページのリネーム
     ///
     /// # 引数
@@ -3795,16 +4333,27 @@ impl DatabaseManager {
     /// 処理が成功した場合は`Ok(())`を返す。失敗した場合はエラー情報を`Err()`で
     /// ラップして返す。
     ///
-    #[allow(dead_code)]
     pub(crate) fn rename_page<S>(&self, path: S, dst_path: S) -> Result<()>
     where 
         S: AsRef<str>
     {
-        if is_root_path(path.as_ref()) || is_root_path(dst_path.as_ref()) {
+        if is_root_path(path.as_ref()) {
             return Err(anyhow!(DbError::RootPageProtected));
         }
+
         let path = path.as_ref().to_string();
-        let dst_path = dst_path.as_ref().to_string();
+
+        let dst_path = {
+            if let Some(suffix) = Self::get_suffix(&path) {
+                if dst_path.as_ref().ends_with("/") {
+                    format!("{}{}", dst_path.as_ref(), suffix)
+                } else {
+                    dst_path.as_ref().to_string()
+                }
+            } else {
+                return Err(anyhow!(DbError::InvalidPath));
+            }
+        };
 
         /*
          * 書き込みトランザクション開始
@@ -3851,8 +4400,8 @@ impl DatabaseManager {
             /*
              * リネーム情報と新リビジョン生成
              */
-            let link_refs = build_link_refs(
-                &txn,
+            let link_refs = build_link_refs_with_table(
+                &path_table,
                 &path,
                 &latest_source.source(),
             )?;
@@ -3922,6 +4471,30 @@ fn build_link_refs(
     base_path: &str,
     source: &str,
 ) -> Result<BTreeMap<String, Option<PageId>>> {
+    let table = txn.open_table(PAGE_PATH_TABLE)?;
+    build_link_refs_with_table(&table, base_path, source)
+}
+
+fn build_link_refs_with_table<'txn>(
+    path_table: &Table<'txn, String, PageId>,
+    base_path: &str,
+    source: &str,
+) -> Result<BTreeMap<String, Option<PageId>>> {
+    build_link_refs_with_resolver(
+        base_path,
+        source,
+        |path| resolve_page_id_with_table(path_table, path),
+    )
+}
+
+fn build_link_refs_with_resolver<F>(
+    base_path: &str,
+    source: &str,
+    mut resolve: F,
+) -> Result<BTreeMap<String, Option<PageId>>>
+where
+    F: FnMut(&str) -> Result<Option<PageId>>,
+{
     /*
      * 参照一覧の初期化
      */
@@ -3974,7 +4547,7 @@ fn build_link_refs(
         }
 
         if let Some(normalized) = normalize_page_path(base_path, raw_link) {
-            let page_id = resolve_page_id(txn, &normalized)?;
+            let page_id = resolve(&normalized)?;
             refs.insert(normalized, page_id);
         }
     }
@@ -4201,14 +4774,22 @@ fn cleanup_path(path: &str) -> String {
 /// # 戻り値
 /// 解決できたページIDを返す。存在しない場合は`None`を返す。
 ///
+#[allow(dead_code)]
 fn resolve_page_id(
     txn: &redb::WriteTransaction,
+    path: &str,
+) -> Result<Option<PageId>> {
+    let table = txn.open_table(PAGE_PATH_TABLE)?;
+    resolve_page_id_with_table(&table, path)
+}
+
+fn resolve_page_id_with_table<'txn>(
+    table: &Table<'txn, String, PageId>,
     path: &str,
 ) -> Result<Option<PageId>> {
     /*
      * インデックス参照
      */
-    let table = txn.open_table(PAGE_PATH_TABLE)?;
     let key = path.to_string();
     let entry = match table.get(&key)? {
         Some(entry) => entry.value(),

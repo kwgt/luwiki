@@ -23,6 +23,7 @@ struct PageMoveToCommandContext {
     src_path: String,
     dst_path: String,
     force: bool,
+    recursive: bool,
 }
 
 impl PageMoveToCommandContext {
@@ -35,6 +36,7 @@ impl PageMoveToCommandContext {
             src_path: sub_opts.src_path(),
             dst_path: sub_opts.dst_path(),
             force: sub_opts.is_force(),
+            recursive: sub_opts.is_recursive(),
         })
     }
 }
@@ -55,7 +57,7 @@ impl CommandContext for PageMoveToCommandContext {
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?
         };
 
-        if !self.force {
+        if !self.force && !self.recursive {
             let page_id = index.id();
             let lock_info = self.manager.get_page_lock_info(&page_id)?;
             if lock_info.is_some() {
@@ -63,7 +65,14 @@ impl CommandContext for PageMoveToCommandContext {
             }
         }
 
-        self.manager.rename_page(&src_path, &self.dst_path)?;
+        if self.recursive {
+            self.manager.rename_pages_recursive_by_id(
+                &index.id(),
+                &self.dst_path,
+            )?;
+        } else {
+            self.manager.rename_page(&src_path, &self.dst_path)?;
+        }
         Ok(())
     }
 }

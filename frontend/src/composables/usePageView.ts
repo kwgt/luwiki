@@ -1,10 +1,11 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   acquirePageLock,
   deletePage,
   fetchParentPage,
   fetchPageMeta,
   fetchPageSource,
+  renamePagePath,
   type PageMetaResponse,
 } from '../api/pages';
 import {
@@ -22,6 +23,7 @@ import {
   getMetaContent,
   normalizeWikiPath,
   parseAssetMaxBytes,
+  resolvePagePath,
   toErrorMessage,
 } from '../lib/pageCommon';
 import { buildLockTokenKey } from '../lib/lockToken';
@@ -75,6 +77,11 @@ export function usePageView() {
   const pageDeleteOpen = ref(false);
   const pageDeleteLoading = ref(false);
   const pageDeleteRecursive = ref(false);
+  const pageMoveOpen = ref(false);
+  const pageMoveLoading = ref(false);
+  const pageMoveRecursive = ref(false);
+  const pageMoveTarget = ref('');
+  const pageMoveError = ref('');
   const errorMessage = ref('');
 
   const pageTitle = computed(() => extractTitle(source.value, pagePath.value));
@@ -100,6 +107,78 @@ export function usePageView() {
   const assetUploadDisabled = computed(
     () => assetInteractionDisabled.value || !assetUploadAllowed.value,
   );
+  const pageMoveResolvedTarget = computed(() => {
+    const raw = pageMoveTarget.value.trim();
+    if (!raw) {
+      return null;
+    }
+    const base = pagePath.value || '/';
+    const hasTrailingSlash = raw.endsWith('/');
+    const resolved = resolvePagePath(base, raw);
+    if (!resolved) {
+      return null;
+    }
+    // 末尾"/"指定はページ名再利用の意図なので、解決後も末尾"/"を保持する
+    if (hasTrailingSlash && resolved !== '/') {
+      return `${resolved}/`;
+    }
+    return resolved;
+  });
+  const pageMovePreviewPath = computed(() => {
+    const raw = pageMoveTarget.value.trim();
+    if (!raw) {
+      return '';
+    }
+    const base = pagePath.value || '/';
+    const hasTrailingSlash = raw.endsWith('/');
+    const resolved = resolvePagePath(base, raw);
+    if (!resolved) {
+      return '';
+    }
+    if (!hasTrailingSlash) {
+      return resolved;
+    }
+    const normalizedCurrent = normalizeWikiPath(pagePath.value || '/');
+    const trimmed = normalizedCurrent.replace(/\/+$/g, '');
+    const slashIndex = trimmed.lastIndexOf('/');
+    const suffix = slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : '';
+    if (!suffix) {
+      return resolved;
+    }
+    if (resolved.endsWith('/')) {
+      return `${resolved}${suffix}`;
+    }
+    return `${resolved}/${suffix}`;
+  });
+  const pageMoveInputError = computed(() => {
+    const preview = pageMovePreviewPath.value;
+    if (!preview) {
+      return '';
+    }
+    const normalizedPreview = preview === '/'
+      ? '/'
+      : preview.replace(/\/+$/g, '');
+    const normalizedCurrent = normalizeWikiPath(pagePath.value || '/');
+    const normalizedCurrentTrimmed = normalizedCurrent === '/'
+      ? '/'
+      : normalizedCurrent.replace(/\/+$/g, '');
+
+    if (normalizedPreview === "/") {
+      return '移動先がルートページです';
+    }
+
+    if (normalizedPreview === normalizedCurrentTrimmed) {
+      return '移動先が元のパスと同じです';
+    }
+
+    if (normalizedCurrentTrimmed !== '/') {
+      const basePrefix = `${normalizedCurrentTrimmed}/`;
+      if (normalizedPreview.startsWith(basePrefix)) {
+        return '移動先が元のパス配下です';
+      }
+    }
+    return '';
+  });
 
   const renderedHtml = computed(() => {
     if (!pagePath.value) {
@@ -261,6 +340,69 @@ export function usePageView() {
     pageDeleteRecursive.value = false;
   }
 
+  function buildParentPath(path: string): string {
+    const normalized = normalizeWikiPath(path);
+    if (normalized === '/') {
+      return '/';
+    }
+    const trimmed = normalized.replace(/\/+$/g, '');
+    const slashIndex = trimmed.lastIndexOf('/');
+    if (slashIndex <= 0) {
+      return '/';
+    }
+    return `${trimmed.slice(0, slashIndex)}/`;
+  }
+
+  function openPageMoveConfirm(): void {
+    if (!pageId.value) {
+      pageMoveError.value = 'page id not found';
+      return;
+    }
+    const parentPath = buildParentPath(pagePath.value || '/');
+    pageMoveTarget.value = parentPath;
+    pageMoveRecursive.value = false;
+    pageMoveError.value = '';
+    pageMoveOpen.value = true;
+  }
+
+  function dismissPageMoveConfirm(): void {
+    pageMoveOpen.value = false;
+    pageMoveError.value = '';
+    pageMoveLoading.value = false;
+  }
+
+  async function confirmPageMove(): Promise<void> {
+    if (!pageId.value || pageMoveLoading.value) {
+      return;
+    }
+
+    if (pageMoveInputError.value) {
+      pageMoveError.value = pageMoveInputError.value;
+      return;
+    }
+
+    const resolved = pageMoveResolvedTarget.value;
+    if (!resolved) {
+      pageMoveError.value = '移動先パスが不正です';
+      return;
+    }
+    pageMoveLoading.value = true;
+    pageMoveError.value = '';
+    try {
+      await renamePagePath(
+        pageId.value,
+        resolved,
+        pageMoveRecursive.value,
+      );
+      const nextUrl = resolved === '/' ? '/wiki/' : `/wiki${resolved}`;
+      window.location.replace(nextUrl);
+    } catch (err: unknown) {
+      pageMoveError.value = toErrorMessage(err);
+    } finally {
+      pageMoveLoading.value = false;
+    }
+  }
+
   async function confirmPageDelete(): Promise<void> {
     if (!pageId.value || pageDeleteLoading.value) {
       return;
@@ -365,6 +507,17 @@ export function usePageView() {
     errorMessage.value = toErrorMessage(err);
   }
 
+  watch(pageMoveTarget, () => {
+    if (pageMoveError.value) {
+      pageMoveError.value = '';
+    }
+  });
+  watch(pageMoveInputError, () => {
+    if (pageMoveError.value) {
+      pageMoveError.value = '';
+    }
+  });
+
   return {
     pageId,
     pageTitle,
@@ -397,6 +550,14 @@ export function usePageView() {
     pageDeleteOpen,
     pageDeleteLoading,
     pageDeleteRecursive,
+    pageMoveOpen,
+    pageMoveLoading,
+    pageMoveRecursive,
+    pageMoveTarget,
+    pageMoveResolvedTarget,
+    pageMovePreviewPath,
+    pageMoveInputError,
+    pageMoveError,
     loadPage,
     uploadAssets,
     openPageMeta,
@@ -404,6 +565,9 @@ export function usePageView() {
     openPageDeleteConfirm,
     dismissPageDeleteConfirm,
     confirmPageDelete,
+    openPageMoveConfirm,
+    dismissPageMoveConfirm,
+    confirmPageMove,
     requestCopyName,
     dismissCopyToast,
     openAssetDetails,

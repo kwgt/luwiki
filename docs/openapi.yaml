@@ -235,13 +235,22 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
-      summary: ページリネーム
+      summary: ページパス更新
+      description: rename_to または restore_to のいずれかを指定する
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: rename_to
           in: query
-          required: true
+          required: false
           schema: { type: string }
+        - name: restore_to
+          in: query
+          required: false
+          schema: { type: string }
+        - name: recursive
+          in: query
+          required: false
+          schema: { type: boolean }
       responses:
         "204":
           description: リネーム成功
@@ -262,6 +271,11 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "410":
           description: 削除済み
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "423":
+          description: ロック中
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }

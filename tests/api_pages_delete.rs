@@ -136,6 +136,74 @@ fn delete_page_recursive_rejects_locked_children() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
+#[test]
+///
+/// POST: 再帰復帰で配下ページも復帰できることを確認する。
+///
+/// # 注記
+/// 1) テスト用ユーザを作成する
+/// 2) 親子ページを作成する
+/// 3) recursive=true で削除する
+/// 4) restore_to と recursive=true で復帰する
+fn restore_page_recursive_restores_children() {
+    let _guard = lock_test();
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+
+    let base_url = resolve_pages_base_url(port);
+    let parent_id = create_page(&base_url, "/restore-recursive", "body");
+    let child_id = create_page(&base_url, "/restore-recursive/child", "body");
+
+    let client = client_for_base_url(&base_url);
+    let delete_url = format!("{}/{}", base_url, parent_id);
+    let response = client
+        .delete(&delete_url)
+        .query(&[("recursive", "true")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("delete page recursive failed");
+    assert_eq!(response.status().as_u16(), 204);
+
+    let restore_url = format!("{}/{}/path", base_url, parent_id);
+    let response = client
+        .post(&restore_url)
+        .query(&[
+            ("restore_to", "/restore-recursive-new"),
+            ("recursive", "true"),
+        ])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("restore page recursive failed");
+    assert_eq!(response.status().as_u16(), 204);
+
+    let response = client
+        .get(&format!("{}/{}/meta", base_url, parent_id))
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get meta parent failed");
+    assert_eq!(response.status().as_u16(), 200);
+    let value: Value = serde_json::from_str(
+        &response.text().expect("read meta parent failed")
+    ).expect("parse meta parent failed");
+    assert_eq!(value["page_info"]["path"]["value"], "/restore-recursive-new");
+
+    let response = client
+        .get(&format!("{}/{}/meta", base_url, child_id))
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get meta child failed");
+    assert_eq!(response.status().as_u16(), 200);
+    let value: Value = serde_json::from_str(
+        &response.text().expect("read meta child failed")
+    ).expect("parse meta child failed");
+    assert_eq!(value["page_info"]["path"]["value"], "/restore-recursive-new/child");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
 fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
     let base = Path::new("tests").join("tmp").join(unique_suffix());
     let db_dir = base.join("db");

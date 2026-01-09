@@ -33,6 +33,16 @@ const baseTheme = EditorView.theme(
   { dark: false },
 );
 
+const lightHeadingTheme = EditorView.theme(
+  {
+    '.cm-heading': {
+      borderBottom: '1px solid #d0d7de',
+      paddingBottom: '0.2rem',
+    },
+  },
+  { dark: false },
+);
+
 const oneLightHighlightStyle = HighlightStyle.define([
   { tag: t.comment, color: '#6a737d' },
   { tag: t.keyword, color: '#a626a4' },
@@ -49,13 +59,13 @@ const oneLightHighlightStyle = HighlightStyle.define([
   { tag: t.strong, fontWeight: 'bold' },
   { tag: t.emphasis, fontStyle: 'italic' },
   { tag: t.link, color: '#0184bc', textDecoration: 'underline' },
-  { tag: t.heading, fontWeight: 'bold', color: '#4078f2' },
-  { tag: t.heading1, fontWeight: 'bold', color: '#4078f2' },
-  { tag: t.heading2, fontWeight: 'bold', color: '#a626a4' },
-  { tag: t.heading3, fontWeight: 'bold', color: '#c18401' },
-  { tag: t.heading4, fontWeight: 'bold', color: '#50a14f' },
-  { tag: t.heading5, fontWeight: 'bold', color: '#986801' },
-  { tag: t.heading6, fontWeight: 'bold', color: '#6a737d' },
+  { tag: t.heading, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
+  { tag: t.heading1, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
+  { tag: t.heading2, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
+  { tag: t.heading3, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
+  { tag: t.heading4, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
+  { tag: t.heading5, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
+  { tag: t.heading6, fontWeight: 'bold', color: '#4078f2', textDecoration: 'underline' },
   { tag: t.atom, color: '#d19a66' },
   { tag: t.invalid, color: '#ffffff', backgroundColor: '#e45649' },
 ]);
@@ -100,7 +110,10 @@ export function buildThemeExtension(theme: EditorTheme): Extension {
       syntaxHighlighting(oneDarkHighlightStyle),
     ];
   }
-  return syntaxHighlighting(oneLightHighlightStyle);
+  return [
+    lightHeadingTheme,
+    syntaxHighlighting(oneLightHighlightStyle),
+  ];
 }
 
 export function buildKeymapExtension(keymapName: EditorKeymap): Extension {

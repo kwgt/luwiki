@@ -448,6 +448,7 @@ properties:
   |名称|型|説明|必須|
   |:--|:--|:--|:--|
   | `rename_to` | string | リネーム先のパス | 必須 |
+  | `recursive` | boolean | 配下ページを含めて移動する | 任意 |
 
 #### レスポンス
 リクエストに成功した場合、ステータスは204を返す(HTTPヘッダに特別に設定するものはない)。
@@ -459,9 +460,12 @@ properties:
   |:--|:--
   | 400 Bad Request | `rename_to`で指定されたパス文字列のフォーマットが不正
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
-  | 409 Conflict | `rename_to`で指定されたパスにすでにページが存在する(削除済みのページを含む)
+  | 409 Conflict | `rename_to`で指定されたパスにすでにページが存在する
   | 410 Gone | 削除済みのページが指定された
   | 423 Locked | ロックされているページをリネームしようとした
+
+#### 注記
+  - `recursive=true`の場合、配下にロック中のページが存在すると失敗する
 
 <a id="restore-page-path"></a>
 ### `POST /api/pages/{page_id}/path?restore_to={page_path}`
@@ -475,6 +479,7 @@ properties:
   |名称|型|説明|必須|
   |:--|:--|:--|:--|
   | `restore_to` | string | 復帰先のパス | 必須 |
+  | `recursive` | boolean | 配下ページを含めて復帰する | 任意 |
 
 #### レスポンス
 リクエストに成功した場合、ステータスは204を返す(HTTPヘッダに特別に設定するものはない)。
@@ -487,9 +492,11 @@ properties:
   | 400 Bad Request | `restore_to`で指定されたパス文字列のフォーマットが不正<br>`rename_to`と`restore_to`が同時に指定された
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 409 Conflict | `restore_to`で指定されたパスにすでにページが存在する<br>削除済みページではない
+  | 423 Locked | ロックされているページを復帰しようとした
 
 #### 注記
   - 復帰操作ではリビジョン番号は増加しない
+  - `recursive=true`の場合、配下にロック中のページが存在すると失敗する
 
 <a id="get-page-assets"></a>
 ### `GET /api/pages/{page_id}/assets`

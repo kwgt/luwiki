@@ -33,6 +33,7 @@ const {
   restoreCandidateLoading,
   restorePromptVisible,
   restoreInProgress,
+  restoreRecursive,
   assetDetails,
   assetMetaDetails,
   assetDetailsLoading,
@@ -448,7 +449,7 @@ function buildAssetDownloadUrl(fileName: string): string {
             キャンセル
           </button>
           <button
-            class="btn btn-link btn-sm pr-1 text-info ml-auto"
+            class="btn btn-link btn-sm pr-1 text-info ms-auto"
             type="button"
             @click="settingsOpen = true"
           >
@@ -664,7 +665,7 @@ function buildAssetDownloadUrl(fileName: string): string {
     </div>
 
     <div v-if="restorePromptVisible" class="modal modal-open">
-      <div class="modal-box space-y-4">
+      <div class="modal-box space-y-4 transform-none">
         <h3 class="text-lg font-bold">削除済みページの候補</h3>
         <p class="text-sm text-base-content/70">
           このパスには削除済みページが存在します。復活するページを選択するか、
@@ -685,7 +686,7 @@ function buildAssetDownloadUrl(fileName: string): string {
                 v-model="restoreCandidateId"
                 @change="selectRestoreCandidate(candidate)"
               />
-              <span class="text-xs font-semibold">{{ candidate }}</span>
+              <span class="text-xs font-semibold font-mono">{{ candidate }}</span>
             </div>
           </div>
           <div class="border border-base-300 bg-base-100 p-3">
@@ -698,8 +699,17 @@ function buildAssetDownloadUrl(fileName: string): string {
             >{{ restoreCandidateSource || '（プレビューなし）' }}</pre>
           </div>
         </div>
+        <label class="flex items-center gap-2 text-sm">
+          <input
+            v-model="restoreRecursive"
+            class="checkbox checkbox-xs"
+            type="checkbox"
+            :disabled="restoreInProgress || restoreCandidateLoading"
+          />
+          <span>子ページも復活する(再帰)</span>
+        </label>
         <p class="text-xs text-base-content/60">
-          ※他のパスで復活が必要な場合は、該当ページIDを管理者に通知してください。
+          ※他のパスで復活が必要な場合は、該当ページIDを管理者に連絡してください。
         </p>
         <div class="modal-action">
           <button

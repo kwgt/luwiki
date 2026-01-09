@@ -34,6 +34,14 @@ const {
   pageDeleteOpen,
   pageDeleteLoading,
   pageDeleteRecursive,
+  pageMoveOpen,
+  pageMoveLoading,
+  pageMoveRecursive,
+  pageMoveTarget,
+  pageMoveResolvedTarget,
+  pageMovePreviewPath,
+  pageMoveInputError,
+  pageMoveError,
   loadPage,
   uploadAssets,
   openPageMeta,
@@ -41,6 +49,9 @@ const {
   openPageDeleteConfirm,
   dismissPageDeleteConfirm,
   confirmPageDelete,
+  openPageMoveConfirm,
+  dismissPageMoveConfirm,
+  confirmPageMove,
   requestCopyName,
   dismissCopyToast,
   openAssetDetails,
@@ -99,6 +110,11 @@ const breadcrumbItems = computed(() => {
 });
 const editUrl = computed(() => buildEditUrl(pagePath.value));
 const canDeletePage = computed(
+  () => !interactionDisabled.value
+    && !pageMeta.value?.page_info.deleted
+    && (pagePath.value || '/') !== '/',
+);
+const canMovePage = computed(
   () => !interactionDisabled.value
     && !pageMeta.value?.page_info.deleted
     && (pagePath.value || '/') !== '/',
@@ -383,7 +399,14 @@ watch(sidePanelCollapsed, (value) => {
           >
             アセット追加
           </button>
-          <a class="btn btn-link btn-sm text-neutral-content" href="#">移動</a>
+          <button
+            class="btn btn-link btn-sm text-info"
+            type="button"
+            :disabled="!canMovePage"
+            @click="openPageMoveConfirm"
+          >
+            移動
+          </button>
           <button
             class="btn btn-link btn-sm text-info"
             type="button"
@@ -568,7 +591,7 @@ watch(sidePanelCollapsed, (value) => {
     </div>
 
     <div v-if="settingsOpen" class="modal modal-open">
-      <div class="modal-box space-y-4">
+      <div class="modal-box space-y-4 transform-none">
         <h3 class="text-lg font-bold">表示設定</h3>
         <div class="space-y-3">
           <label class="form-control w-full">
@@ -761,6 +784,70 @@ watch(sidePanelCollapsed, (value) => {
             @click="confirmPageDelete"
           >
             削除
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="pageMoveOpen" class="modal modal-open">
+      <div class="modal-box space-y-4">
+        <h3 class="text-lg font-bold">ページ移動(リネーム)</h3>
+        <div class="space-y-3 text-sm">
+          <p class="text-base-content/70">
+            現在のパス: "{{ pagePath || '/' }}"
+          </p>
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">移動先パス</span>
+            </div>
+            <input
+              v-model="pageMoveTarget"
+              class="input input-bordered w-full"
+              type="text"
+              placeholder="/new/path"
+            />
+          </label>
+
+          <div class="rounded border border-base-300 bg-base-200/60 p-2 text-xs">
+            <div class="text-base-content/60">移動プレビュー</div>
+            <div class="p-2">
+              <div class="break-all font-mono">{{ pagePath || '/' }}</div>
+              <div class="text-base-content/60 ml-4 my-2">&#x2b07;</div>
+              <div class="break-all font-mono">
+                {{ pageMovePreviewPath || '(未入力)' }}
+              </div>
+            </div>
+          </div>
+
+          <p v-if="pageMoveError" class="text-sm text-error">
+            {{ pageMoveError }}
+          </p>
+          <p v-else-if="pageMoveInputError" class="text-sm text-error">
+            {{ pageMoveInputError }}
+          </p>
+          <p v-else class="text-sm min-h-[1.25rem]">
+          </p>
+
+          <label class="flex items-center gap-2 text-sm text-base-content/70">
+            <input
+              v-model="pageMoveRecursive"
+              class="checkbox checkbox-ghost checkbox-xs ml-auto"
+              type="checkbox"
+            />
+            <span>子ページも移動（再帰）</span>
+          </label>
+        </div>
+        <div class="modal-action">
+          <button class="btn" type="button" @click="dismissPageMoveConfirm">
+            キャンセル
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="pageMoveLoading || !!pageMoveInputError"
+            @click="confirmPageMove"
+          >
+            移動
           </button>
         </div>
       </div>

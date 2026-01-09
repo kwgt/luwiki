@@ -129,11 +129,34 @@ export function resolveAssetUrl(pagePath: string, rawSpec: string): string | nul
     return null;
   }
 
+  const fileName = decodeIfEncoded(parsed.file);
   const params = new URLSearchParams({
     path: resolvedPath,
-    file: parsed.file,
+    file: fileName,
   });
   return `/api/assets?${params.toString()}`;
+}
+
+function decodeIfEncoded(value: string): string {
+  if (!value.includes('%')) {
+    return value;
+  }
+
+  try {
+    const decoded = decodeURIComponent(value);
+    const encoded = normalizePercentEncoding(encodeURIComponent(decoded));
+    if (encoded === normalizePercentEncoding(value)) {
+      return decoded;
+    }
+  } catch {
+    return value;
+  }
+
+  return value;
+}
+
+function normalizePercentEncoding(value: string): string {
+  return value.replace(/%[0-9a-fA-F]{2}/g, (match) => match.toUpperCase());
 }
 
 export function slugifyHeading(text: string): string {

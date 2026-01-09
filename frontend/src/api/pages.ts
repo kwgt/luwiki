@@ -130,12 +130,40 @@ export async function fetchDeletedPageCandidates(
 export async function restorePagePath(
   pageId: string,
   restoreTo: string,
+  recursive?: boolean,
 ): Promise<void> {
   const res = await apiClient.post(
     `/pages/${pageId}/path`,
     null,
     {
-      params: { restore_to: restoreTo },
+      params: {
+        restore_to: restoreTo,
+        ...(recursive ? { recursive: true } : {}),
+      },
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+}
+
+/**
+ * ページを移動する
+ */
+export async function renamePagePath(
+  pageId: string,
+  renameTo: string,
+  recursive?: boolean,
+): Promise<void> {
+  const res = await apiClient.post(
+    `/pages/${pageId}/path`,
+    null,
+    {
+      params: {
+        rename_to: renameTo,
+        ...(recursive ? { recursive: true } : {}),
+      },
       validateStatus: () => true,
     },
   );

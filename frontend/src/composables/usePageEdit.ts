@@ -109,6 +109,7 @@ export function usePageEdit() {
   const restoreCandidateSource = ref('');
   const restoreCandidateLoading = ref(false);
   const restoreInProgress = ref(false);
+  const restoreRecursive = ref(false);
   const amendChecked = ref(true);
   const amendUserTouched = ref(false);
   const suppressAutoAmend = ref(false);
@@ -278,7 +279,11 @@ export function usePageEdit() {
     isLoading.value = true;
     errorMessage.value = '';
     try {
-      await restorePagePath(restoreCandidateId.value, pagePath.value);
+      await restorePagePath(
+        restoreCandidateId.value,
+        pagePath.value,
+        restoreRecursive.value,
+      );
       const token = await acquirePageLock(restoreCandidateId.value);
       pageId.value = restoreCandidateId.value;
       lockToken.value = token;
@@ -300,6 +305,7 @@ export function usePageEdit() {
       restoreCandidates.value = [];
       restoreCandidateId.value = '';
       restoreCandidateSource.value = '';
+      restoreRecursive.value = false;
     } catch (err: unknown) {
       reportError(err);
     } finally {
@@ -316,6 +322,7 @@ export function usePageEdit() {
     restoreCandidates.value = [];
     restoreCandidateId.value = '';
     restoreCandidateSource.value = '';
+    restoreRecursive.value = false;
     isLoading.value = true;
     errorMessage.value = '';
     try {
@@ -358,6 +365,7 @@ export function usePageEdit() {
         if (candidates.length > 0) {
           restoreCandidates.value = candidates;
           restoreCandidateId.value = candidates[0] ?? '';
+          restoreRecursive.value = false;
           await loadRestoreCandidate(restoreCandidateId.value);
           return;
         }
@@ -461,7 +469,7 @@ export function usePageEdit() {
         }
         await updatePageSource(pageId.value, editorSource, lockToken.value);
       } else {
-        const amend = !amendLocked.value && amendChecked.value;
+        const amend = !isDraftPage.value && !amendLocked.value && amendChecked.value;
         await updatePageSource(pageId.value, editorSource, lockToken.value, amend);
         if (amend) {
           const refreshKey = buildAmendRefreshKey(pageId.value);
@@ -752,6 +760,7 @@ export function usePageEdit() {
     restoreCandidateLoading,
     restorePromptVisible,
     restoreInProgress,
+    restoreRecursive,
     assetDetails,
     assetMetaDetails,
     assetDetailsLoading,
