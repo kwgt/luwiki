@@ -17,6 +17,7 @@ use serde_json::json;
 
 use crate::database::DbError;
 use crate::database::types::PageId;
+use crate::fts;
 use crate::http_server::app_state::AppState;
 use super::super::resp_error_json;
 
@@ -320,7 +321,9 @@ pub async fn post(
                 }
             };
 
-            state.db().rename_page(current_path, target_path)
+            state
+                .db()
+                .rename_page(current_path.as_str(), target_path.as_str())
         }
     };
 
@@ -373,6 +376,51 @@ pub async fn post(
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "page path update failed",
+            ));
+        }
+    }
+
+    /*
+     * FTSの更新
+     */
+    if recursive {
+        let target_ids = match fts::collect_page_ids_by_path_prefix(
+            state.db(),
+            &target_path,
+        ) {
+            Ok(target_ids) => target_ids,
+            Err(err) => {
+                log::error!("fts target collect failed: {:?}", err);
+                return Ok(resp_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "fts update failed",
+                ));
+            }
+        };
+        if let Err(err) = fts::update_pages_index(
+            state.fts_config(),
+            state.db(),
+            &target_ids,
+            false,
+        ) {
+            log::error!("fts update failed: {:?}", err);
+            return Ok(resp_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "fts update failed",
+            ));
+        }
+    } else {
+        let target_ids = [page_id.clone()];
+        if let Err(err) = fts::update_pages_index(
+            state.fts_config(),
+            state.db(),
+            &target_ids,
+            false,
+        ) {
+            log::error!("fts update failed: {:?}", err);
+            return Ok(resp_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "fts update failed",
             ));
         }
     }

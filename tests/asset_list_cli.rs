@@ -4,6 +4,10 @@
  *  Copyright (C) 2025 Hiroshi KUWAGATA <kgt9221@gmail.com>
  */
 
+mod common;
+
+use common::*;
+
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -15,8 +19,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-const TEST_USERNAME: &str = "test_user";
-const TEST_PASSWORD: &str = "password123";
 
 #[test]
 ///
@@ -158,6 +160,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let base_dir = db_path
         .parent()
         .expect("db_path parent missing");
+    let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -165,6 +168,8 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index)
         .arg("user")
         .arg("add")
         .arg(TEST_USERNAME)
@@ -199,6 +204,7 @@ impl ServerGuard {
         let base_dir = db_path
             .parent()
             .expect("db_path parent missing");
+        let fts_index = fts_index_path(db_path);
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
@@ -206,6 +212,8 @@ impl ServerGuard {
             .arg(db_path)
             .arg("--assets-path")
             .arg(assets_dir)
+            .arg("--fts-index")
+            .arg(fts_index)
             .arg("run")
             .arg(format!("127.0.0.1:{}", port))
             .stdin(Stdio::null())
@@ -374,6 +382,8 @@ fn run_asset_list(db_path: &Path, assets_dir: &Path, long_info: bool) -> String 
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index_path(db_path))
         .arg("asset")
         .arg("list");
     if long_info {
@@ -403,6 +413,8 @@ fn run_page_delete(db_path: &Path, assets_dir: &Path, page_id: &str) {
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index_path(db_path))
         .arg("page")
         .arg("delete")
         .arg(page_id)

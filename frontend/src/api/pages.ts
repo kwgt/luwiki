@@ -41,6 +41,15 @@ export interface PageLockInfo {
   username: string;
 }
 
+export interface SearchResult {
+  page_id: string;
+  revision: number;
+  score: number;
+  path: string;
+  deleted: boolean;
+  text: string;
+}
+
 function parseLockToken(headerValue: string): string | null {
   const parts = headerValue.split(/\s+/);
   for (const part of parts) {
@@ -373,6 +382,34 @@ export async function fetchPageLockInfo(
   const res = await apiClient.get<PageLockInfo>(
     `/pages/${pageId}/lock`,
     {
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+  return res.data;
+}
+
+/**
+ * ページを検索する
+ */
+export async function searchPages(params: {
+  expression: string;
+  targets: Array<'headings' | 'body' | 'code'>;
+  withDeleted: boolean;
+  allRevision: boolean;
+}): Promise<SearchResult[]> {
+  const targets = params.targets.length > 0 ? params.targets : ['body'];
+  const res = await apiClient.get<SearchResult[]>(
+    '/pages/search',
+    {
+      params: {
+        expr: params.expression,
+        target: targets.join(','),
+        with_deleted: params.withDeleted,
+        all_revision: params.allRevision,
+      },
       validateStatus: () => true,
     },
   );

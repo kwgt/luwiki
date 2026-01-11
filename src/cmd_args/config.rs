@@ -19,11 +19,13 @@ use super::{
     default_assets_path,
     default_cert_path,
     default_db_path,
+    default_fts_index_path,
     default_log_path,
     LogLevel,
 };
 use crate::cmd_args::{
     AssetListSortMode,
+    FtsSearchTarget,
     LockListSortMode,
     PageListSortMode,
     UserListSortMode,
@@ -61,6 +63,9 @@ pub(super) struct Config {
     /// assetサブコマンド用の設定
     asset: Option<AssetSection>,
 
+    /// ftsサブコマンド用の設定
+    fts: Option<FtsSection>,
+
     /// frontend設定
     frontend: Option<FrontendSection>,
 }
@@ -88,6 +93,14 @@ impl Config {
     pub(super) fn set_db_path(&mut self, path: PathBuf) {
         let global = self.ensure_global();
         global.db_path = Some(path);
+    }
+
+    ///
+    /// グローバル設定の全文検索インデックスパスを更新
+    ///
+    pub(super) fn set_fts_index(&mut self, path: PathBuf) {
+        let global = self.ensure_global();
+        global.fts_index = Some(path);
     }
 
     ///
@@ -244,6 +257,30 @@ impl Config {
         let list = self.ensure_asset_list();
         list.long_info = Some(long_info);
     }
+
+    ///
+    /// fts searchサブコマンドの検索対象を更新
+    ///
+    pub(super) fn set_fts_search_target(&mut self, target: FtsSearchTarget) {
+        let search = self.ensure_fts_search();
+        search.target = Some(target);
+    }
+
+    ///
+    /// fts searchサブコマンドの削除済み対象指定を更新
+    ///
+    pub(super) fn set_fts_search_with_deleted(&mut self, value: bool) {
+        let search = self.ensure_fts_search();
+        search.with_deleted = Some(value);
+    }
+
+    ///
+    /// fts searchサブコマンドの全リビジョン対象指定を更新
+    ///
+    pub(super) fn set_fts_search_all_revision(&mut self, value: bool) {
+        let search = self.ensure_fts_search();
+        search.all_revision = Some(value);
+    }
     ///
     /// データベースファイルへのパスへのアクセサ
     ///
@@ -255,6 +292,16 @@ impl Config {
         self.global
             .as_ref()
             .and_then(|global| global.db_path.as_ref())
+            .map(|path| self.resolve_path(path))
+    }
+
+    ///
+    /// 全文検索インデックス格納ディレクトリのパスへのアクセサ
+    ///
+    pub(super) fn fts_index(&self) -> Option<PathBuf> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.fts_index.as_ref())
             .map(|path| self.resolve_path(path))
     }
 
@@ -465,6 +512,36 @@ impl Config {
     }
 
     ///
+    /// fts searchサブコマンドの検索対象へのアクセサ
+    ///
+    pub(super) fn fts_search_target(&self) -> Option<FtsSearchTarget> {
+        self.fts
+            .as_ref()
+            .and_then(|fts| fts.search.as_ref())
+            .and_then(|search| search.target)
+    }
+
+    ///
+    /// fts searchサブコマンドの削除済み対象指定へのアクセサ
+    ///
+    pub(super) fn fts_search_with_deleted(&self) -> Option<bool> {
+        self.fts
+            .as_ref()
+            .and_then(|fts| fts.search.as_ref())
+            .and_then(|search| search.with_deleted)
+    }
+
+    ///
+    /// fts searchサブコマンドの全リビジョン対象指定へのアクセサ
+    ///
+    pub(super) fn fts_search_all_revision(&self) -> Option<bool> {
+        self.fts
+            .as_ref()
+            .and_then(|fts| fts.search.as_ref())
+            .and_then(|search| search.all_revision)
+    }
+
+    ///
     /// frontend設定へのアクセサ
     ///
     pub(super) fn frontend_config(&self) -> FrontendConfig {
@@ -525,6 +602,7 @@ impl Config {
                 log_level: None,
                 log_output: None,
                 db_path: None,
+                fts_index: None,
                 assets_path: None,
                 use_tls: None,
                 server_cert: None,
@@ -746,6 +824,26 @@ impl Config {
 
         asset.list.as_mut().expect("asset.list must be initialized")
     }
+
+    ///
+    /// fts search設定の初期化または取得
+    ///
+    fn ensure_fts_search(&mut self) -> &mut FtsSearchInfo {
+        if self.fts.is_none() {
+            self.fts = Some(FtsSection { search: None });
+        }
+
+        let fts = self.fts.as_mut().expect("fts must be initialized");
+        if fts.search.is_none() {
+            fts.search = Some(FtsSearchInfo {
+                target: None,
+                with_deleted: None,
+                all_revision: None,
+            });
+        }
+
+        fts.search.as_mut().expect("fts.search must be initialized")
+    }
 }
 
 // Defaultトレイトの実装
@@ -757,6 +855,7 @@ impl Default for Config {
                 log_level: Some(LogLevel::Info),
                 log_output: Some(default_log_path()),
                 db_path: Some(default_db_path()),
+                fts_index: Some(default_fts_index_path()),
                 assets_path: Some(default_assets_path()),
                 use_tls: Some(false),
                 server_cert: Some(default_cert_path()),
@@ -803,6 +902,14 @@ impl Default for Config {
                 }),
             }),
 
+            fts: Some(FtsSection {
+                search: Some(FtsSearchInfo {
+                    target: Some(FtsSearchTarget::Body),
+                    with_deleted: Some(false),
+                    all_revision: Some(false),
+                }),
+            }),
+
             frontend: Some(FrontendSection {
                 ui_font: Some(DEFAULT_FRONTEND_UI_FONT.to_string()),
                 md_font_sans: Some(DEFAULT_FRONTEND_MD_FONT_SANS.to_string()),
@@ -827,6 +934,9 @@ struct GlobalInfo {
 
     /// データベースファイルへのパス
     db_path: Option<PathBuf>,
+
+    /// 全文検索インデックス格納ディレクトリへのパス
+    fts_index: Option<PathBuf>,
 
     /// アセットデータ格納ディレクトリのパス
     assets_path: Option<PathBuf>,
@@ -906,6 +1016,15 @@ struct AssetSection {
 
     /// asset listサブコマンドの設定情報
     list: Option<AssetListInfo>,
+}
+
+///
+/// ftsサブコマンドの設定情報
+///
+#[derive(Debug, Deserialize, Serialize)]
+struct FtsSection {
+    /// fts searchサブコマンドの設定情報
+    search: Option<FtsSearchInfo>,
 }
 
 ///
@@ -1057,6 +1176,21 @@ struct AssetListInfo {
 
     /// 詳細表示の有無
     long_info: Option<bool>,
+}
+
+///
+/// fts searchサブコマンドの設定情報
+///
+#[derive(Debug, Deserialize, Serialize)]
+struct FtsSearchInfo {
+    /// 検索対象
+    target: Option<FtsSearchTarget>,
+
+    /// 削除済み対象を含めるか否か
+    with_deleted: Option<bool>,
+
+    /// 全リビジョン対象を含めるか否か
+    all_revision: Option<bool>,
 }
 
 #[cfg(test)]

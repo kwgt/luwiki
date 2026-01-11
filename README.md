@@ -14,6 +14,7 @@ Commands:
   page      ページ管理コマンド一覧の表示
   lock      ロック管理コマンド一覧の表示
   asset     アセット管理コマンド一覧の表示
+  fts       全文検索管理コマンド一覧の表示
   commands  サブコマンド一覧の表示
   help-all  全サブコマンドのヘルプ出力
   help      Print this message or the help of the given subcommand(s)
@@ -48,6 +49,9 @@ Options:
   -d, --db-path <DB_PATH>
           データベースファイルのパス
 
+  -I, --fts-index <FTS_INDEX>
+          全文検索インデックスの格納パス
+
   -a, --assets-path <ASSETS_PATH>
           アセットデータ格納ディレクトリのパス
 
@@ -72,9 +76,9 @@ Options:
 
 ## Todo
   - [x] TLS対応
-  - [ ] 全文検索の実装
+  - [X] 全文検索の実装
   - [ ] 新規ページ作成インタフェースの追加(URL直打ち or リンク埋め込みでの新規ページ作成は可能)
-  - [X] ページ移動(リネーム)実装
+  - [x] ページ移動(リネーム)実装
   - [x] ページ削除の実装
   - [x] amend更新の対応
   - [ ] ゾンビページ(削除済みページ)の管理画面

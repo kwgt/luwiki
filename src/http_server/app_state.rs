@@ -10,6 +10,7 @@
 
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
+use crate::fts::FtsIndexConfig;
 
 ///
 /// HTTPサーバの共有状態
@@ -20,6 +21,9 @@ pub(crate) struct AppState {
 
     /// frontend設定
     frontend_config: FrontendConfig,
+
+    /// FTS設定
+    fts_config: FtsIndexConfig,
 }
 
 impl AppState {
@@ -28,12 +32,22 @@ impl AppState {
     ///
     /// # 引数
     /// * `db` - 所有させるデータベースマネージャオブジェクト
+    /// * `frontend_config` - frontend設定
+    /// * `fts_config` - FTS設定
     ///
     /// # 戻り値
     /// 生成したオブジェクトを返す。
     ///
-    pub(crate) fn new(db: DatabaseManager, frontend_config: FrontendConfig) -> Self {
-        Self { db, frontend_config }
+    pub(crate) fn new(
+        db: DatabaseManager,
+        frontend_config: FrontendConfig,
+        fts_config: FtsIndexConfig,
+    ) -> Self {
+        Self {
+            db,
+            frontend_config,
+            fts_config,
+        }
     }
 
     ///
@@ -51,6 +65,16 @@ impl AppState {
     ///
     pub(crate) fn frontend_config<'a>(&'a self) -> &'a FrontendConfig {
         &self.frontend_config
+    }
+
+    ///
+    /// FTS設定へのアクセサ
+    ///
+    /// # 戻り値
+    /// FTS設定への参照を返す。
+    ///
+    pub(crate) fn fts_config<'a>(&'a self) -> &'a FtsIndexConfig {
+        &self.fts_config
     }
 
     ///

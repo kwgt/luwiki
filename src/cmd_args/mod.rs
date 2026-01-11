@@ -24,9 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{
     CommandContext, asset_add, asset_list, asset_delete, asset_move_to,
-    asset_undelete, commands, help_all, lock_delete, lock_list, page_add,
-    page_delete, page_list, page_move_to, page_undelete, page_unlock,
-    run, user_add, user_delete, user_edit, user_list,
+    asset_undelete, commands, fts_merge, fts_rebuild, fts_search, help_all,
+    lock_delete, lock_list, page_add, page_delete, page_list, page_move_to,
+    page_undelete, page_unlock, run, user_add, user_delete, user_edit,
+    user_list,
 };
 use crate::database::DatabaseManager;
 use crate::database::types::{AssetId, PageId};
@@ -91,6 +92,16 @@ fn default_db_path() -> PathBuf {
 ///
 fn default_assets_path() -> PathBuf {
     DEFAULT_DATA_PATH.join("assets")
+}
+
+///
+/// デフォルトの全文検索インデックス格納ディレクトリのパス情報を生成
+///
+/// # 戻り値
+/// 全文検索インデックス格納ディレクトリのパス情報
+///
+fn default_fts_index_path() -> PathBuf {
+    DEFAULT_DATA_PATH.join("index")
 }
 
 ///
@@ -234,6 +245,10 @@ pub struct Options {
     #[arg(short = 'd', long = "db-path")]
     db_path: Option<PathBuf>,
 
+    /// 全文検索インデックスの格納パス
+    #[arg(short = 'I', long = "fts-index")]
+    fts_index: Option<PathBuf>,
+
     /// アセットデータ格納ディレクトリのパス
     #[arg(short = 'a', long = "assets-path")]
     assets_path: Option<PathBuf>,
@@ -302,6 +317,21 @@ impl Options {
             path.clone()
         } else {
             default_db_path()
+        }
+    }
+
+    ///
+    /// 全文検索インデックス格納ディレクトリのパスへのアクセサ
+    ///
+    /// # 戻り値
+    /// オプションで指定された全文検索インデックス格納ディレクトリへのパスを返
+    /// す。オプションで未定義の場合はデフォルトのパスを返す。
+    ///
+    pub(crate) fn fts_index_path(&self) -> PathBuf {
+        if let Some(path) = &self.fts_index {
+            path.clone()
+        } else {
+            default_fts_index_path()
         }
     }
 
@@ -450,6 +480,12 @@ impl Options {
                     }
                 }
 
+                if self.fts_index.is_none() {
+                    if let Some(path) = &config.fts_index() {
+                        self.fts_index = Some(path.clone());
+                    }
+                }
+
                 if self.assets_path.is_none() {
                     if let Some(path) = &config.assets_path() {
                         self.assets_path = Some(path.clone());
@@ -496,6 +532,10 @@ impl Options {
                         AssetSubCommand::Delete(_) => None,
                         AssetSubCommand::Undelete(_) => None,
                         AssetSubCommand::MoveTo(_) => None,
+                    }
+                    Some(Command::Fts(fts)) => match &mut fts.subcommand {
+                        FtsSubCommand::Search(opts) => Some(opts),
+                        _ => None,
                     }
                     _ => None,
                 };
@@ -553,6 +593,10 @@ impl Options {
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
                 }
+                Command::Fts(fts) => match &mut fts.subcommand {
+                    FtsSubCommand::Search(opts) => Some(opts),
+                    _ => None,
+                }
                 Command::Commands => None,
                 Command::HelpAll => None,
             };
@@ -584,6 +628,7 @@ impl Options {
         println!("global options");
         println!("   config path:      {}", config_path);
         println!("   database path:    {}", self.db_path().display());
+        println!("   fts index path:   {}", self.fts_index_path().display());
         println!("   log level:        {}", self.log_level().as_ref());
         println!("   log output:       {}", self.log_output().display());
         println!("   log tee:          {}", self.log_tee());
@@ -620,6 +665,10 @@ impl Options {
                     AssetSubCommand::Delete(opts) => Some(opts),
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
+                }
+                Command::Fts(fts) => match &fts.subcommand {
+                    FtsSubCommand::Search(opts) => Some(opts),
+                    _ => None,
                 }
                 Command::Commands => None,
                 Command::HelpAll => None,
@@ -679,6 +728,11 @@ impl Options {
                     asset_move_to::build_context(self, opts)
                 }
             }
+            Some(Command::Fts(fts)) => match &fts.subcommand {
+                FtsSubCommand::Rebuild => fts_rebuild::build_context(self),
+                FtsSubCommand::Merge => fts_merge::build_context(self),
+                FtsSubCommand::Search(opts) => fts_search::build_context(self, opts),
+            }
             Some(Command::Commands) => commands::build_context(self),
             Some(Command::HelpAll) => help_all::build_context(self),
             None => Err(anyhow!("command not specified")),
@@ -710,6 +764,10 @@ enum Command {
     /// アセット管理コマンド一覧の表示
     #[command(name = "asset", alias = "a")]
     Asset(AssetCommand),
+
+    /// 全文検索管理コマンド一覧の表示
+    #[command(name = "fts", alias = "i", alias = "index")]
+    Fts(FtsCommand),
 
     /// サブコマンド一覧の表示
     #[command(name = "commands")]
@@ -761,6 +819,12 @@ pub(crate) struct LockCommand {
 pub(crate) struct AssetCommand {
     #[command(subcommand)]
     subcommand: AssetSubCommand,
+}
+
+#[derive(Clone, Args, Debug)]
+pub(crate) struct FtsCommand {
+    #[command(subcommand)]
+    subcommand: FtsSubCommand,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -822,6 +886,21 @@ enum AssetSubCommand {
     /// アセットの移動
     #[command(name = "move_to", alias = "m", alias = "mv")]
     MoveTo(AssetMoveToOpts),
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum FtsSubCommand {
+    /// 全文検索インデックスの再構築
+    #[command(name = "rebuild", alias = "r")]
+    Rebuild,
+
+    /// 全文検索インデックスのマージ
+    #[command(name = "merge", alias = "m")]
+    Merge,
+
+    /// 全文検索
+    #[command(name = "search", alias = "s")]
+    Search(FtsSearchOpts),
 }
 
 ///
@@ -2065,6 +2144,125 @@ impl ShowOptions for AssetMoveToOpts {
 }
 
 ///
+/// fts searchサブコマンドの検索対象
+///
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
+#[clap(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FtsSearchTarget {
+    /// 見出し
+    Headings,
+
+    /// 本文
+    Body,
+
+    /// コードブロック
+    Code,
+}
+
+///
+/// サブコマンドfts searchのオプション
+///
+#[derive(Clone, Args, Debug)]
+pub(crate) struct FtsSearchOpts {
+    /// 検索対象
+    #[arg(short = 't', long = "target", value_name = "TARGET")]
+    target: Option<FtsSearchTarget>,
+
+    /// 削除済みページを検索対象に含める
+    #[arg(short = 'd', long = "with-deleted")]
+    with_deleted: bool,
+
+    /// 全リビジョンを検索対象に含める
+    #[arg(short = 'a', long = "all-revision")]
+    all_revision: bool,
+
+    /// 検索式
+    #[arg()]
+    expression: String,
+}
+
+impl FtsSearchOpts {
+    ///
+    /// 検索対象のアクセサ
+    ///
+    pub(crate) fn target(&self) -> FtsSearchTarget {
+        self.target.unwrap_or(FtsSearchTarget::Body)
+    }
+
+    ///
+    /// 削除済み対象を含めるか否か
+    ///
+    /// # 戻り値
+    /// 削除済みページを含める場合は`true`
+    ///
+    pub(crate) fn with_deleted(&self) -> bool {
+        self.with_deleted
+    }
+
+    ///
+    /// 全リビジョン対象か否か
+    ///
+    /// # 戻り値
+    /// 全リビジョンを対象に含める場合は`true`
+    ///
+    pub(crate) fn all_revision(&self) -> bool {
+        self.all_revision
+    }
+
+    ///
+    /// 検索式のアクセサ
+    ///
+    pub(crate) fn expression(&self) -> String {
+        self.expression.clone()
+    }
+}
+
+// ShowOptionsトレイトの実装
+impl ShowOptions for FtsSearchOpts {
+    fn show_options(&self) {
+        println!("fts search command options");
+        println!("   target:     {:?}", self.target());
+        println!("   deleted:    {:?}", self.with_deleted());
+        println!("   revision:   {:?}", self.all_revision());
+        println!("   expression: {}", self.expression());
+    }
+}
+
+// Validateトレイトの実装
+impl Validate for FtsSearchOpts {
+    fn validate(&mut self) -> Result<()> {
+        if self.expression.trim().is_empty() {
+            return Err(anyhow!("search expression is empty"));
+        }
+        Ok(())
+    }
+}
+
+// ApplyConfigトレイトの実装
+impl ApplyConfig for FtsSearchOpts {
+    fn apply_config(&mut self, config: &Config) {
+        if self.target.is_none() {
+            if let Some(target) = config.fts_search_target() {
+                self.target = Some(target);
+            }
+        }
+
+        if !self.with_deleted {
+            if let Some(with_deleted) = config.fts_search_with_deleted() {
+                self.with_deleted = with_deleted;
+            }
+        }
+
+        if !self.all_revision {
+            if let Some(all_revision) = config.fts_search_all_revision() {
+                self.all_revision = all_revision;
+            }
+        }
+    }
+}
+
+///
 /// サブコマンドuser_editのオプション
 ///
 #[derive(Clone, Args, Debug)]
@@ -2482,6 +2680,7 @@ fn save_config(opts: &Options) -> Result<()> {
     config.set_log_level(opts.log_level());
     config.set_log_output(opts.log_output());
     config.set_db_path(opts.db_path());
+    config.set_fts_index(opts.fts_index_path());
     config.set_assets_path(opts.assets_path());
     config.set_use_tls(opts.use_tls());
     config.set_server_cert(opts.cert_path());
@@ -2543,6 +2742,15 @@ fn save_config(opts: &Options) -> Result<()> {
             AssetSubCommand::Delete(_) => {}
             AssetSubCommand::Undelete(_) => {}
             AssetSubCommand::MoveTo(_) => {}
+        }
+
+        Some(Command::Fts(fts)) => match &fts.subcommand {
+            FtsSubCommand::Search(opts) => {
+                config.set_fts_search_target(opts.target());
+                config.set_fts_search_with_deleted(opts.with_deleted());
+                config.set_fts_search_all_revision(opts.all_revision());
+            }
+            _ => {}
         }
 
         _ => {}

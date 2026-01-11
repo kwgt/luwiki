@@ -9,6 +9,8 @@
   - シリアライザ: MessagePack, JSON
   - 非同期制御: tokio
   - Webサーバ: ActixWeb
+  - Markdown処理 : pulldown-cmark
+  - 全文検索 : tantivy, lindera
 - Webフロントエンド
   - 採用言語: TypeScript, HTML
   - リアクター: Vue3.js

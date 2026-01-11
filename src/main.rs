@@ -7,6 +7,7 @@
 mod cmd_args;
 pub(crate) mod command;
 pub(crate) mod database;
+pub(crate) mod fts;
 pub(crate) mod http_server;
 pub(crate) mod rest_api;
 

@@ -15,6 +15,7 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 
 use crate::database::types::{LockToken, PageId};
+use crate::fts;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthUser;
 use super::super::resp_error_json;
@@ -163,7 +164,7 @@ pub async fn get(
     };
 
     /*
-     * レスポンス生成
+     * FTSの更新
      */
     let etag = format!("\"{}:{}\"", page_id, revision);
 
@@ -473,6 +474,22 @@ pub async fn put(
                 "lock release failed",
             ));
         }
+    }
+
+    /*
+     * FTSの更新
+     */
+    if let Err(err) = fts::reindex_page(
+        state.fts_config(),
+        state.db(),
+        &page_id,
+        false,
+    ) {
+        log::error!("fts update failed: {:?}", err);
+        return Ok(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "fts update failed",
+        ));
     }
 
     /*

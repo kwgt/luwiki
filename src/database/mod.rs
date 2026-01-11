@@ -279,6 +279,23 @@ pub(crate) struct PageListEntry {
 }
 
 ///
+/// FTS用のページインデックス情報
+///
+pub(crate) struct PageIndexEntry {
+    id: PageId,
+    index: PageIndex,
+}
+
+///
+/// FTS用のページソース情報
+///
+pub(crate) struct PageSourceEntry {
+    page_id: PageId,
+    revision: u64,
+    source: PageSource,
+}
+
+///
 /// lock list 用のロック情報
 ///
 pub(crate) struct LockListEntry {
@@ -596,6 +613,30 @@ impl PageListEntry {
             draft,
             locked,
         }
+    }
+}
+
+impl PageIndexEntry {
+    pub(crate) fn page_id(&self) -> PageId {
+        self.id.clone()
+    }
+
+    pub(crate) fn index(&self) -> PageIndex {
+        self.index.clone()
+    }
+}
+
+impl PageSourceEntry {
+    pub(crate) fn page_id(&self) -> PageId {
+        self.page_id.clone()
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(crate) fn source(&self) -> PageSource {
+        self.source.clone()
     }
 }
 
@@ -1653,6 +1694,88 @@ impl DatabaseManager {
         }
 
         Ok(pages)
+    }
+
+    ///
+    /// FTS用にページインデックスの一覧を取得する
+    ///
+    pub(crate) fn list_page_index_entries(
+        &self,
+    ) -> Result<Vec<PageIndexEntry>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(PAGE_INDEX_TABLE)?;
+        let mut entries = Vec::new();
+
+        for entry in table.iter()? {
+            let (page_id, index) = entry?;
+            entries.push(PageIndexEntry {
+                id: page_id.value().clone(),
+                index: index.value(),
+            });
+        }
+
+        Ok(entries)
+    }
+
+    ///
+    /// FTS用にページソースの一覧を取得する
+    ///
+    pub(crate) fn list_page_source_entries(
+        &self,
+    ) -> Result<Vec<PageSourceEntry>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(PAGE_SOURCE_TABLE)?;
+        let mut entries = Vec::new();
+
+        for entry in table.iter()? {
+            let (key, source) = entry?;
+            let (page_id, revision) = key.value();
+            entries.push(PageSourceEntry {
+                page_id,
+                revision,
+                source: source.value(),
+            });
+        }
+
+        Ok(entries)
+    }
+
+    ///
+    /// FTS用にページソースの一覧を取得する
+    ///
+    /// # 引数
+    /// * `page_id` - 取得対象のページID
+    ///
+    /// # 戻り値
+    /// ページソースの一覧を返す。
+    ///
+    pub(crate) fn list_page_source_entries_by_id(
+        &self,
+        page_id: &PageId,
+    ) -> Result<Vec<PageSourceEntry>> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(PAGE_SOURCE_TABLE)?;
+        let mut entries = Vec::new();
+
+        /*
+         * 対象ページのソース収集
+         */
+        let start = (page_id.clone(), 0u64);
+        let end = (page_id.clone(), u64::MAX);
+        for entry in table.range(start..=end)? {
+            let (key, source) = entry?;
+            let (page_id, revision) = key.value();
+            entries.push(PageSourceEntry {
+                page_id,
+                revision,
+                source: source.value(),
+            });
+        }
+
+        Ok(entries)
     }
 
     ///
@@ -3389,20 +3512,20 @@ impl DatabaseManager {
     /// * `hard_delete` - ハードデリートを行う場合はtrue
     ///
     /// # 戻り値
-    /// 成功時は`Ok(())`を返す。
+    /// 成功時は対象ページID一覧を`Ok()`でラップして返す。
     ///
     pub(crate) fn delete_pages_recursive_by_id(
         &self,
         page_id: &PageId,
         hard_delete: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<PageId>> {
         /*
          * 書き込みトランザクション開始
          */
         let txn = self.db.begin_write()?;
         let mut asset_ids = Vec::new();
 
-        {
+        let target_ids = {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
             let mut deleted_path_table =
                 txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
@@ -3468,15 +3591,17 @@ impl DatabaseManager {
                 targets.insert(0, page_id.clone());
             }
 
+            let target_ids = targets.clone();
+
             /*
              * ページ削除の実行
              */
             if hard_delete {
                 let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
                 let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
-                for target_id in targets {
+                for target_id in targets.iter() {
                     Self::delete_page_hard_in_txn(
-                        &target_id,
+                        target_id,
                         &mut path_table,
                         &mut deleted_path_table,
                         &mut index_table,
@@ -3489,9 +3614,9 @@ impl DatabaseManager {
                     )?;
                 }
             } else {
-                for target_id in targets {
+                for target_id in targets.iter() {
                     Self::delete_page_soft_in_txn(
-                        &target_id,
+                        target_id,
                         &mut path_table,
                         &mut deleted_path_table,
                         &mut index_table,
@@ -3501,7 +3626,9 @@ impl DatabaseManager {
                     )?;
                 }
             }
-        }
+
+            target_ids
+        };
 
         /*
          * コミット
@@ -3518,7 +3645,7 @@ impl DatabaseManager {
             }
         }
 
-        Ok(())
+        Ok(target_ids)
     }
 
     ///

@@ -12,8 +12,9 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 
-use crate::cmd_args::{FrontendConfig, RunOpts, Options};
+use crate::cmd_args::{FrontendConfig, Options, RunOpts};
 use crate::database::DatabaseManager;
+use crate::fts::FtsIndexConfig;
 use crate::http_server;
 use super::CommandContext;
 
@@ -35,6 +36,9 @@ struct RunCommandContext {
 
     /// frontend設定
     frontend_config: FrontendConfig,
+
+    /// FTSインデックス格納ディレクトリへのパス
+    fts_index_path: PathBuf,
 
     /// TLSの使用フラグ
     use_tls: bool,
@@ -61,6 +65,7 @@ impl RunCommandContext {
             bind_addr: sub_opts.bind_addr(),
             bind_port: sub_opts.bind_port(),
             frontend_config: opts.frontend_config()?,
+            fts_index_path: opts.fts_index_path(),
             use_tls: opts.use_tls(),
             cert_path: opts.cert_path(),
             cert_is_explicit: opts.is_cert_path_explicit(),
@@ -72,17 +77,32 @@ impl RunCommandContext {
 // トレイトCommandContextの実装
 impl CommandContext for RunCommandContext {
     fn exec(&self) -> Result<()> {
+        /*
+         * データベースのオープン
+         */
         let manager = DatabaseManager::open(&self.db_path, &self.asset_path)?;
 
+        /*
+         * FTS設定の構築
+         */
+        let fts_config = FtsIndexConfig::new(self.fts_index_path.clone());
+
+        /*
+         * ユーザ登録の検証
+         */
         if !manager.is_users_registered()? {
             return Err(anyhow!("no users registered"));
         }
 
+        /*
+         * HTTPサーバの起動
+         */
         http_server::run(
             self.bind_addr.clone(),
             self.bind_port,
             manager,
             self.frontend_config.clone(),
+            fts_config,
             self.use_tls,
             self.cert_path.clone(),
             self.cert_is_explicit,

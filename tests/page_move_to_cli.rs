@@ -4,14 +4,16 @@
  *  Copyright (C) 2025 Hiroshi KUWAGATA <kgt9221@gmail.com>
  */
 
+mod common;
+
+use common::*;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const TEST_USERNAME: &str = "test_user";
-const TEST_PASSWORD: &str = "password123";
 
 #[test]
 ///
@@ -95,6 +97,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let base_dir = db_path
         .parent()
         .expect("db_path parent missing");
+    let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -102,6 +105,8 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index)
         .arg("user")
         .arg("add")
         .arg(TEST_USERNAME)
@@ -152,6 +157,8 @@ fn run_page_add(
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index_path(db_path))
         .arg("page")
         .arg("add")
         .arg("--user")
@@ -195,6 +202,8 @@ fn run_page_move_to(
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index_path(db_path))
         .arg("page")
         .arg("move_to")
         .arg(src_path)
@@ -231,6 +240,8 @@ fn run_page_list(db_path: &Path, assets_dir: &Path) -> String {
         .arg(db_path)
         .arg("--assets-path")
         .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index_path(db_path))
         .arg("page")
         .arg("list")
         .output()

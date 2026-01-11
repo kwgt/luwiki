@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::database::DbError;
 use crate::database::types::{LockToken, PageId};
+use crate::fts;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthUser;
 use super::super::resp_error_json;
@@ -125,38 +126,57 @@ pub async fn delete(
     let recursive = query.recursive.unwrap_or(false);
 
     if recursive {
-        if let Err(err) = state.db().delete_pages_recursive_by_id(
+        let deleted_ids = match state.db().delete_pages_recursive_by_id(
             &page_id,
             false,
         ) {
-            if let Some(DbError::PageNotFound) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::NOT_FOUND,
-                    "page not found",
-                ));
-            }
-            if let Some(DbError::RootPageProtected) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::BAD_REQUEST,
-                    "root page is protected",
-                ));
-            }
-            if let Some(DbError::PageLocked) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::LOCKED,
-                    "page locked",
-                ));
-            }
+            Ok(deleted_ids) => deleted_ids,
+            Err(err) => {
+                if let Some(DbError::PageNotFound) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(resp_error_json(
+                        StatusCode::NOT_FOUND,
+                        "page not found",
+                    ));
+                }
+                if let Some(DbError::RootPageProtected) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(resp_error_json(
+                        StatusCode::BAD_REQUEST,
+                        "root page is protected",
+                    ));
+                }
+                if let Some(DbError::PageLocked) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(resp_error_json(
+                        StatusCode::LOCKED,
+                        "page locked",
+                    ));
+                }
 
+                return Ok(resp_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "page delete failed",
+                ));
+            }
+        };
+
+        /*
+         * FTSの更新
+         */
+        if let Err(err) = fts::update_pages_index(
+            state.fts_config(),
+            state.db(),
+            &deleted_ids,
+            true,
+        ) {
+            log::error!("fts update failed: {:?}", err);
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "page delete failed",
+                "fts update failed",
             ));
         }
 
@@ -245,6 +265,23 @@ pub async fn delete(
                 "page delete failed",
             ));
         }
+    }
+
+    /*
+     * FTSの更新
+     */
+    let target_ids = [page_id.clone()];
+    if let Err(err) = fts::update_pages_index(
+        state.fts_config(),
+        state.db(),
+        &target_ids,
+        true,
+    ) {
+        log::error!("fts update failed: {:?}", err);
+        return Ok(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "fts update failed",
+        ));
     }
 
     /*

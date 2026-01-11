@@ -34,6 +34,7 @@ properties:
   |:--|:--|:--
   |POST   | `/api/pages?path={page_path}`                     | [ドラフトページの作成](#create-page)
   |GET    | `/api/pages/deleted?path={page_path}`             | [削除済みページ候補の取得](#get-deleted-pages)
+  |GET    | `/api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]` | [ページの検索](#search-pages)
   |GET    | `/api/pages/{page_id}/source[?rev={revision}]`    | [ページソースの取得](#get-page-source)
   |PUT    | `/api/pages/{page_id}/source[?amend={boolean}]`   | [ページソースの更新](#update-page-source)
   |GET    | `/api/pages/{page_id}/meta[?rev={revision}]`      | [ページのメタ情報の取得](#get-page-metadata)
@@ -142,6 +143,95 @@ items:
 
 #### 注記
   - 対象が存在しない場合は空配列を返す
+
+<a id="search-pages"></a>
+### `GET /api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]`
+#### 概要
+ページの検索
+
+#### クエリーパラメータ
+  |名称|型|説明|必須
+  |:--|:--|:--|:--
+  | `expr` | string | 検索式 | 必須
+  | `target` | string | 検索対象の指定 | 任意
+  | `with_deleted` | boolean | 削除済みページを対象に含めるか否かを指定するフラグ | 任意
+  | `all_revision` | boolean | 全てのリビジョンを対象とするか否かを指定するフラグ | 任意
+
+##### targetへの検索対象の指定
+クエリーパラメータ`target`を指定する場合は、以下の文字列を","で連結したリストを指定する。また、最低限でも一つを指定する必要がある。
+
+例: `target=headings`, `target=body,code`
+
+| 値 | 検索対象
+|:---|:---
+|`headings` | 見出し
+|`body` | 本文
+|`code` | コードブロック
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+
+ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "array"
+items:
+  description: >-
+    検索にマッチしたページの情報が格納される。
+  type: "object"
+  required:
+    - "page_id"
+    - "revision"
+    - "score"
+    - "path"
+    - "deleted"
+    - "text"
+  properties:
+    page_id:
+      description: >-
+        ページIDが格納される
+      type: "string"
+
+    revision:
+      description: >-
+        リビジョン番号が格納される。
+      type: "integer"
+
+    score:
+      description: >-
+        検索スコアが格納される。
+      type: "float"
+
+    path:
+      description: >-
+        ページのパスが格納される。
+      type: "string"
+
+    deleted:
+      description: >-
+        ページが削除されているか否かを表すフラグ値が格納される(削除されている場合true)。
+      type: "boolean"
+    text:
+      description: >-
+        検索式にマッチした周辺を含んだスニペットテキストが格納される。
+      type: "string"
+maxItems: 100
+```
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 400 Bad Request | `target`で指定された対象リストが不正<br>exprで指定した検索式が不正
+
+#### 注記
+  - 検索式にマッチするページが存在しない場合は空配列を返す
+  - クエリーパラメータ`target`が省略された場合は本文のみを検索対象とする(`target=body`を指定したのと同等)
+  - クエリーパラメータ`with_deleted`が省略された場合は`with_deleted=false`を指定した物として扱う
+  - クエリーパラメータ`all_revision`が省略された場合は`all_revision=false`を指定した物として扱う
 
 <a id="get-page-source"></a>
 ### `GET /api/pages/{page_id}/source[?rev={revision}]`

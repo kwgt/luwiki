@@ -34,6 +34,7 @@ use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
 
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
+use crate::fts::FtsIndexConfig;
 use crate::rest_api;
 
 use self::app_state::AppState;
@@ -60,6 +61,7 @@ pub(crate) fn run(
     port: u16,
     manager: DatabaseManager,
     frontend_config: FrontendConfig,
+    fts_config: FtsIndexConfig,
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
@@ -78,6 +80,7 @@ pub(crate) fn run(
     let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
         manager,
         frontend_config,
+        fts_config,
     ))));
     let server = create_server(
         addr,
@@ -153,6 +156,7 @@ fn create_server(
             .route("/wiki/{page_path:.*}", web::get().to(page_view::get))
             .route("/edit", web::get().to(page_view::get_edit_root))
             .route("/edit/{page_path:.*}", web::get().to(page_view::get_edit))
+            .route("/search", web::get().to(page_view::get_search))
 
             // 静的ファイル配信
             .route("/static/{file:.*}", web::get().to(static_files::get))

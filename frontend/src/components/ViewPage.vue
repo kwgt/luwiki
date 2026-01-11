@@ -422,6 +422,7 @@ watch(sidePanelCollapsed, (value) => {
           <a class="btn btn-link btn-sm text-neutral-content" href="#">差分</a>
 
           <a class="btn btn-link btn-sm text-info ml-auto text-neutral-content" href="#">新規作成</a>
+          <a class="btn btn-link btn-sm text-info" href="/search">検索</a>
           <button
             class="btn btn-link btn-sm pr-1 text-info"
             type="button"

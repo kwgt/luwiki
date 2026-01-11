@@ -65,6 +65,20 @@ pub(crate) async fn get_edit(
     get_edit_by_path(path.into_inner(), data).await
 }
 
+///
+/// 検索画面
+///
+pub(crate) async fn get_search(
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    let state = match data.read() {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    render_page_html(&state, "", "")
+}
+
 async fn get_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,

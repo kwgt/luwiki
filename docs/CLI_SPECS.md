@@ -20,7 +20,8 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 | `-L`, `--log-output PATH`  | ログレベルの出力先を指定する | $XDG_DATA_HOME/luwiki/log/
 | `-T`, `--tls` | サーバをHTTPSで起動させる |
 | `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
-| `-d`, `--db-path` | データベースファイルのパスを指定する | $XDG_DATA_HOME/luwiki/database.redb
+| `-d`, `--db-path FILE` | データベースファイルのパスを指定する | $XDG_DATA_HOME/luwiki/database.redb
+| `-I`, `--fts-index DIR` | 全文検索インデックスの格納パスを指定する | $XDG_DATA_HOME/luwiki/index
 | `-a`, `--assets-path` | アセットデータ格納パスを指定する | $XDG_DATA_HOME/luwiki/assets
 |       `--show-options` | 設定情報の表示 |
 |       `--save-config` | config.tomlへの設定情報の保存指示 |
@@ -71,6 +72,10 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - [delete](#asset-delete) : アセットの削除
     - [undelete](#asset-undelete) : アセットの回復(削除の取消)
     - [move_to](#asset-move-to) : アセットの所有ページの付け替え
+  - fts : 全文検索の管理
+    - [rebuild](#rebuild-index) : インデックスの再構築
+    - [merge](#merge-segment) : セグメントの強制マージ
+    - [search](#fts-search) : 検索の実施
 
 サブコマンドのエイリアスは以下の通り。
 
@@ -98,6 +103,10 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - delete : `d`, `del`
     - undelete : `ud`
     - move_to : `m`, `mv`
+  - fts : `i`
+    - rebuild : `r`
+    - merge : `m`
+    - search : `s`
 
 <a id="run"></a>
 ### runコマンド
@@ -611,6 +620,65 @@ luwiki [OPTIONS] asset move_to <ASSET-ID> <PAGE-ID|PAGE-PATH>
 
 `--force`が指定された場合、移動先の削除済みページへの移動と同名アセットの上書きを許可する。
 
+<a id="fts-rebuild"></a>
+### fts rebuildコマンド
+全検索インデックスの再構築
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] fts rebuild
+```
+
+#### 概要
+全文検索用インデックスの削除を行いインデックスの再構築を行う。
+
+<a id="merge-segment"></a>
+### fts mergeコマンド
+インデックスセグメントの強制マージ
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] fts merge
+```
+
+#### 概要
+全文検索インデクス中のマージが済んでいないセグメントのマージを強制的に行う。
+
+<a id="fts-search"></a>
+### fts searchコマンド
+テスト検索の実施
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] fts search [OPTIONS] <SEARCH-EXPRESSION>
+```
+#### オプション
+
+| オプション | 意味 | デフォルト値
+|:--|:--|:--
+| `-t`, `--target <TARGET>` | 検索対象を指定する | BODY
+| `-d`, `--with-deleted` | 削除済みページを検索対象に含める |
+| `-a`, `--all-revision` | 全てのリビジョンを表示する |
+ 
+#### 概要
+テスト用に`<SEARCH-EXPRESSION>`で指定された検索式を用いて全文検索を行う。検索式はtantivyの検索式仕様に則る。
+ページID,リビジョン,スコア,テキスト を表示する。
+
+デフォルトでは検索対象は以下の通り。
+
+  - 削除済みのページは検索対象に含めない
+  - 最新リビジョンのみを検索対象とする
+
+`--target`オプションで検索対象を指定できる。`--target`には以下の対象が指定できる。
+
+  - headings : 見出し
+  - body : 本文
+  - code : コードブロック
+
+`--with-deleted`オプションを指定した場合は削除済みページを検索対象に含める。
+
+`--all-revision`オプションを指定した場合は全リビジョンを検索対象とする。
+
 ---
 ## コンフィギュレーションファイル
 各種オプション(サブコマンドのオプションを含む)のデフォルト値が定義できる設定ファイル(toml形式)が置かれる。デフォルトパスは `$XDG_CONFIG_HOME/luwiki/config.toml` とする（グローバルオプションの `--config-path`で変更可能）。
@@ -631,6 +699,9 @@ luwiki [OPTIONS] asset move_to <ASSET-ID> <PAGE-ID|PAGE-PATH>
       - [add](#config-asset-add)
       - [list](#config-asset-list)
 
+  - fts
+      - [search](#config-fts-search)
+
 <a id="config-global"></a>
 ### globalテーブル
 グローバルオプションに対するデフォルト値を定義し以下のキーを定義する。
@@ -643,6 +714,7 @@ luwiki [OPTIONS] asset move_to <ASSET-ID> <PAGE-ID|PAGE-PATH>
 | `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
 | `db_path` | データベースファイルのパス | `--db-path` | `$XDG_DATA_HOME/luwiki/database.redb`
 | `assets_path` | アセットデータ格納ディレクトリのパス | `--assets-path` | `$XDG_DATA_HOME/luwiki/assets/`
+| `fts_index` | 全文検索インデックス格納ディレクトリのパス | `--fts-index` | `$XDG_DATA_HOME/luwiki/index/`
 
 <a id="config-run"></a>
 ### runテーブル
@@ -742,3 +814,19 @@ luwiki [OPTIONS] asset move_to <ASSET-ID> <PAGE-ID|PAGE-PATH>
 | キー | 設定内容 | 対応オプション/引き数 | デフォルト値
 |:--|:--|:--|:--
 | `default_user` | 登録ユーザ名 | `--user` | (未設定)
+
+<a id="config-fts-search"></a>
+### fts.searchテーブル
+`fts search` サブコマンドのオプションに対するデフォルト値を設定し、以下のキーを定義する。
+
+| キー | 設定内容 | 対応オプション/引き数 | デフォルト値
+|:--|:--|:--|:--
+| `target` | 検索対象の指定 | `--target` | "body"
+| `with_deleted` | 検索対象に削除済みページを含めるか否かを指定 | `--with-deleted` | false
+| `all_revision` | 全リビジョンを検索対象に含めるか否かを指定 | `--all-revision` | false
+
+`target`に指定できる値は以下の何れかとする。
+
+  - headings : 見出し
+  - body : 本文
+  - code : コードブロック
