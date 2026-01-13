@@ -18,20 +18,14 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 | `-c`, `--config-path FILE` | デフォルト設定ファイルのパスを指定する | $XDG_CONFIG_HOME/luwiki/config.toml
 | `-l`, `--log-level LEVEL`  | ログレベルを指定する | "info"
 | `-L`, `--log-output PATH`  | ログレベルの出力先を指定する | $XDG_DATA_HOME/luwiki/log/
-| `-T`, `--tls` | サーバをHTTPSで起動させる |
-| `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
 | `-d`, `--db-path FILE` | データベースファイルのパスを指定する | $XDG_DATA_HOME/luwiki/database.redb
 | `-I`, `--fts-index DIR` | 全文検索インデックスの格納パスを指定する | $XDG_DATA_HOME/luwiki/index
 | `-a`, `--assets-path` | アセットデータ格納パスを指定する | $XDG_DATA_HOME/luwiki/assets
+| `-t`, `--template-root` | テンプレートページのパスを指定する | 
 |       `--show-options` | 設定情報の表示 |
 |       `--save-config` | config.tomlへの設定情報の保存指示 |
 | `-h`, `--help`          | ヘルプメッセージの表示 |
 | `-v`, `--version`       | プログラムのバージョン番号の表示 |
-
-`--tls`オプションを指定した場合、サーバはHTTPSでの通信を行う。このとき`--cert`オプションで指定されたサーバ証明書を用いる。`--cert`が指定されていない場合は規定のパスに置かれた証明書を使用するが、このファイルも存在しない場合は証明書を自動的に生成する(`--cert`オプションが指定され、そのファイルが存在しない場合はエラー)。
-
-`--cert`で指定するファイルはPEM形式とする。PEMにはサーバ証明書と秘密鍵を含めるものとする。
-証明書を自動生成する場合、生成物は`$XDG_DATA_HOME/luwiki/server.pem`（PEM）に保存する。PEM以外の補助ファイルが必要な場合は、`$XDG_DATA_HOME/luwiki/cert/`配下に保存する。
 
 `--log-level`オプションの`<LEVEL>`には以下の値が設定可能。
 
@@ -43,6 +37,8 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
   - trace : トレース情報も記録
 
 `--log-output`にはログの出力先を指定できるが、ファイルのパスを指定した場合は単一ファイルへの出力となり、ディレクトリパスを指定した場合はログローテション付きで10本のファイルに自動切り替えを行いながら記録を行う(一本あたりのサイズ制限は2Mバイト)。
+
+`--template-root`にはテンプレートとして使用するページが格納されるWiki上のパスを指定する。このオプションが指定された場合はページ編集時に、このオプションで指定されたページの子ページをテンプレートとして使用することができる(`--template-root`未指定時はテンプレート機能自体が無効化される)。
 
 ---
 ## サブコマンド
@@ -122,9 +118,16 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
 | `-b`, `--open-browser` | サーバ起動時にブラウザを起動する |
+| `-T`, `--tls` | サーバをHTTPSで起動させる |
+| `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
  
 #### 概要
 引数`BIND-ADDR:PORT`でアドレスにバインドしHTTP/HTTPSサーバを起動する(デフォルトは"0.0.0.0:8080")。
+
+`--tls`オプションを指定した場合、サーバはHTTPSでの通信を行う。このとき`--cert`オプションで指定されたサーバ証明書を用いる。`--cert`が指定されていない場合は規定のパスに置かれた証明書を使用するが、このファイルも存在しない場合は証明書を自動的に生成する(`--cert`オプションが指定され、そのファイルが存在しない場合はエラー)。
+
+`--cert`で指定するファイルはPEM形式とする。PEMにはサーバ証明書と秘密鍵を含めるものとする。
+証明書を自動生成する場合、生成物は`$XDG_DATA_HOME/luwiki/server.pem`（PEM）に保存する。PEM以外の補助ファイルが必要な場合は、`$XDG_DATA_HOME/luwiki/cert/`配下に保存する。
 
 `--open-browser`オプションが指定された場合は、同時に規定のブラウザを起動する（デスクトップ環境でのみ有効）。
 
@@ -710,11 +713,10 @@ luwiki [OPTIONS] fts search [OPTIONS] <SEARCH-EXPRESSION>
 |:--|:--|:--|:--
 | `log_level` | ログレベル | `--log-level` | "info"
 | `log_output` | ログの出力先 | `--log-output` | `$XDG_DATA_HOME/luwiki/log`
-| `use_tls` | TLSの使用 | `--tls` | false
-| `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
 | `db_path` | データベースファイルのパス | `--db-path` | `$XDG_DATA_HOME/luwiki/database.redb`
 | `assets_path` | アセットデータ格納ディレクトリのパス | `--assets-path` | `$XDG_DATA_HOME/luwiki/assets/`
 | `fts_index` | 全文検索インデックス格納ディレクトリのパス | `--fts-index` | `$XDG_DATA_HOME/luwiki/index/`
+| `template_root` | テンプレートページの格納パス(Wiki上のパス) | `--template-root` |
 
 <a id="config-run"></a>
 ### runテーブル
@@ -724,6 +726,11 @@ luwiki [OPTIONS] fts search [OPTIONS] <SEARCH-EXPRESSION>
 |:--|:--|:--|:--
 | `bind` | サーバがバインドするアドレスを指定する | `BIND-ADDR` | "0.0.0.0"
 | `port` | サーバがバインドするポートを指定する | `PORT` | 8080
+| `use_tls` | TLSの使用 | `--tls` | false
+| `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
+ 
+#### 注記
+- 互換性のために、`run`テーブルに値が無い場合は`global.use_tls`/`global.server_cert`を読み取って補完する。
 
 <a id="config-user-list"></a>
 ### user.listテーブル

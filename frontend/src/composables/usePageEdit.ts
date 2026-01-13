@@ -7,10 +7,12 @@ import {
   fetchPageLockInfo,
   fetchPageMeta,
   fetchPageSource,
+  fetchTemplatePages,
   restorePagePath,
   unlockPageLock,
   updatePageSource,
   type PageMetaResponse,
+  type TemplatePageItem,
 } from '../api/pages';
 import {
   deleteAsset,
@@ -35,6 +37,10 @@ const AMEND_MAX_LINE_DIFF = 2;
 
 function normalizeLineBreaks(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function isRequestError(err: unknown): err is { status?: number } {
+  return typeof err === 'object' && err !== null && 'status' in err;
 }
 
 function resolveEditPath(): string {
@@ -117,6 +123,14 @@ export function usePageEdit() {
   const lockUsername = ref<string | null>(null);
   const newPageToastVisible = ref(false);
   const newPageToastMessage = ref('');
+  const templateItems = ref<TemplatePageItem[]>([]);
+  const templateModalOpen = ref(false);
+  const templateLoading = ref(false);
+  const templateApplyLoading = ref(false);
+  const templateChecked = ref(false);
+  const templateFeatureEnabled = ref(true);
+  const templateError = ref('');
+  const selectedTemplateId = ref('');
 
   const wikiUrl = computed(() => {
     if (!pagePath.value) {
@@ -182,6 +196,16 @@ export function usePageEdit() {
 
   const canSave = computed(() => !interactionDisabled.value && isDirty.value);
   const restorePromptVisible = computed(() => restoreCandidates.value.length > 0);
+  const canApplyTemplate = computed(
+    () =>
+      templateFeatureEnabled.value
+      && !interactionDisabled.value
+      && source.value.trim().length === 0,
+  );
+  const selectedTemplateItem = computed(() =>
+    templateItems.value.find((item) => item.page_id === selectedTemplateId.value)
+      ?? null,
+  );
 
   function resolveUploadFileName(file: File): string {
     return file.name;
@@ -198,6 +222,87 @@ export function usePageEdit() {
     suppressAutoAmend.value = false;
     resetAmendState();
     applyAutoAmendState();
+  }
+
+  function applyTemplateSource(markdown: string): void {
+    suppressAutoAmend.value = true;
+    source.value = markdown;
+    suppressAutoAmend.value = false;
+    applyAutoAmendState();
+  }
+
+  async function loadTemplatePages(): Promise<void> {
+    if (templateLoading.value) {
+      return;
+    }
+    templateLoading.value = true;
+    templateError.value = '';
+    try {
+      const items = await fetchTemplatePages();
+      templateItems.value = items;
+      templateFeatureEnabled.value = true;
+      templateChecked.value = true;
+      if (!selectedTemplateId.value && items.length > 0) {
+        selectedTemplateId.value = items[0].page_id;
+      }
+    } catch (err: unknown) {
+      if (isRequestError(err) && err.status === 404) {
+        templateItems.value = [];
+        templateFeatureEnabled.value = false;
+        templateChecked.value = true;
+        return;
+      }
+      templateError.value = toErrorMessage(err);
+    } finally {
+      templateLoading.value = false;
+    }
+  }
+
+  async function checkTemplateAvailability(): Promise<void> {
+    if (templateChecked.value) {
+      return;
+    }
+    await loadTemplatePages();
+  }
+
+  function openTemplateModal(): void {
+    if (!templateFeatureEnabled.value || source.value.trim().length > 0) {
+      return;
+    }
+    templateError.value = '';
+    templateModalOpen.value = true;
+    if (!templateChecked.value) {
+      void loadTemplatePages();
+    } else if (!selectedTemplateId.value && templateItems.value.length > 0) {
+      selectedTemplateId.value = templateItems.value[0].page_id;
+    }
+  }
+
+  function closeTemplateModal(): void {
+    templateModalOpen.value = false;
+  }
+
+  async function applyTemplate(): Promise<void> {
+    if (!templateFeatureEnabled.value || source.value.trim().length > 0) {
+      return;
+    }
+    if (templateApplyLoading.value) {
+      return;
+    }
+    if (!selectedTemplateItem.value) {
+      return;
+    }
+    templateApplyLoading.value = true;
+    templateError.value = '';
+    try {
+      const markdown = await fetchPageSource(selectedTemplateItem.value.page_id);
+      applyTemplateSource(markdown);
+      templateModalOpen.value = false;
+    } catch (err: unknown) {
+      templateError.value = toErrorMessage(err);
+    } finally {
+      templateApplyLoading.value = false;
+    }
   }
 
   function resetAmendState(): void {
@@ -761,6 +866,14 @@ export function usePageEdit() {
     restorePromptVisible,
     restoreInProgress,
     restoreRecursive,
+    templateItems,
+    templateModalOpen,
+    templateLoading,
+    templateApplyLoading,
+    templateFeatureEnabled,
+    templateError,
+    canApplyTemplate,
+    selectedTemplateId,
     assetDetails,
     assetMetaDetails,
     assetDetailsLoading,
@@ -782,6 +895,10 @@ export function usePageEdit() {
     selectRestoreCandidate,
     confirmRestoreCandidate,
     skipRestoreCandidates,
+    checkTemplateAvailability,
+    openTemplateModal,
+    closeTemplateModal,
+    applyTemplate,
     requestCopyName,
     dismissCopyToast,
     dismissNewPageToast,

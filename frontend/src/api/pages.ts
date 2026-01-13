@@ -50,6 +50,11 @@ export interface SearchResult {
   text: string;
 }
 
+export interface TemplatePageItem {
+  page_id: string;
+  name: string;
+}
+
 function parseLockToken(headerValue: string): string | null {
   const parts = headerValue.split(/\s+/);
   for (const part of parts) {
@@ -217,6 +222,22 @@ export async function fetchParentPage(
     `/pages/${pageId}/parent`,
     {
       params: recursive === undefined ? undefined : { recursive },
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+  return res.data;
+}
+
+/**
+ * テンプレートページの一覧を取得する
+ */
+export async function fetchTemplatePages(): Promise<TemplatePageItem[]> {
+  const res = await apiClient.get<TemplatePageItem[]>(
+    '/pages/template',
+    {
       validateStatus: () => true,
     },
   );

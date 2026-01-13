@@ -24,6 +24,9 @@ pub(crate) struct AppState {
 
     /// FTS設定
     fts_config: FtsIndexConfig,
+
+    /// テンプレートルート
+    template_root: Option<String>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
     /// * `db` - 所有させるデータベースマネージャオブジェクト
     /// * `frontend_config` - frontend設定
     /// * `fts_config` - FTS設定
+    /// * `template_root` - テンプレートルート
     ///
     /// # 戻り値
     /// 生成したオブジェクトを返す。
@@ -42,11 +46,13 @@ impl AppState {
         db: DatabaseManager,
         frontend_config: FrontendConfig,
         fts_config: FtsIndexConfig,
+        template_root: Option<String>,
     ) -> Self {
         Self {
             db,
             frontend_config,
             fts_config,
+            template_root,
         }
     }
 
@@ -75,6 +81,16 @@ impl AppState {
     ///
     pub(crate) fn fts_config<'a>(&'a self) -> &'a FtsIndexConfig {
         &self.fts_config
+    }
+
+    ///
+    /// テンプレートルートへのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレートルートが設定されている場合は参照を返す。
+    ///
+    pub(crate) fn template_root<'a>(&'a self) -> Option<&'a str> {
+        self.template_root.as_deref()
     }
 
     ///

@@ -112,19 +112,11 @@ impl Config {
     }
 
     ///
-    /// グローバル設定のTLS使用フラグを更新
+    /// グローバル設定のテンプレートルートを更新
     ///
-    pub(super) fn set_use_tls(&mut self, use_tls: bool) {
+    pub(super) fn set_template_root(&mut self, path: Option<String>) {
         let global = self.ensure_global();
-        global.use_tls = Some(use_tls);
-    }
-
-    ///
-    /// グローバル設定のサーバ証明書パスを更新
-    ///
-    pub(super) fn set_server_cert(&mut self, path: PathBuf) {
-        let global = self.ensure_global();
-        global.server_cert = Some(path);
+        global.template_root = path;
     }
 
     ///
@@ -141,6 +133,22 @@ impl Config {
     pub(super) fn set_run_bind_port(&mut self, port: u16) {
         let run = self.ensure_run();
         run.bind_port = Some(port);
+    }
+
+    ///
+    /// runサブコマンドのTLS使用フラグを更新
+    ///
+    pub(super) fn set_run_use_tls(&mut self, use_tls: bool) {
+        let run = self.ensure_run();
+        run.use_tls = Some(use_tls);
+    }
+
+    ///
+    /// runサブコマンドのサーバ証明書パスを更新
+    ///
+    pub(super) fn set_run_server_cert(&mut self, path: PathBuf) {
+        let run = self.ensure_run();
+        run.server_cert = Some(path);
     }
 
     ///
@@ -335,9 +343,29 @@ impl Config {
     }
 
     ///
+    /// テンプレートルートへのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレートルートが設定されている場合は`Some()`で返す。
+    ///
+    pub(super) fn template_root(&self) -> Option<String> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.template_root.clone())
+    }
+
+    ///
     /// TLS使用フラグへのアクセサ
     ///
     pub(super) fn use_tls(&self) -> Option<bool> {
+        let run_value = self.run
+            .as_ref()
+            .and_then(|run| run.use_tls);
+
+        if run_value.is_some() {
+            return run_value;
+        }
+
         self.global
             .as_ref()
             .and_then(|global| global.use_tls)
@@ -347,6 +375,15 @@ impl Config {
     /// サーバ証明書パスへのアクセサ
     ///
     pub(super) fn server_cert(&self) -> Option<PathBuf> {
+        let run_value = self.run
+            .as_ref()
+            .and_then(|run| run.server_cert.as_ref())
+            .map(|path| self.resolve_path(path));
+
+        if run_value.is_some() {
+            return run_value;
+        }
+
         self.global
             .as_ref()
             .and_then(|global| global.server_cert.as_ref())
@@ -604,6 +641,7 @@ impl Config {
                 db_path: None,
                 fts_index: None,
                 assets_path: None,
+                template_root: None,
                 use_tls: None,
                 server_cert: None,
             });
@@ -675,6 +713,8 @@ impl Config {
             self.run = Some(RunInfo {
                 bind_addr: None,
                 bind_port: None,
+                use_tls: None,
+                server_cert: None,
             });
         }
 
@@ -857,13 +897,16 @@ impl Default for Config {
                 db_path: Some(default_db_path()),
                 fts_index: Some(default_fts_index_path()),
                 assets_path: Some(default_assets_path()),
-                use_tls: Some(false),
-                server_cert: Some(default_cert_path()),
+                template_root: None,
+                use_tls: None,
+                server_cert: None,
             }),
 
             run: Some(RunInfo {
                 bind_addr: Some("0.0.0.0".to_string()),
                 bind_port: Some(8080),
+                use_tls: Some(false),
+                server_cert: Some(default_cert_path()),
             }),
 
             user: Some(UserSection {
@@ -941,6 +984,9 @@ struct GlobalInfo {
     /// アセットデータ格納ディレクトリのパス
     assets_path: Option<PathBuf>,
 
+    /// テンプレートページの格納パス
+    template_root: Option<String>,
+
     /// TLSの使用
     use_tls: Option<bool>,
 
@@ -971,6 +1017,12 @@ struct RunInfo {
 
     /// 秘匿項目をマスク表示するか否か
     bind_port: Option<u16>,
+
+    /// TLSの使用
+    use_tls: Option<bool>,
+
+    /// サーバ証明書ファイルのパス
+    server_cert: Option<PathBuf>,
 }
 
 ///

@@ -17,6 +17,7 @@ pub(crate) mod delete;
 pub(crate) mod deleted;
 pub(crate) mod parent;
 pub(crate) mod search;
+pub(crate) mod template;
 
 use std::sync::{Arc, RwLock};
 

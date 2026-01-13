@@ -62,6 +62,7 @@ pub(crate) fn run(
     manager: DatabaseManager,
     frontend_config: FrontendConfig,
     fts_config: FtsIndexConfig,
+    template_root: Option<String>,
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
@@ -81,6 +82,7 @@ pub(crate) fn run(
         manager,
         frontend_config,
         fts_config,
+        template_root,
     ))));
     let server = create_server(
         addr,

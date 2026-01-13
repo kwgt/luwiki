@@ -33,7 +33,8 @@ properties:
   | メソッド | エンドポイント | 用途
   |:--|:--|:--
   |POST   | `/api/pages?path={page_path}`                     | [ドラフトページの作成](#create-page)
-  |GET    | `/api/pages/deleted?path={page_path}`             | [削除済みページ候補の取得](#get-deleted-pages)
+  |GET    | `/api/pages/deleted?path={page_path}`             | [削除済みページの一覧取得](#get-deleted-pages)
+  |GET    | `/api/pages/template` | [テンプレートの一覧取得](#get-template-pages)
   |GET    | `/api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]` | [ページの検索](#search-pages)
   |GET    | `/api/pages/{page_id}/source[?rev={revision}]`    | [ページソースの取得](#get-page-source)
   |PUT    | `/api/pages/{page_id}/source[?amend={boolean}]`   | [ページソースの更新](#update-page-source)
@@ -140,6 +141,48 @@ items:
   | ステータス | 説明
   |:--|:--
   | 400 Bad Request | `path`で指定されたパスのフォーマットが不正
+
+#### 注記
+  - 対象が存在しない場合は空配列を返す
+  - 削除済みページおよびドラフトページは返却対象外とする
+  - レスポンスの配列は`name`の昇順で返す
+
+<a id="get-template-pages"></a>
+### `GET /api/pages/template`
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+
+ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "array"
+items:
+  type: "object"
+  required:
+    - "page_id"
+    - "name"
+  properties:
+    page_id:
+      description: >-
+        テンプレートページのページIDが格納される
+      type: "string"
+
+    name:
+      description: >-
+        テンプレート名(パスの最終エレメント)が格納される
+      type: "string"
+```
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 404 Not Found | テンプレート機能が無効化さている場合に返される
 
 #### 注記
   - 対象が存在しない場合は空配列を返す

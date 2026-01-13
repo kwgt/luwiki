@@ -34,6 +34,14 @@ const {
   restorePromptVisible,
   restoreInProgress,
   restoreRecursive,
+  templateItems,
+  templateModalOpen,
+  templateLoading,
+  templateApplyLoading,
+  templateFeatureEnabled,
+  templateError,
+  canApplyTemplate,
+  selectedTemplateId,
   assetDetails,
   assetMetaDetails,
   assetDetailsLoading,
@@ -56,6 +64,10 @@ const {
   selectRestoreCandidate,
   confirmRestoreCandidate,
   skipRestoreCandidates,
+  checkTemplateAvailability,
+  openTemplateModal,
+  closeTemplateModal,
+  applyTemplate,
   requestCopyName,
   dismissCopyToast,
   dismissNewPageToast,
@@ -157,6 +169,7 @@ onMounted(async () => {
   if (autoLoadSource) {
     await loadPage();
   }
+  await checkTemplateAvailability();
   updateScreenState();
   window.addEventListener('resize', updateScreenState);
   window.addEventListener('dragover', handleWindowDragOver);
@@ -430,6 +443,16 @@ function buildAssetDownloadUrl(fileName: string): string {
             @click="openAssetPicker"
           >
             アセット追加
+          </button>
+
+          <button
+            v-if="templateFeatureEnabled"
+            class="btn btn-link btn-sm text-info"
+            type="button"
+            :disabled="!canApplyTemplate"
+            @click="openTemplateModal"
+          >
+            テンプレート
           </button>
 
           <button
@@ -727,6 +750,53 @@ function buildAssetDownloadUrl(fileName: string): string {
             @click="confirmRestoreCandidate"
           >
             復活して編集
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="templateModalOpen" class="modal modal-open">
+      <div class="modal-box space-y-4 transform-none">
+        <h3 class="text-lg font-bold">テンプレートの選択</h3>
+        <p class="text-sm text-base-content/70">
+          適用するテンプレートを選択してください。
+        </p>
+        <div v-if="templateLoading" class="text-sm text-base-content/70">
+          読み込み中...
+        </div>
+        <div v-else-if="templateItems.length === 0" class="text-sm text-base-content/70">
+          テンプレートがありません。
+        </div>
+        <div v-else class="space-y-3">
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">テンプレート</span>
+            </div>
+            <select v-model="selectedTemplateId" class="select select-bordered">
+              <option
+                v-for="item in templateItems"
+                :key="item.page_id"
+                :value="item.page_id"
+              >
+                {{ item.name }}
+              </option>
+            </select>
+          </label>
+        </div>
+        <div v-if="templateError" class="alert alert-error">
+          {{ templateError }}
+        </div>
+        <div class="modal-action">
+          <button class="btn" type="button" @click="closeTemplateModal">
+            閉じる
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="templateApplyLoading || !selectedTemplateId"
+            @click="applyTemplate"
+          >
+            適用
           </button>
         </div>
       </div>

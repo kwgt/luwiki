@@ -233,14 +233,6 @@ pub struct Options {
     #[arg(long = "log-tee")]
     log_tee: bool,
 
-    /// TLSでの通信を有効にする
-    #[arg(short = 'T', long = "tls")]
-    use_tls: bool,
-
-    /// TLS用のサーバ証明書ファイルのパス
-    #[arg(short = 'C', long = "cert", value_name = "FILE")]
-    cert_path: Option<PathBuf>,
-
     /// データベースファイルのパス
     #[arg(short = 'd', long = "db-path")]
     db_path: Option<PathBuf>,
@@ -252,6 +244,10 @@ pub struct Options {
     /// アセットデータ格納ディレクトリのパス
     #[arg(short = 'a', long = "assets-path")]
     assets_path: Option<PathBuf>,
+
+    /// テンプレートページの格納パス
+    #[arg(short = 't', long = "template-root", value_name = "PATH")]
+    template_root: Option<String>,
 
     /// 設定情報の表示
     #[arg(long = "show-options")]
@@ -351,41 +347,6 @@ impl Options {
     }
 
     ///
-    /// TLS有効フラグへのアクセサ
-    ///
-    /// # 戻り値
-    /// TLSが有効ならtrueを返す。
-    ///
-    pub(crate) fn use_tls(&self) -> bool {
-        self.use_tls
-    }
-
-    ///
-    /// サーバ証明書ファイルのパスへのアクセサ
-    ///
-    /// # 戻り値
-    /// オプションで指定された証明書パスを返す。未指定の場合はデフォルトのパス
-    /// を返す。
-    ///
-    pub(crate) fn cert_path(&self) -> PathBuf {
-        if let Some(path) = &self.cert_path {
-            path.clone()
-        } else {
-            default_cert_path()
-        }
-    }
-
-    ///
-    /// サーバ証明書パスの明示指定フラグへのアクセサ
-    ///
-    /// # 戻り値
-    /// 証明書パスが明示指定されている場合はtrueを返す。
-    ///
-    pub(crate) fn is_cert_path_explicit(&self) -> bool {
-        self.cert_path.is_some()
-    }
-
-    ///
     /// frontend設定情報へのアクセサ
     ///
     pub(crate) fn frontend_config(&self) -> Result<FrontendConfig> {
@@ -421,6 +382,16 @@ impl Options {
                 anyhow!("open failed: {}", err).context("database open")
             )
         }
+    }
+
+    ///
+    /// テンプレートルートへのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレートルートが設定されている場合は`Some()`で返す。
+    ///
+    pub(crate) fn template_root(&self) -> Option<String> {
+        self.template_root.clone()
     }
 
     ///
@@ -492,15 +463,9 @@ impl Options {
                     }
                 }
 
-                if !self.use_tls {
-                    if let Some(use_tls) = config.use_tls() {
-                        self.use_tls = use_tls;
-                    }
-                }
-
-                if self.cert_path.is_none() {
-                    if let Some(path) = &config.server_cert() {
-                        self.cert_path = Some(path.clone());
+                if self.template_root.is_none() {
+                    if let Some(path) = config.template_root() {
+                        self.template_root = Some(path);
                     }
                 }
 
@@ -632,9 +597,13 @@ impl Options {
         println!("   log level:        {}", self.log_level().as_ref());
         println!("   log output:       {}", self.log_output().display());
         println!("   log tee:          {}", self.log_tee());
-        println!("   tls enabled:      {}", self.use_tls());
-        println!("   cert path:        {}", self.cert_path().display());
         println!("   assets directory: {}", self.assets_path().display());
+        println!(
+            "   template root:    {}",
+            self.template_root
+                .as_deref()
+                .unwrap_or("(none)")
+        );
 
         // サブコマンドが指定されており、そのサブコマンドがオプションを持つなら
         // そのオプションも表示する。
@@ -912,6 +881,14 @@ pub(crate) struct RunOpts {
     #[arg(short = 'b', long = "open-browser", help = "ブラウザを起動する")]
     open_browser: bool,
 
+    /// TLSでの通信を有効にする
+    #[arg(short = 'T', long = "tls")]
+    use_tls: bool,
+
+    /// TLS用のサーバ証明書ファイルのパス
+    #[arg(short = 'C', long = "cert", value_name = "FILE")]
+    cert_path: Option<PathBuf>,
+
     /// サーバのバインド先
     #[arg()]
     bind_addr: Option<String>,
@@ -930,6 +907,41 @@ impl RunOpts {
     ///
     pub(crate) fn is_browser_open(&self) -> bool {
         self.open_browser
+    }
+
+    ///
+    /// TLS有効フラグへのアクセサ
+    ///
+    /// # 戻り値
+    /// TLSが有効ならtrueを返す。
+    ///
+    pub(crate) fn use_tls(&self) -> bool {
+        self.use_tls
+    }
+
+    ///
+    /// サーバ証明書ファイルのパスへのアクセサ
+    ///
+    /// # 戻り値
+    /// オプションで指定された証明書パスを返す。未指定の場合はデフォルトのパス
+    /// を返す。
+    ///
+    pub(crate) fn cert_path(&self) -> PathBuf {
+        if let Some(path) = &self.cert_path {
+            path.clone()
+        } else {
+            default_cert_path()
+        }
+    }
+
+    ///
+    /// サーバ証明書パスの明示指定フラグへのアクセサ
+    ///
+    /// # 戻り値
+    /// 証明書パスが明示指定されている場合はtrueを返す。
+    ///
+    pub(crate) fn is_cert_path_explicit(&self) -> bool {
+        self.cert_path.is_some()
     }
 
     ///
@@ -1000,6 +1012,18 @@ impl ApplyConfig for RunOpts {
         if self.bind_port.is_none() {
             if let Some(port) = config.run_bind_port() {
                 self.bind_port = Some(port);
+            }
+        }
+
+        if !self.use_tls {
+            if let Some(use_tls) = config.use_tls() {
+                self.use_tls = use_tls;
+            }
+        }
+
+        if self.cert_path.is_none() {
+            if let Some(path) = config.server_cert() {
+                self.cert_path = Some(path);
             }
         }
     }
@@ -1434,6 +1458,8 @@ impl ShowOptions for RunOpts {
     fn show_options(&self) {
         println!("run command options");
         println!("   browser_open:   {:?}", self.is_browser_open());
+        println!("   tls enabled:    {}", self.use_tls());
+        println!("   cert path:      {}", self.cert_path().display());
         println!("   bind:  {}:{}", self.bind_addr(), self.bind_port());
     }
 }
@@ -2682,13 +2708,14 @@ fn save_config(opts: &Options) -> Result<()> {
     config.set_db_path(opts.db_path());
     config.set_fts_index(opts.fts_index_path());
     config.set_assets_path(opts.assets_path());
-    config.set_use_tls(opts.use_tls());
-    config.set_server_cert(opts.cert_path());
+    config.set_template_root(opts.template_root());
 
     match &opts.command {
         Some(Command::Run(opts)) => {
             config.set_run_bind_addr(opts.bind_addr());
             config.set_run_bind_port(opts.bind_port());
+            config.set_run_use_tls(opts.use_tls());
+            config.set_run_server_cert(opts.cert_path());
         }
 
         Some(Command::User(user)) => match &user.subcommand {
@@ -2825,12 +2852,16 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let cert_path = dir.path().join("server.pem");
         let cert_arg = cert_path.to_string_lossy().to_string();
-        let args = ["luwiki", "--tls", "--cert", &cert_arg, "run"];
+        let args = ["luwiki", "run", "--tls", "--cert", &cert_arg];
 
         let opts = Options::try_parse_from(args).expect("parse failed");
-        assert!(opts.use_tls());
-        assert!(opts.is_cert_path_explicit());
-        assert_eq!(opts.cert_path(), cert_path);
+        let run_opts = match opts.command {
+            Some(Command::Run(run_opts)) => run_opts,
+            _ => panic!("run options missing"),
+        };
+        assert!(run_opts.use_tls());
+        assert!(run_opts.is_cert_path_explicit());
+        assert_eq!(run_opts.cert_path(), cert_path);
     }
 
     #[test]
@@ -2842,12 +2873,12 @@ mod tests {
         let cert_arg = cert_path.to_string_lossy().to_string();
         let args = [
             "luwiki",
-            "--tls",
-            "--cert",
-            &cert_arg,
             "--config-path",
             &config_arg,
             "run",
+            "--tls",
+            "--cert",
+            &cert_arg,
         ];
 
         let opts = Options::try_parse_from(args).expect("parse failed");

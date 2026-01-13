@@ -16,6 +16,7 @@ use crate::cmd_args::{FrontendConfig, Options, RunOpts};
 use crate::database::DatabaseManager;
 use crate::fts::FtsIndexConfig;
 use crate::http_server;
+use crate::rest_api::validate_page_path;
 use super::CommandContext;
 
 ///
@@ -52,6 +53,9 @@ struct RunCommandContext {
     /// 起動時にブラウザを開くか否かのフラグ
     #[allow(dead_code)]
     open_browser: bool,
+
+    /// テンプレートルート
+    template_root: Option<String>,
 }
 
 impl RunCommandContext {
@@ -59,6 +63,22 @@ impl RunCommandContext {
     /// オブジェクトの生成
     ///
     fn new(opts: &Options, sub_opts: &RunOpts) -> Result<Self> {
+        /*
+         * テンプレートルートの検証
+         */
+        let template_root = match opts.template_root() {
+            Some(path) => {
+                if let Err(message) = validate_page_path(&path) {
+                    return Err(anyhow!(message));
+                }
+                Some(normalize_template_root(path))
+            }
+            None => None,
+        };
+
+        /*
+         * オプションの集約
+         */
         Ok(Self {
             db_path: opts.db_path(),
             asset_path: opts.assets_path(),
@@ -66,10 +86,11 @@ impl RunCommandContext {
             bind_port: sub_opts.bind_port(),
             frontend_config: opts.frontend_config()?,
             fts_index_path: opts.fts_index_path(),
-            use_tls: opts.use_tls(),
-            cert_path: opts.cert_path(),
-            cert_is_explicit: opts.is_cert_path_explicit(),
+            use_tls: sub_opts.use_tls(),
+            cert_path: sub_opts.cert_path(),
+            cert_is_explicit: sub_opts.is_cert_path_explicit(),
             open_browser: sub_opts.is_browser_open(),
+            template_root,
         })
     }
 }
@@ -103,6 +124,7 @@ impl CommandContext for RunCommandContext {
             manager,
             self.frontend_config.clone(),
             fts_config,
+            self.template_root.clone(),
             self.use_tls,
             self.cert_path.clone(),
             self.cert_is_explicit,
@@ -117,4 +139,21 @@ pub(crate) fn build_context(opts: &Options, sub_opts: &RunOpts)
     -> Result<Box<dyn CommandContext>>
 {
     Ok(Box::new(RunCommandContext::new(opts, sub_opts)?))
+}
+
+///
+/// テンプレートルートの正規化
+///
+/// # 引数
+/// * `path` - テンプレートルート
+///
+/// # 戻り値
+/// 正規化したテンプレートルートを返す。
+///
+fn normalize_template_root(path: String) -> String {
+    if path.len() > 1 {
+        path.trim_end_matches('/').to_string()
+    } else {
+        path
+    }
 }
