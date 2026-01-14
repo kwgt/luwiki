@@ -6,6 +6,7 @@ import {
   fetchPageMeta,
   fetchPageSource,
   renamePagePath,
+  unlockPageLock,
   type PageMetaResponse,
 } from '../api/pages';
 import {
@@ -26,7 +27,7 @@ import {
   resolvePagePath,
   toErrorMessage,
 } from '../lib/pageCommon';
-import { buildLockTokenKey } from '../lib/lockToken';
+import { tryBuildLockTokenKey } from '../lib/lockToken';
 import { buildAmendRefreshKey } from '../lib/amendRefresh';
 
 
@@ -44,6 +45,10 @@ function copyToClipboard(text: string): void {
   }).catch((err) => {
     console.warn('clipboard write failed', err);
   });
+}
+
+function isRequestError(err: unknown): err is { status?: number } {
+  return typeof err === 'object' && err !== null && 'status' in err;
 }
 
 export function usePageView() {
@@ -416,8 +421,10 @@ export function usePageView() {
       } catch (err: unknown) {
         reportError(err);
       }
-      const tokenKey = buildLockTokenKey(pageId.value);
-      const lockToken = sessionStorage.getItem(tokenKey) ?? undefined;
+      const tokenKey = tryBuildLockTokenKey(pageId.value);
+      const lockToken = tokenKey
+        ? sessionStorage.getItem(tokenKey) ?? undefined
+        : undefined;
       await deletePage(pageId.value, lockToken, pageDeleteRecursive.value);
       const nextUrl = redirectPath === '/' ? '/wiki/' : `/wiki${redirectPath}`;
       window.location.replace(nextUrl);
@@ -426,6 +433,30 @@ export function usePageView() {
     } finally {
       pageDeleteLoading.value = false;
       pageDeleteOpen.value = false;
+    }
+  }
+
+  async function cleanupViewLock(): Promise<void> {
+    if (!pageId.value) {
+      return;
+    }
+    const tokenKey = tryBuildLockTokenKey(pageId.value);
+    if (!tokenKey) {
+      return;
+    }
+    const lockToken = sessionStorage.getItem(tokenKey);
+    if (!lockToken) {
+      return;
+    }
+    try {
+      await unlockPageLock(pageId.value, lockToken);
+      sessionStorage.removeItem(tokenKey);
+    } catch (err: unknown) {
+      if (isRequestError(err) && err.status === 404) {
+        sessionStorage.removeItem(tokenKey);
+        return;
+      }
+      reportError(err);
     }
   }
 
@@ -576,6 +607,7 @@ export function usePageView() {
     dismissAssetDeleteConfirm,
     confirmAssetDelete,
     requestEditLock,
+    cleanupViewLock,
     reportError,
     dismissError,
   };

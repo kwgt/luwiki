@@ -532,17 +532,21 @@ function buildAssetDownloadUrl(fileName: string): string {
           class="order-2 hidden min-h-0 flex-col gap-1 md:flex md:order-1"
         >
           <section
-            class="flex-1 min-h-0 overflow-auto border border-base-300 bg-base-100 p-3 shadow-sm"
+            class="flex-1 min-h-0 overflow-auto border border-base-300 bg-base-100 p-2 shadow-sm"
           >
             <h2 class="mb-3 text-lg font-semibold">TOC</h2>
             <ul v-if="tocItems.length > 0" class="flex flex-col gap-1 text-sm">
-              <li v-for="entry in tocItems" :key="entry.anchor">
+              <li
+                v-for="entry in tocItems"
+                :key="entry.anchor"
+                :class="{
+                  'ml-3': entry.level === 3,
+                  'ml-6': entry.level === 4,
+                }"
+              >
                 <a
-                  class="link link-hover"
-                  :class="{
-                    'pl-3': entry.level === 3,
-                    'pl-6': entry.level === 4,
-                  }"
+                  class="link link-hover block truncate"
+                  :title="entry.text"
                   :href="`#${entry.anchor}`"
                 >
                   {{ entry.text }}

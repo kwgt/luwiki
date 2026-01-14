@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePageView } from '../composables/usePageView';
 import { useUiSettings } from '../composables/useUiSettings';
-import { buildLockTokenKey } from '../lib/lockToken';
+import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
 
 const {
   pageId,
@@ -60,6 +60,7 @@ const {
   dismissAssetDeleteConfirm,
   confirmAssetDelete,
   requestEditLock,
+  cleanupViewLock,
   reportError,
   dismissError,
 } = usePageView();
@@ -82,6 +83,8 @@ const {
 const settingsOpen = ref(false);
 const sidePanelCollapsed = ref(false);
 const isLocking = ref(false);
+const tabIdReady = ref(false);
+const cleanupLockDone = ref(false);
 const isAssetDragging = ref(false);
 const assetDragDepth = ref(0);
 const assetInputRef = ref<HTMLInputElement | null>(null);
@@ -289,7 +292,7 @@ function buildEditUrl(currentPath: string): string {
 }
 
 async function handleEditClick(): Promise<void> {
-  if (interactionDisabled.value || isLocking.value) {
+  if (interactionDisabled.value || isLocking.value || !tabIdReady.value) {
     return;
   }
 
@@ -306,11 +309,21 @@ async function handleEditClick(): Promise<void> {
   }
 }
 
+async function initTabId(): Promise<void> {
+  try {
+    await ensureTabIdReady();
+    tabIdReady.value = true;
+  } catch (err: unknown) {
+    reportError(err);
+  }
+}
+
 onMounted(() => {
   const savedCollapsed = localStorage.getItem('luwiki-side-collapsed');
   if (savedCollapsed === '1') {
     sidePanelCollapsed.value = true;
   }
+  void initTabId();
   void loadPage();
 
   window.addEventListener('dragover', handleWindowDragOver);
@@ -321,6 +334,17 @@ onMounted(() => {
   document.addEventListener('drop', handleWindowDrop, true);
   document.addEventListener('dragenter', handleWindowDragEnter, true);
   document.addEventListener('dragleave', handleWindowDragLeave, true);
+});
+
+watch([pageId, tabIdReady], async ([nextPageId, nextTabReady]) => {
+  if (cleanupLockDone.value) {
+    return;
+  }
+  if (!nextPageId || !nextTabReady) {
+    return;
+  }
+  cleanupLockDone.value = true;
+  await cleanupViewLock();
 });
 
 onBeforeUnmount(() => {
@@ -386,7 +410,7 @@ watch(sidePanelCollapsed, (value) => {
           <button
             class="btn btn-link btn-sm pl-1 text-info"
             type="button"
-            :disabled="interactionDisabled || isLocking"
+            :disabled="interactionDisabled || isLocking || !tabIdReady"
             @click="handleEditClick"
           >
             編集
@@ -415,13 +439,20 @@ watch(sidePanelCollapsed, (value) => {
           >
             削除
           </button>
-          <button class="btn btn-link btn-sm text-info" type="button" @click="openPageMeta">
+          <button class="btn btn-link btn-sm text-info hidden md:block" type="button" @click="openPageMeta">
             情報表示
           </button>
-          <a class="btn btn-link btn-sm text-neutral-content" href="#">履歴</a>
-          <a class="btn btn-link btn-sm text-neutral-content" href="#">差分</a>
+          <a class="btn btn-link btn-sm text-neutral-content hidden md:inline-flex" href="#">履歴</a>
+          <a class="btn btn-link btn-sm text-neutral-content hidden md:inline-flex" href="#">差分</a>
 
-          <a class="btn btn-link btn-sm text-info ml-auto text-neutral-content" href="#">新規作成</a>
+          <a
+            class="btn btn-link btn-sm text-info text-neutral-content ml-auto"
+            href="#"
+            :class="{ 'pointer-events-none opacity-50': interactionDisabled || !tabIdReady }"
+            :aria-disabled="interactionDisabled || !tabIdReady"
+          >
+            新規作成
+          </a>
           <a class="btn btn-link btn-sm text-info" href="/search">検索</a>
           <button
             class="btn btn-link btn-sm pr-1 text-info"
@@ -459,18 +490,22 @@ watch(sidePanelCollapsed, (value) => {
           class="order-2 hidden flex-col gap-1 lg:flex lg:order-1"
         >
           <section
-            class="h-full border border-base-300 bg-base-100 p-3 shadow-sm"
+            class="h-full border border-base-300 bg-base-100 p-2 shadow-sm"
             :class="{ 'pointer-events-none opacity-50': interactionDisabled }"
           >
-            <h2 class="mb-3 text-lg font-semibold">TOC</h2>
+            <h2 class="mb-2 text-lg font-semibold">TOC</h2>
             <ul class="flex flex-col gap-1 text-sm">
-              <li v-for="entry in tocEntries" :key="entry.anchor">
+              <li
+                v-for="entry in tocEntries"
+                :key="entry.anchor"
+                :class="{
+                  'ml-3': entry.level === 3,
+                  'ml-6': entry.level === 4,
+                }"
+              >
                 <a
-                  class="link link-hover"
-                  :class="{
-                    'pl-3': entry.level === 3,
-                    'pl-6': entry.level === 4,
-                  }"
+                  class="link link-hover block truncate"
+                  :title="entry.text"
                   :href="`#${entry.anchor}`"
                 >
                   {{ entry.text }}

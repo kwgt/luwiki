@@ -28,7 +28,7 @@ import {
   parseAssetMaxBytes,
   toErrorMessage,
 } from '../lib/pageCommon';
-import { buildLockTokenKey } from '../lib/lockToken';
+import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
 import { buildAmendRefreshKey } from '../lib/amendRefresh';
 
 const LOCK_EXTEND_INTERVAL = 60 * 1000;
@@ -448,6 +448,13 @@ export function usePageEdit() {
     revision.value = rawRevision ? Number(rawRevision) : null;
     assetMaxBytes.value = parseAssetMaxBytes(rawAssetMaxBytes);
     dismissNewPageToast();
+
+    try {
+      await ensureTabIdReady();
+    } catch (err: unknown) {
+      errorMessage.value = toErrorMessage(err);
+      return;
+    }
 
     if (!rawPageId) {
       pageId.value = '';
