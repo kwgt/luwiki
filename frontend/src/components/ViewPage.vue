@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePageView } from '../composables/usePageView';
 import { useUiSettings } from '../composables/useUiSettings';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
@@ -125,6 +125,19 @@ const canMovePage = computed(
 
 function applySidePanelCollapsed(value: boolean): void {
   localStorage.setItem('luwiki-side-collapsed', value ? '1' : '0');
+}
+
+function scrollToHashIfPresent(): void {
+  const hash = window.location.hash;
+  if (!hash || hash.length <= 1) {
+    return;
+  }
+  const targetId = decodeURIComponent(hash.slice(1));
+  const target = document.getElementById(targetId);
+  if (!target) {
+    return;
+  }
+  target.scrollIntoView({ block: 'start' });
 }
 
 function toggleSidePanel(): void {
@@ -360,6 +373,14 @@ onBeforeUnmount(() => {
 
 watch(sidePanelCollapsed, (value) => {
   applySidePanelCollapsed(value);
+});
+
+watch(renderedHtml, async (value) => {
+  if (!value) {
+    return;
+  }
+  await nextTick();
+  scrollToHashIfPresent();
 });
 </script>
 

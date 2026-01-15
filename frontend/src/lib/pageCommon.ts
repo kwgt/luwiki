@@ -1,5 +1,6 @@
 import axios from 'axios';
 import MarkdownIt from 'markdown-it';
+import anchor from 'markdown-it-anchor';
 import taskLists from 'markdown-it-task-lists';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-markup';
@@ -170,6 +171,17 @@ export function slugifyHeading(text: string): string {
     .replace(/[^\w\-\u3040-\u30ff\u3400-\u9fff]/g, '');
 }
 
+function createUniqueSlug(slug: string, used: Record<string, true>, startIndex = 1): string {
+  let unique = slug;
+  let index = startIndex;
+  while (Object.prototype.hasOwnProperty.call(used, unique)) {
+    unique = `${slug}-${index}`;
+    index += 1;
+  }
+  used[unique] = true;
+  return unique;
+}
+
 export function extractTitle(markdown: string, pagePath: string): string {
   const lines = markdown.split(/\r?\n/);
   for (const line of lines) {
@@ -189,6 +201,7 @@ export function extractTitle(markdown: string, pagePath: string): string {
 
 export function extractToc(markdown: string): TocEntry[] {
   const entries: TocEntry[] = [];
+  const usedSlugs: Record<string, true> = {};
   const lines = markdown.split(/\r?\n/);
   for (const line of lines) {
     const match = line.match(/^(#{2,4})\s+(.+)$/);
@@ -197,10 +210,11 @@ export function extractToc(markdown: string): TocEntry[] {
     }
     const level = match[1].length;
     const text = match[2].trim();
+    const baseSlug = slugifyHeading(text);
     entries.push({
       level,
       text,
-      anchor: slugifyHeading(text),
+      anchor: createUniqueSlug(baseSlug, usedSlugs),
     });
   }
   return entries;
@@ -265,17 +279,14 @@ export function createMarkdownRenderer(
     md.use(taskLists, { enabled: false });
   }
 
-  const defaultHeadingOpen = md.renderer.rules.heading_open;
-  md.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
-    const inline = tokens[idx + 1];
-    const title = inline && inline.type === 'inline' ? inline.content : '';
-    const anchor = slugifyHeading(title);
-    tokens[idx].attrSet('id', anchor);
-    if (defaultHeadingOpen) {
-      return defaultHeadingOpen(tokens, idx, options, env, self);
-    }
-    return self.renderToken(tokens, idx, options);
-  };
+  md.use(anchor, {
+    slugify: slugifyHeading,
+    tabIndex: false,
+    permalink: anchor.permalink.linkInsideHeader({
+      symbol: "#",
+      placement: 'after',
+    }),
+  });
 
   const defaultLinkOpen = md.renderer.rules.link_open;
   md.renderer.rules.link_open = (tokens, idx, options, env, self) => {

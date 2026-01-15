@@ -10,11 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "axios": "^1.7.7",
-    "markdown-it": "^14.1.0",
-    "markdown-it-task-lists": "^2.1.1",
-    "prismjs": "^1.30.0",
-    "vue": "^3.5.13",
     "@codemirror/commands": "^6.6.2",
     "@codemirror/lang-markdown": "^6.3.1",
     "@codemirror/lang-python": "^6.1.6",
@@ -24,11 +19,17 @@
     "@codemirror/state": "^6.4.1",
     "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.27.0",
+    "@lezer/highlight": "^1.2.0",
     "@replit/codemirror-emacs": "^6.1.0",
     "@replit/codemirror-lang-csharp": "^6.1.0",
     "@replit/codemirror-vim": "^6.2.0",
     "@replit/codemirror-vscode-keymap": "^6.0.2",
-    "@lezer/highlight": "^1.2.0"
+    "axios": "^1.7.7",
+    "markdown-it": "^14.1.0",
+    "markdown-it-anchor": "^9.2.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "prismjs": "^1.30.0",
+    "vue": "^3.5.13"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.3",

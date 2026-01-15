@@ -40,6 +40,24 @@
   font-size: 1.15rem;
 }
 
+.markdown-body .header-anchor {
+  color: var(--md-muted, #57606a);
+  font-size: 0.65em;
+  margin-left: 0rem;
+  vertical-align: top;
+  opacity: 0;
+  text-decoration: none;
+  transition: opacity 0.15s ease-in-out;
+}
+
+.markdown-body h1:hover .header-anchor,
+.markdown-body h2:hover .header-anchor,
+.markdown-body h3:hover .header-anchor,
+.markdown-body h4:hover .header-anchor,
+.markdown-body .header-anchor:focus {
+  opacity: 1;
+}
+
 .markdown-body p {
   margin: 0.7rem 0;
 }
