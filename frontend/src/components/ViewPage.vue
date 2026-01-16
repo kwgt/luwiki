@@ -402,11 +402,14 @@ watch(renderedHtml, async (value) => {
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
             LUWIKI VIEW
           </p>
-          <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2" :title="pageTitle">
+          <h1
+            class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"
+            :title="pageTitle"
+          >
             {{ pageTitle }}
           </h1>
           <nav
-            class="flex flex-wrap items-center gap-1 text-sm text-info mx-4 mt-3"
+            class="flex flex-nowrap items-center gap-1 text-sm text-info mx-4 mt-3"
             aria-label="breadcrumb"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="item.href">

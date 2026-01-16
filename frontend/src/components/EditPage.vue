@@ -410,11 +410,11 @@ function buildAssetDownloadUrl(fileName: string): string {
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
             LUWIKI EDIT
           </p>
-          <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2">
+          <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate">
             {{ editorTitle || '編集画面' }}
           </h1>
           <nav
-            class="flex flex-wrap items-center gap-1 text-sm text-info mx-4 mt-3"
+            class="flex flex-nowrap items-center gap-1 text-sm text-info mx-4 mt-3"
             aria-label="breadcrumb"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="`${item.label}-${index}`">
