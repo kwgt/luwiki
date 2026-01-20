@@ -79,6 +79,25 @@ pub(crate) async fn get_search(
     render_page_html(&state, "", "")
 }
 
+///
+/// リビジョン管理画面(ルート)
+///
+pub(crate) async fn get_rev_root(
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    get_rev_by_path(String::new(), data).await
+}
+
+///
+/// リビジョン管理画面
+///
+pub(crate) async fn get_rev(
+    path: web::Path<String>,
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    get_rev_by_path(path.into_inner(), data).await
+}
+
 async fn get_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,
@@ -101,6 +120,36 @@ async fn get_by_path(
                 .insert_header((header::LOCATION, edit_path))
                 .finish();
         }
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let page_index = match state.db().get_page_index_by_id(&page_id) {
+        Ok(Some(index)) => index,
+        Ok(None) => return HttpResponse::NotFound().finish(),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let revision = page_index.latest();
+    render_page_html(&state, &page_id.to_string(), &revision.to_string())
+}
+
+async fn get_rev_by_path(
+    raw_path: String,
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    let page_path = normalize_path(&raw_path);
+    if let Err(reason) = rest_api::validate_page_path(&page_path) {
+        return HttpResponse::BadRequest().body(reason);
+    }
+
+    let state = match data.read() {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let page_id = match state.db().get_page_id_by_path(&page_path) {
+        Ok(Some(page_id)) => page_id,
+        Ok(None) => return HttpResponse::NotFound().finish(),
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 

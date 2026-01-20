@@ -220,6 +220,7 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
         .route("/pages/{page_id}/parent", web::get().to(pages::parent::get))
         .route("/pages/{page_id}/path", web::get().to(pages::path::get))
         .route("/pages/{page_id}/path", web::post().to(pages::path::post))
+        .route("/pages/{page_id}/revision", web::post().to(pages::revision::post))
         .route("/pages/{page_id}/assets", web::get().to(pages::assets::get))
         .route(
             "/pages/{page_id}/assets/{file_name}",

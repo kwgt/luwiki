@@ -67,6 +67,9 @@ pub(crate) fn run(
     cert_path: PathBuf,
     cert_is_explicit: bool,
 ) -> Result<()> {
+
+    info!("{} {} start", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"),);
+
     /*
      * Tokioランタイムの構築
      */
@@ -84,6 +87,7 @@ pub(crate) fn run(
         fts_config,
         template_root,
     ))));
+
     let server = create_server(
         addr,
         port,
@@ -159,6 +163,8 @@ fn create_server(
             .route("/edit", web::get().to(page_view::get_edit_root))
             .route("/edit/{page_path:.*}", web::get().to(page_view::get_edit))
             .route("/search", web::get().to(page_view::get_search))
+            .route("/rev", web::get().to(page_view::get_rev_root))
+            .route("/rev/{page_path:.*}", web::get().to(page_view::get_rev))
 
             // 静的ファイル配信
             .route("/static/{file:.*}", web::get().to(static_files::get))

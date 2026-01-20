@@ -330,6 +330,46 @@ export async function updatePageSource(
 }
 
 /**
+ * ページソースをロールバックする
+ */
+export async function rollbackPageRevision(
+  pageId: string,
+  rollbackTo: number,
+): Promise<void> {
+  const res = await apiClient.post(
+    `/pages/${pageId}/revision`,
+    null,
+    {
+      params: { rollback_to: rollbackTo },
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+}
+
+/**
+ * ページソースをコンパクションする
+ */
+export async function compactPageRevision(
+  pageId: string,
+  keepFrom: number,
+): Promise<void> {
+  const res = await apiClient.post(
+    `/pages/${pageId}/revision`,
+    null,
+    {
+      params: { keep_from: keepFrom },
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+}
+
+/**
  * ページロックを取得する
  */
 export async function acquirePageLock(pageId: string): Promise<string> {

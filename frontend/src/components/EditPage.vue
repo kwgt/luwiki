@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePageEdit } from '../composables/usePageEdit';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
@@ -83,6 +83,7 @@ const sidePanelCollapsed = ref(false);
 const settingsOpen = ref(false);
 const sourceStatus = ref('未読込');
 const autoLoadSource = true;
+const editorPaneRef = ref<{ focusToStart: () => void } | null>(null);
 
 const renderedHtml = ref('');
 const markdownRenderer = ref<ReturnType<typeof createMarkdownRenderer> | null>(null);
@@ -170,6 +171,8 @@ onMounted(async () => {
     await loadPage();
   }
   await checkTemplateAvailability();
+  await nextTick();
+  editorPaneRef.value?.focusToStart();
   updateScreenState();
   window.addEventListener('resize', updateScreenState);
   window.addEventListener('dragover', handleWindowDragOver);
@@ -408,7 +411,7 @@ function buildAssetDownloadUrl(fileName: string): string {
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            LUWIKI EDIT
+            LuWiki EDIT
           </p>
           <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate">
             {{ editorTitle || '編集画面' }}
@@ -565,6 +568,7 @@ function buildAssetDownloadUrl(fileName: string): string {
             class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
           >
             <EditorPane
+              ref="editorPaneRef"
               v-model="sourceText"
               placeholder="Markdownを入力してください"
               :theme="selectedTheme"

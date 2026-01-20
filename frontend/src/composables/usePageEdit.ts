@@ -43,6 +43,12 @@ function isRequestError(err: unknown): err is { status?: number } {
   return typeof err === 'object' && err !== null && 'status' in err;
 }
 
+function isDraftMeta(meta: PageMetaResponse): boolean {
+  return meta.page_info.revision_scope.latest === 0
+    && meta.page_info.revision_scope.oldest === 0
+    && !meta.revision_info;
+}
+
 function resolveEditPath(): string {
   const raw = window.location.pathname;
   const trimmed = raw.replace(/^\/edit\/?/, '');
@@ -510,13 +516,26 @@ export function usePageEdit() {
     errorMessage.value = '';
 
     try {
-      const [meta, markdown, pageAssets] = await Promise.all([
-        fetchPageMeta(pageId.value, revision.value ?? undefined),
+      const meta = await fetchPageMeta(pageId.value, revision.value ?? undefined);
+      applyPageMeta(meta);
+      if (isDraftMeta(meta)) {
+        draftCreated.value = true;
+        applySourceSnapshot('');
+        assets.value = await fetchPageAssets(pageId.value, Date.now());
+        if (applyEditor) {
+          applyEditor(source.value);
+        }
+        await refreshLockInfo();
+        startLockExtend();
+        return;
+      }
+
+      const [markdown, pageAssets] = await Promise.all([
         fetchPageSource(pageId.value, revision.value ?? undefined),
         fetchPageAssets(pageId.value, Date.now()),
       ]);
 
-      applyPageMeta(meta);
+      draftCreated.value = false;
       applySourceSnapshot(markdown);
       assets.value = pageAssets;
       if (applyEditor) {

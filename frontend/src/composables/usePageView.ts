@@ -2,6 +2,7 @@ import { computed, ref, watch } from 'vue';
 import {
   acquirePageLock,
   deletePage,
+  fetchDeletedPageCandidates,
   fetchParentPage,
   fetchPageMeta,
   fetchPageSource,
@@ -87,6 +88,11 @@ export function usePageView() {
   const pageMoveRecursive = ref(false);
   const pageMoveTarget = ref('');
   const pageMoveError = ref('');
+  const pageCreateOpen = ref(false);
+  const pageCreateLoading = ref(false);
+  const pageCreateTarget = ref('');
+  const pageCreateError = ref('');
+  const pageCreateGuide = ref('');
   const errorMessage = ref('');
 
   const pageTitle = computed(() => extractTitle(source.value, pagePath.value));
@@ -181,6 +187,39 @@ export function usePageView() {
       if (normalizedPreview.startsWith(basePrefix)) {
         return '移動先が元のパス配下です';
       }
+    }
+    return '';
+  });
+  const pageCreateResolvedPath = computed(() => {
+    const raw = pageCreateTarget.value.trim();
+    if (!raw) {
+      return null;
+    }
+    const base = pagePath.value || '/';
+    return resolvePagePath(base, raw);
+  });
+  const pageCreatePreviewPath = computed(() => {
+    const raw = pageCreateTarget.value.trim();
+    if (!raw) {
+      return '';
+    }
+    const resolved = pageCreateResolvedPath.value;
+    return resolved ?? '';
+  });
+  const pageCreateInputError = computed(() => {
+    const raw = pageCreateTarget.value.trim();
+    if (!raw) {
+      return '';
+    }
+    if (raw.endsWith('/')) {
+      return '末尾に"/"は指定できません';
+    }
+    if (!pageCreateResolvedPath.value) {
+      return '作成先パスが不正です';
+    }
+    const normalizedCurrent = normalizeWikiPath(pagePath.value || '/');
+    if (pageCreateResolvedPath.value === normalizedCurrent) {
+      return 'すでにページが存在します';
     }
     return '';
   });
@@ -370,6 +409,96 @@ export function usePageView() {
     pageMoveOpen.value = true;
   }
 
+  function resolveCreateBasePath(path: string): string {
+    const normalized = normalizeWikiPath(path);
+    if (normalized === '/') {
+      return '/';
+    }
+    return `${normalized}/`;
+  }
+
+  function buildEditUrl(path: string, createFlag = false): string {
+    if (!path || path === '/') {
+      return createFlag ? '/edit/?create=1' : '/edit/';
+    }
+    const trimmed = path.replace(/^\/+|\/+$/g, '');
+    if (!trimmed) {
+      return createFlag ? '/edit/?create=1' : '/edit/';
+    }
+    const encoded = trimmed
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return createFlag ? `/edit/${encoded}?create=1` : `/edit/${encoded}`;
+  }
+
+  function openPageCreateConfirm(): void {
+    const basePath = pagePath.value || '/';
+    pageCreateTarget.value = resolveCreateBasePath(basePath);
+    pageCreateLoading.value = false;
+    pageCreateError.value = '';
+    pageCreateGuide.value = '';
+    pageCreateOpen.value = true;
+    void refreshCreateGuide();
+  }
+
+  function dismissPageCreateConfirm(): void {
+    pageCreateOpen.value = false;
+    pageCreateLoading.value = false;
+    pageCreateError.value = '';
+    pageCreateGuide.value = '';
+  }
+
+  let createGuideRequestId = 0;
+
+  async function refreshCreateGuide(): Promise<void> {
+    if (!pageCreateOpen.value) {
+      return;
+    }
+    if (pageCreateInputError.value) {
+      pageCreateGuide.value = '';
+      return;
+    }
+    const resolved = pageCreateResolvedPath.value;
+    if (!resolved) {
+      pageCreateGuide.value = '';
+      return;
+    }
+    const requestId = createGuideRequestId + 1;
+    createGuideRequestId = requestId;
+    try {
+      const candidates = await fetchDeletedPageCandidates(resolved);
+      if (createGuideRequestId !== requestId) {
+        return;
+      }
+      pageCreateGuide.value = candidates.length > 0
+        ? '削除済みページが存在します。編集画面で復帰候補を確認してください。'
+        : '';
+    } catch {
+      if (createGuideRequestId === requestId) {
+        pageCreateGuide.value = '';
+      }
+    }
+  }
+
+  async function confirmPageCreate(): Promise<void> {
+    if (pageCreateLoading.value) {
+      return;
+    }
+    if (pageCreateInputError.value) {
+      pageCreateError.value = pageCreateInputError.value;
+      return;
+    }
+    const resolved = pageCreateResolvedPath.value;
+    if (!resolved) {
+      pageCreateError.value = '作成先パスが不正です';
+      return;
+    }
+    pageCreateLoading.value = true;
+    pageCreateError.value = '';
+    window.location.href = buildEditUrl(resolved, true);
+  }
+
   function dismissPageMoveConfirm(): void {
     pageMoveOpen.value = false;
     pageMoveError.value = '';
@@ -548,6 +677,17 @@ export function usePageView() {
       pageMoveError.value = '';
     }
   });
+  watch(pageCreateTarget, () => {
+    if (pageCreateError.value) {
+      pageCreateError.value = '';
+    }
+    void refreshCreateGuide();
+  });
+  watch(pageCreateInputError, () => {
+    if (pageCreateError.value) {
+      pageCreateError.value = '';
+    }
+  });
 
   return {
     pageId,
@@ -589,6 +729,13 @@ export function usePageView() {
     pageMovePreviewPath,
     pageMoveInputError,
     pageMoveError,
+    pageCreateOpen,
+    pageCreateLoading,
+    pageCreateTarget,
+    pageCreatePreviewPath,
+    pageCreateInputError,
+    pageCreateError,
+    pageCreateGuide,
     loadPage,
     uploadAssets,
     openPageMeta,
@@ -599,6 +746,9 @@ export function usePageView() {
     openPageMoveConfirm,
     dismissPageMoveConfirm,
     confirmPageMove,
+    openPageCreateConfirm,
+    dismissPageCreateConfirm,
+    confirmPageCreate,
     requestCopyName,
     dismissCopyToast,
     openAssetDetails,

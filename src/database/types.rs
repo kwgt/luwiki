@@ -450,6 +450,21 @@ impl PageIndex {
     }
 
     ///
+    /// 最古リビジョン番号の更新
+    ///
+    /// # 引数
+    /// * `earliest` - 新しい最古リビジョン番号
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    pub(crate) fn set_earliest(&mut self, earliest: u64) {
+        if let Some(info) = self.as_page_info_mut() {
+            info.earliest = earliest;
+        }
+    }
+
+    ///
     /// ページパスの更新
     ///
     /// # 引数

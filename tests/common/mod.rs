@@ -217,6 +217,7 @@ impl Drop for ServerGuard {
 /// # 戻り値
 /// なし
 ///
+#[allow(dead_code)]
 pub fn wait_for_server(url: &str) {
     /*
      * 起動確認
@@ -247,6 +248,7 @@ pub fn wait_for_server(url: &str) {
 /// # 戻り値
 /// HTTPクライアント
 ///
+#[allow(dead_code)]
 pub fn build_client() -> Client {
     Client::builder()
         .timeout(Duration::from_millis(7000))

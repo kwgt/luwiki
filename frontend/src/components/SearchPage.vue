@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { usePageSearch } from '../composables/usePageSearch';
 import { useUiSettings } from '../composables/useUiSettings';
 import { normalizeWikiPath } from '../lib/pageCommon';
@@ -21,6 +21,7 @@ const {
 const { selectedTheme } = useUiSettings();
 
 const sortOrder = ref<SortOrder>('score');
+const searchInputRef = ref<HTMLInputElement | null>(null);
 
 const sortedResults = computed(() => {
   const items = [...results.value];
@@ -59,6 +60,11 @@ function formatSnippet(raw: string): string {
     .replace(/&lt;b&gt;/g, '<b>')
     .replace(/&lt;\/b&gt;/g, '</b>');
 }
+
+onMounted(async () => {
+  await nextTick();
+  searchInputRef.value?.focus();
+});
 </script>
 
 <template>
@@ -79,6 +85,7 @@ function formatSnippet(raw: string): string {
             <span class="label-text">検索式</span>
           </div>
           <input
+            ref="searchInputRef"
             v-model="query"
             class="input input-bordered w-full"
             type="text"

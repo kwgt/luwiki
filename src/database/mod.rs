@@ -107,6 +107,12 @@ pub(crate) enum DbError {
     /// amend指定が許可されない
     AmendForbidden,
 
+    /// ページが削除済み
+    PageDeleted,
+
+    /// リビジョン指定が不正
+    InvalidRevision,
+
     /// アセットが存在しない
     AssetNotFound,
 
@@ -136,6 +142,8 @@ impl std::fmt::Display for DbError {
             DbError::LockNotFound => write!(f, "lock not found"),
             DbError::LockForbidden => write!(f, "lock forbidden"),
             DbError::AmendForbidden => write!(f, "amend forbidden"),
+            DbError::PageDeleted => write!(f, "page deleted"),
+            DbError::InvalidRevision => write!(f, "invalid revision"),
             DbError::AssetNotFound => write!(f, "asset not found"),
             DbError::AssetDeleted => write!(f, "asset deleted"),
             DbError::AssetAlreadyExists => write!(f, "asset already exists"),
@@ -3649,6 +3657,197 @@ impl DatabaseManager {
     }
 
     ///
+    /// ページソースのロールバック(ソースのみ)
+    ///
+    /// # 概要
+    /// 指定リビジョンより新しいソースを削除し、最新リビジョン番号を更新する。
+    /// パスやリネーム履歴は変更しない。
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ページID
+    /// * `rollback_to` - ロールバック先のリビジョン番号
+    ///
+    /// # 戻り値
+    /// 成功時は`Ok(())`を返す。
+    ///
+    pub(crate) fn rollback_page_source_only(
+        &self,
+        page_id: &PageId,
+        rollback_to: u64,
+    ) -> Result<()> {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+
+        {
+            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+
+            /*
+             * ページ情報取得と検証
+             */
+            let mut index = match index_table.get(page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!(DbError::PageNotFound)),
+            };
+
+            if index.is_draft() {
+                return Err(anyhow!(DbError::PageLocked));
+            }
+
+            if index.deleted() {
+                return Err(anyhow!(DbError::PageDeleted));
+            }
+
+            let latest = index.latest();
+            let earliest = index.earliest();
+            if rollback_to < earliest || rollback_to > latest {
+                return Err(anyhow!(DbError::InvalidRevision));
+            }
+
+            /*
+             * ロック検証
+             */
+            let now = Local::now();
+            DatabaseManager::verify_page_lock_in_txn(
+                page_id,
+                &mut index,
+                &mut index_table,
+                &mut lock_table,
+                &now,
+            )?;
+
+            /*
+             * ソース削除
+             */
+            for revision in (rollback_to + 1)..=latest {
+                let _ = source_table.remove((page_id.clone(), revision))?;
+            }
+
+            /*
+             * 最新リビジョン更新
+             */
+            index.set_latest(rollback_to);
+            index_table.insert(page_id.clone(), index)?;
+        }
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(())
+    }
+
+    ///
+    /// ページソースのコンパクション
+    ///
+    /// # 概要
+    /// 指定リビジョンより過去のソースを削除し、最古リビジョン番号を更新する。
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ページID
+    /// * `keep_from` - 保持する下限リビジョン番号
+    ///
+    /// # 戻り値
+    /// 成功時は`Ok(())`を返す。
+    ///
+    pub(crate) fn compact_page_source(
+        &self,
+        page_id: &PageId,
+        keep_from: u64,
+    ) -> Result<()> {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+
+        {
+            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+
+            /*
+             * ページ情報取得と検証
+             */
+            let mut index = match index_table.get(page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!(DbError::PageNotFound)),
+            };
+
+            if index.is_draft() {
+                return Err(anyhow!(DbError::PageLocked));
+            }
+
+            if index.deleted() {
+                return Err(anyhow!(DbError::PageDeleted));
+            }
+
+            let latest = index.latest();
+            let earliest = index.earliest();
+            if keep_from < earliest || keep_from > latest {
+                return Err(anyhow!(DbError::InvalidRevision));
+            }
+
+            /*
+             * ロック検証
+             */
+            let now = Local::now();
+            DatabaseManager::verify_page_lock_in_txn(
+                page_id,
+                &mut index,
+                &mut index_table,
+                &mut lock_table,
+                &now,
+            )?;
+
+            /*
+             * ソース削除
+             */
+            if keep_from > earliest {
+                for revision in earliest..=(keep_from - 1) {
+                    let _ = source_table.remove((page_id.clone(), revision))?;
+                }
+            }
+
+            /*
+             * 最古リビジョン更新
+             */
+            index.set_earliest(keep_from);
+            index_table.insert(page_id.clone(), index)?;
+        }
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(())
+    }
+
+    /// ページソースが存在するかを確認する（テスト用）
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ページID
+    /// * `revision` - リビジョン番号
+    ///
+    /// # 戻り値
+    /// 存在する場合はtrueを返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn has_page_source_for_test(
+        &self,
+        page_id: &PageId,
+        revision: u64,
+    ) -> Result<bool> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(PAGE_SOURCE_TABLE)?;
+        Ok(table.get((page_id.clone(), revision))?.is_some())
+    }
+
+    ///
     /// ページの再帰的リネーム
     ///
     /// # 概要
@@ -4924,6 +5123,23 @@ fn resolve_page_id_with_table<'txn>(
     };
 
     Ok(Some(entry))
+}
+
+/// テスト用: ページソースが存在するかを確認する
+#[allow(dead_code)]
+pub fn page_source_exists_for_test<P>(
+    db_path: P,
+    asset_path: P,
+    page_id: &str,
+    revision: u64,
+) -> Result<bool>
+where
+    P: AsRef<Path>,
+{
+    let manager = DatabaseManager::open(db_path, asset_path)?;
+    let page_id = PageId::from_string(page_id)
+        .map_err(|_| anyhow!(DbError::PageNotFound))?;
+    manager.has_page_source_for_test(&page_id, revision)
 }
 
 #[cfg(test)]

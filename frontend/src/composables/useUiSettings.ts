@@ -10,6 +10,7 @@ type FontFamilyMap = {
 };
 
 type EditorKeymap = 'default' | 'vim' | 'emacs' | 'vscode';
+type DiffMode = 'lines' | 'words' | 'chars' | 'patch';
 
 const THEME_OPTIONS = ['light', 'dark'];
 const FONT_OPTIONS = [
@@ -23,6 +24,12 @@ const EDITOR_KEYMAP_OPTIONS = [
   { value: 'vim', label: 'Vim' },
   { value: 'emacs', label: 'Emacs' },
   { value: 'vscode', label: 'VSCode' },
+];
+const DIFF_MODE_OPTIONS = [
+  { value: 'lines', label: '行' },
+  { value: 'words', label: '単語' },
+  { value: 'chars', label: '文字' },
+  { value: 'patch', label: 'パッチ' },
 ];
 
 function applyTheme(theme: string): void {
@@ -71,6 +78,7 @@ export function useUiSettings() {
   const selectedCodeFontSize = ref(15);
   const selectedEditorKeymap = ref<EditorKeymap>('default');
   const selectedEditorLineNumbers = ref(true);
+  const selectedDiffMode = ref<DiffMode>('lines');
   const fontFamilyMap = ref<FontFamilyMap>({
     ui: 'sans-serif',
     sans: 'sans-serif',
@@ -136,6 +144,10 @@ export function useUiSettings() {
     if (savedLineNumbers !== null) {
       selectedEditorLineNumbers.value = savedLineNumbers === '1';
     }
+    const savedDiffMode = localStorage.getItem('luwiki-diff-mode');
+    if (savedDiffMode && DIFF_MODE_OPTIONS.some((option) => option.value === savedDiffMode)) {
+      selectedDiffMode.value = savedDiffMode as DiffMode;
+    }
     applyTheme(selectedTheme.value);
     applyFontSettings(selectedFont.value, selectedFontSize.value);
     applyCodeFontSettings(selectedCodeFontSize.value);
@@ -160,17 +172,22 @@ export function useUiSettings() {
   watch(selectedEditorLineNumbers, (value) => {
     localStorage.setItem('luwiki-editor-line-numbers', value ? '1' : '0');
   });
+  watch(selectedDiffMode, (value) => {
+    localStorage.setItem('luwiki-diff-mode', value);
+  });
 
   return {
     themeOptions: THEME_OPTIONS,
     fontOptions: FONT_OPTIONS,
     editorKeymapOptions: EDITOR_KEYMAP_OPTIONS,
+    diffModeOptions: DIFF_MODE_OPTIONS,
     selectedTheme,
     selectedFont,
     selectedFontSize,
     selectedCodeFontSize,
     selectedEditorKeymap,
     selectedEditorLineNumbers,
+    selectedDiffMode,
     codeFontFamily,
     editorStyle,
     markdownThemeClass,

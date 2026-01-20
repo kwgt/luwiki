@@ -41,8 +41,8 @@ properties:
   |GET    | `/api/pages/{page_id}/meta[?rev={revision}]`      | [ページのメタ情報の取得](#get-page-metadata)
   |GET    | `/api/pages/{page_id}/parent[?recursive={boolean}]` | [親ページの取得](#get-page-parent)
   |GET    | `/api/pages/{page_id}/path`                       | [ページパスの取得](#get-page-path)
-  |POST   | `/api/pages/{page_id}/path?rename_to={page_path}` | [ページパスの変更(リネーム)](#rename-page-path)
-  |POST   | `/api/pages/{page_id}/path?restore_to={page_path}` | [ページの復帰](#restore-page-path)
+  |POST   | `/api/pages/{page_id}/path?rename_to={page_path}[&recursive={boolean}]` | [ページパスの変更(リネーム)](#rename-page-path)
+  |POST   | `/api/pages/{page_id}/path?restore_to={page_path}[&recursive={boolean}]` | [ページの復帰](#restore-page-path)
   |GET    | `/api/pages/{page_id}/assets`                     | [ページに付随するアセットのメタ情報一覧取得](#get-page-assets)
   |POST   | `/api/pages/{page_id}/assets/{file_name}`         | [アセットのアップロード](#upload-page-asset)
   |GET    | `/api/pages/{page_id}/assets/{file_name}`         | [アセットIDによるアセット取得へのリダイレクト](#get-page-asset)
@@ -50,6 +50,8 @@ properties:
   |PUT    | `/api/pages/{page_id}/lock`                       | [ページのロック延長](#update-page-lock)
   |GET    | `/api/pages/{page_id}/lock`                       | [ページのロック状態の取得](#get-page-lock-info)
   |DELETE | `/api/pages/{page_id}/lock`                       | [ページのロック解除](#unlock-page)
+  |POST   | `/api/pages/{page_id}/revision?rollback_to={rev}` | [ページソースのロールバック](#rollback-page)
+  |POST   | `/api/pages/{page_id}/revision?keep_from={rev}`   | [ページソースのコンパクション](#compaction-page)
   |DELETE | `/api/pages/{page_id}`                            | [ページの削除](#delete-page)
   |POST   | `/api/assets?path={page_path}&file={file_name}`   | [アセットのアップロード](#upload-asset)
   |GET    | `/api/assets?path={page_path}&file={file_name}`   | [アセットIDによるアセット取得へのリダイレクト](#redirect-to-get-asset)
@@ -570,7 +572,7 @@ properties:
   | 410 Gone | 削除済みのページが指定された
 
 <a id="rename-page-path"></a>
-### `POST /api/pages/{page_id}/path?rename_to={page_path}`
+### `POST /api/pages/{page_id}/path?rename_to={page_path}[&recursive={boolean}]`
 #### 概要
 ページパスの変更(リネーム)
 
@@ -591,7 +593,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
-  | 400 Bad Request | `rename_to`で指定されたパス文字列のフォーマットが不正
+  | 400 Bad Request | `rename_to`で指定されたパス文字列のフォーマットが不正<br>`rename_to`と`restore_to`が同時に指定された
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 409 Conflict | `rename_to`で指定されたパスにすでにページが存在する
   | 410 Gone | 削除済みのページが指定された
@@ -601,7 +603,7 @@ properties:
   - `recursive=true`の場合、配下にロック中のページが存在すると失敗する
 
 <a id="restore-page-path"></a>
-### `POST /api/pages/{page_id}/path?restore_to={page_path}`
+### `POST /api/pages/{page_id}/path?restore_to={page_path}[&recursive={boolean}]`
 #### 概要
 ページの復帰
 
@@ -921,6 +923,66 @@ properties:
 
 #### 注記
   - リクエストヘッダの`X-Lock-Authentication`の`token`には、`POST /api/pages/{page_id}/lock`及び`PUT /api/pages/{page_id}/lock`で受信した解除用のトークンを渡す必要がある。
+
+<a id="rollback-page"></a>
+### `POST /api/pages/{page_id}/revision?rollback_to={rev}`
+#### 概要
+ページソースのロールバック
+
+#### パスエレメント
+  - page_id : 操作対象のページID
+
+#### クエリーパラメータ
+  |名称|型|説明|必須
+  |:--|:--|:--|:--
+  | `rollback_to` | number | ロールバック先のリビジョン番号 | 必須 
+
+#### レスポンス
+リクエストに成功した場合、ステータスは204を返す(HTTPヘッダに特別に設定するものはない)。
+また、ボディにも何も返さない。
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 400 Bad Request | `rollback_to`で指定されたリビジョン番号のフォーマットが不正<br>`rollback_to`で指定されたリビジョンが存在しない<br>`rollback_to`と`keep_from`が同時に指定された
+  | 404 Not Found | 指定されたページIDに対応するページが存在しない
+  | 410 Gone | 削除済みのページが指定された
+  | 423 Locked | ロックされているページを操作しようとした
+
+#### 注記
+  - ロック中のページに対するリクエストは禁止されている
+  - 本リクエストによる操作は取り消すことはできない
+
+<a id="compaction-page"></a>
+### `POST /api/pages/{page_id}/revision?keep_from={rev}`
+#### 概要
+ページソースのコンパクション(指定リビジョンより過去のリビジョンソースの破棄)
+
+#### パスエレメント
+  - page_id : 操作対象のページID
+
+#### クエリーパラメータ
+  |名称|型|説明|必須
+  |:--|:--|:--|:--
+  | `keep_from` | number | 保持する下限リビジョン番号 | 必須 
+
+#### レスポンス
+リクエストに成功した場合、ステータスは204を返す(HTTPヘッダに特別に設定するものはない)。
+また、ボディにも何も返さない。
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 400 Bad Request | `keep_from`で指定されたリビジョン番号のフォーマットが不正<br>`keep_from`で指定されたリビジョンが存在しない<br>`rollback_to`と`keep_from`が同時に指定された
+  | 404 Not Found | 指定されたページIDに対応するページが存在しない
+  | 410 Gone | 削除済みのページが指定された
+  | 423 Locked | ロックされているページを操作しようとした
+
+#### 注記
+  - ロック中のページに対するリクエストは禁止されている
+  - 本リクエストによる操作は取り消すことはできない
 
 <a id="delete-page"></a>
 ### `DELETE /api/pages/{page_id}`

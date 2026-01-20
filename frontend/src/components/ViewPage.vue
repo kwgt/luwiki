@@ -42,6 +42,13 @@ const {
   pageMovePreviewPath,
   pageMoveInputError,
   pageMoveError,
+  pageCreateOpen,
+  pageCreateLoading,
+  pageCreateTarget,
+  pageCreatePreviewPath,
+  pageCreateInputError,
+  pageCreateError,
+  pageCreateGuide,
   loadPage,
   uploadAssets,
   openPageMeta,
@@ -52,6 +59,9 @@ const {
   openPageMoveConfirm,
   dismissPageMoveConfirm,
   confirmPageMove,
+  openPageCreateConfirm,
+  dismissPageCreateConfirm,
+  confirmPageCreate,
   requestCopyName,
   dismissCopyToast,
   openAssetDetails,
@@ -69,12 +79,14 @@ const {
   themeOptions,
   fontOptions,
   editorKeymapOptions,
+  diffModeOptions,
   selectedTheme,
   selectedFont,
   selectedFontSize,
   selectedCodeFontSize,
   selectedEditorKeymap,
   selectedEditorLineNumbers,
+  selectedDiffMode,
   markdownThemeClass,
   prismThemeClass,
   markdownStyle,
@@ -90,6 +102,8 @@ const assetDragDepth = ref(0);
 const assetInputRef = ref<HTMLInputElement | null>(null);
 const isGlobalDragging = ref(false);
 const globalDragDepth = ref(0);
+const pageMoveInputRef = ref<HTMLInputElement | null>(null);
+const pageCreateInputRef = ref<HTMLInputElement | null>(null);
 const breadcrumbItems = computed(() => {
   const currentPath = pagePath.value || '/';
   if (currentPath === '/') {
@@ -112,6 +126,7 @@ const breadcrumbItems = computed(() => {
   return items;
 });
 const editUrl = computed(() => buildEditUrl(pagePath.value));
+const revisionUrl = computed(() => buildRevisionUrl(pagePath.value));
 const canDeletePage = computed(
   () => !interactionDisabled.value
     && !pageMeta.value?.page_info.deleted
@@ -304,6 +319,21 @@ function buildEditUrl(currentPath: string): string {
   return `/edit/${encoded}`;
 }
 
+function buildRevisionUrl(currentPath: string): string {
+  if (!currentPath || currentPath === '/') {
+    return '/rev/';
+  }
+  const trimmed = currentPath.replace(/^\/+|\/+$/g, '');
+  if (!trimmed) {
+    return '/rev/';
+  }
+  const encoded = trimmed
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `/rev/${encoded}`;
+}
+
 async function handleEditClick(): Promise<void> {
   if (interactionDisabled.value || isLocking.value || !tabIdReady.value) {
     return;
@@ -360,6 +390,22 @@ watch([pageId, tabIdReady], async ([nextPageId, nextTabReady]) => {
   await cleanupViewLock();
 });
 
+watch(pageMoveOpen, async (open) => {
+  if (!open) {
+    return;
+  }
+  await nextTick();
+  pageMoveInputRef.value?.focus();
+});
+
+watch(pageCreateOpen, async (open) => {
+  if (!open) {
+    return;
+  }
+  await nextTick();
+  pageCreateInputRef.value?.focus();
+});
+
 onBeforeUnmount(() => {
   window.removeEventListener('dragover', handleWindowDragOver);
   window.removeEventListener('drop', handleWindowDrop);
@@ -400,7 +446,7 @@ watch(renderedHtml, async (value) => {
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            LUWIKI VIEW
+            LuWiki VIEW
           </p>
           <h1
             class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"
@@ -466,17 +512,15 @@ watch(renderedHtml, async (value) => {
           <button class="btn btn-link btn-sm text-info hidden md:block" type="button" @click="openPageMeta">
             情報表示
           </button>
-          <a class="btn btn-link btn-sm text-neutral-content hidden md:inline-flex" href="#">履歴</a>
-          <a class="btn btn-link btn-sm text-neutral-content hidden md:inline-flex" href="#">差分</a>
-
-          <a
-            class="btn btn-link btn-sm text-info text-neutral-content ml-auto"
-            href="#"
-            :class="{ 'pointer-events-none opacity-50': interactionDisabled || !tabIdReady }"
-            :aria-disabled="interactionDisabled || !tabIdReady"
+          <a class="btn btn-link btn-sm text-info hidden md:inline-flex" :href="revisionUrl">履歴</a>
+          <button
+            class="btn btn-link btn-sm text-info ml-auto"
+            type="button"
+            :disabled="interactionDisabled || !tabIdReady"
+            @click="openPageCreateConfirm"
           >
             新規作成
-          </a>
+          </button>
           <a class="btn btn-link btn-sm text-info" href="/search">検索</a>
           <button
             class="btn btn-link btn-sm pr-1 text-info"
@@ -703,6 +747,17 @@ watch(renderedHtml, async (value) => {
 
           <label class="form-control w-full">
             <div class="label">
+              <span class="label-text">差分表示モード</span>
+            </div>
+            <select v-model="selectedDiffMode" class="select select-bordered">
+              <option v-for="option in diffModeOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="form-control w-full">
+            <div class="label">
               <span class="label-text">Markdownフォントサイズ</span>
               <span class="label-text-alt">{{ selectedFontSize }}px</span>
             </div>
@@ -861,8 +916,9 @@ watch(renderedHtml, async (value) => {
               <span class="label-text">移動先パス</span>
             </div>
             <input
+              ref="pageMoveInputRef"
               v-model="pageMoveTarget"
-              class="input input-bordered w-full"
+              class="input input-bordered w-full font-mono"
               type="text"
               placeholder="/new/path"
             />
@@ -908,6 +964,63 @@ watch(renderedHtml, async (value) => {
             @click="confirmPageMove"
           >
             移動
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="pageCreateOpen" class="modal modal-open">
+      <div class="modal-box space-y-4">
+        <h3 class="text-lg font-bold">ページ新規作成</h3>
+        <div class="space-y-3 text-sm">
+          <p class="text-base-content/70">
+            現在のパス: "{{ pagePath || '/' }}"
+          </p>
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">作成先パス</span>
+            </div>
+            <input
+              ref="pageCreateInputRef"
+              v-model="pageCreateTarget"
+              class="input input-bordered w-full font-mono"
+              type="text"
+              placeholder="/new/path"
+            />
+          </label>
+
+          <div class="rounded border border-base-300 bg-base-200/60 p-2 text-xs">
+            <div class="text-base-content/60">新規作成パスプレビュー</div>
+            <div class="p-2">
+              <div class="break-all font-mono">
+                {{ pageCreatePreviewPath || '(未入力)' }}
+              </div>
+            </div>
+          </div>
+
+          <p v-if="pageCreateError" class="text-sm text-error">
+            {{ pageCreateError }}
+          </p>
+          <p v-else-if="pageCreateInputError" class="text-sm text-error">
+            {{ pageCreateInputError }}
+          </p>
+          <p v-else-if="pageCreateGuide" class="text-sm text-blue-600 dark:text-sky-400">
+            {{ pageCreateGuide }}
+          </p>
+          <p v-else class="text-sm min-h-[1.25rem]">
+          </p>
+        </div>
+        <div class="modal-action">
+          <button class="btn" type="button" @click="dismissPageCreateConfirm">
+            キャンセル
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="pageCreateLoading || !!pageCreateInputError || !!pageCreateError || !pageCreatePreviewPath"
+            @click="confirmPageCreate"
+          >
+            作成
           </button>
         </div>
       </div>

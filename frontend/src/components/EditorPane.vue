@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Compartment, EditorState } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState } from '@codemirror/state';
 import { EditorView, placeholder } from '@codemirror/view';
 import {
   buildBaseExtensions,
@@ -16,6 +16,7 @@ const props = defineProps<{
   theme: EditorTheme;
   keymap: EditorKeymap;
   lineNumbers: boolean;
+  readOnly?: boolean;
   placeholder?: string;
   editorStyle?: Record<string, string>;
 }>();
@@ -34,6 +35,9 @@ function buildEditorState(): EditorState {
   const placeholderExtension = props.placeholder
     ? placeholder(props.placeholder)
     : [];
+  const readOnlyExtension = props.readOnly
+    ? [EditorState.readOnly.of(true)]
+    : [];
 
   return EditorState.create({
     doc: props.modelValue,
@@ -42,6 +46,7 @@ function buildEditorState(): EditorState {
       themeCompartment.of(buildThemeExtension(props.theme)),
       keymapCompartment.of(buildKeymapExtension(props.keymap)),
       lineNumberCompartment.of(buildLineNumberExtension(props.lineNumbers)),
+      ...readOnlyExtension,
       placeholderExtension,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {
@@ -123,6 +128,20 @@ watch(
     });
   },
 );
+
+function focusToStart(): void {
+  const view = viewRef.value;
+  if (!view) {
+    return;
+  }
+  view.dispatch({
+    selection: EditorSelection.cursor(0),
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+defineExpose({ focusToStart });
 </script>
 
 <template>
