@@ -442,7 +442,7 @@ watch(renderedHtml, async (value) => {
         </p>
       </div>
     </div>
-    <div class="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-8 lg:px-10">
+    <div class="mx-auto flex max-w-6xl flex-col gap-1 px-4 pt-8 pb-[0.25rem] lg:px-10">
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
@@ -549,8 +549,8 @@ watch(renderedHtml, async (value) => {
         class="grid min-h-[calc(100vh-11.2em)] lg:min-h-[calc(100vh-12.8em)] items-stretch gap-1"
         :class="
           sidePanelCollapsed
-            ? 'lg:grid-cols-[minmax(0,1fr)]'
-            : 'lg:grid-cols-[220px_minmax(0,1fr)]'
+            ? 'grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)]'
+            : 'grid-cols-[minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]'
         "
       >
         <aside
@@ -587,9 +587,11 @@ watch(renderedHtml, async (value) => {
           class="order-1 flex h-full min-h-full flex-col gap-1 lg:order-2"
           :class="{ 'pointer-events-none opacity-50': interactionDisabled }"
         >
-          <section class="flex min-h-0 flex-1 border border-base-300 bg-transparent shadow-sm">
+          <section
+            class="flex min-h-0 flex-1 overflow-hidden border border-base-300 bg-transparent shadow-sm"
+          >
             <article
-              class="markdown-body h-full flex-1 p-4"
+              class="markdown-body h-full flex-1 min-h-0 min-w-0 w-full overflow-auto p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"
               v-html="renderedHtml"
@@ -603,8 +605,8 @@ watch(renderedHtml, async (value) => {
           class="grid items-stretch gap-1"
           :class="
             sidePanelCollapsed
-              ? 'lg:grid-cols-[minmax(0,1fr)]'
-              : 'lg:grid-cols-[220px_minmax(0,1fr)]'
+              ? 'grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)]'
+              : 'grid-cols-[minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]'
           "
         >
           <section

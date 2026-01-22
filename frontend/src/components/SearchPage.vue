@@ -69,7 +69,7 @@ onMounted(async () => {
 
 <template>
   <div class="min-h-screen bg-base-200 text-base-content" :data-theme="selectedTheme">
-    <div class="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-8 lg:px-10">
+    <div class="mx-auto flex max-w-6xl flex-col gap-3 px-4 pt-8 pb-[0.25rem] lg:px-10">
       <header class="flex flex-col gap-2">
         <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
           LUWIKI SEARCH

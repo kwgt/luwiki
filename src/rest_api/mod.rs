@@ -18,7 +18,7 @@ use actix_web::dev::{HttpServiceFactory, ServiceRequest};
 use actix_web::error::{ErrorInternalServerError, ErrorUnauthorized};
 use actix_web::http::header;
 use actix_web::{HttpMessage, HttpResponse, web};
-use actix_web_httpauth::extractors::basic::BasicAuth;
+use actix_web_httpauth::extractors::basic::{Config, BasicAuth};
 use serde_json::json;
 
 use crate::http_server::app_state::AppState;
@@ -206,6 +206,7 @@ pub(crate) async fn validate_basic_auth(
 ///
 pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
     web::scope("/api")
+        .app_data(Config::default().realm("LuWiki REST API"))
         .wrap(actix_web_httpauth::middleware::HttpAuthentication::basic(
             validate_basic_auth
         ))

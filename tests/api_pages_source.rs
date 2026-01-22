@@ -8,6 +8,7 @@ mod common;
 
 use std::fs;
 
+use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::*;
@@ -19,20 +20,16 @@ fn get_page_source_returns_latest_markdown() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/test", "source body");
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/test", "source body");
+
+    let url = format!("{}/{}/source", base_url, page_id);
     let response = client
         .get(&url)
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -79,20 +76,16 @@ fn get_page_source_with_rev_validates_revision() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/test", "source body");
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/test", "source body");
+
+    let url = format!("{}/{}/source", base_url, page_id);
 
     let response = client
         .get(&url)
@@ -128,16 +121,13 @@ fn get_page_source_requires_auth_and_valid_id() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/not-a-ulid/source",
-        port
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let url = format!("{}/pages/not-a-ulid/source", api_base_url);
 
     let response = client
         .get(&url)
@@ -162,20 +152,21 @@ fn put_page_source_creates_new_revision() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/put-test", "original body");
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(
+        &client,
+        &base_url,
+        "/put-test",
+        "original body",
+    );
+
+    let url = format!("{}/{}/source", base_url, page_id);
 
     let response = client
         .put(&url)
@@ -222,20 +213,22 @@ fn put_page_source_amend_updates_latest_without_revision() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
 
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/amend-test", "before amend");
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(
+        &client,
+        &base_url,
+        "/amend-test",
+        "before amend",
+    );
+
+    let url = format!("{}/{}/source", base_url, page_id);
 
     let response = client
         .put(&url)
@@ -282,25 +275,17 @@ fn put_page_source_requires_lock_token_when_locked() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/lock-put", "initial");
-
-    let source_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
-        port,
-        page_id
-    );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/lock-put", "initial");
+
+    let source_url = format!("{}/{}/source", base_url, page_id);
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
 
     let response = client
         .post(&lock_url)
@@ -347,20 +332,16 @@ fn put_page_source_rejects_invalid_query_and_headers() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/put-invalid", "body");
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-invalid", "body");
+
+    let url = format!("{}/{}/source", base_url, page_id);
 
     let response = client
         .put(&url)
@@ -408,16 +389,13 @@ fn put_page_source_rejects_invalid_page_id() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/not-a-ulid/source",
-        port
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
     );
-    let client = build_client();
+
+    let url = format!("{}/pages/not-a-ulid/source", api_base_url);
 
     let response = client
         .put(&url)
@@ -438,25 +416,17 @@ fn put_page_source_lock_errors_include_reason() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/lock-reason", "body");
-
-    let source_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
-        port,
-        page_id
-    );
-    let client = build_client();
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/lock-reason", "body");
+
+    let source_url = format!("{}/{}/source", base_url, page_id);
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
 
     let response = client
         .post(&lock_url)
@@ -489,11 +459,27 @@ fn put_page_source_lock_errors_include_reason() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
-fn create_page(base_url: &str, path: &str, body: &str) -> String {
+///
+/// テスト用ページを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `base_url` - APIベースURL
+/// * `path` - ページパス
+/// * `body` - ページ本文
+///
+/// # 戻り値
+/// 作成したページID
+///
+fn create_page(
+    client: &Client,
+    base_url: &str,
+    path: &str,
+    body: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if base_url.ends_with("/pages") {
         base_url.to_string()
     } else {
@@ -548,6 +534,15 @@ fn create_page(base_url: &str, path: &str, body: &str) -> String {
     page_id
 }
 
+///
+/// ロックレスポンスのヘッダからトークンを抽出する。
+///
+/// # 引数
+/// * `response` - レスポンス
+///
+/// # 戻り値
+/// トークン文字列(存在しない場合はNone)
+///
 fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
     let raw = response.headers().get("X-Page-Lock")?.to_str().ok()?;
     for part in raw.split_whitespace() {
@@ -558,6 +553,15 @@ fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
     None
 }
 
+///
+/// エラーレスポンスから理由メッセージを取得する
+///
+/// # 引数
+/// * `response` - エラーレスポンス
+///
+/// # 戻り値
+/// 理由メッセージ
+///
 fn read_error_reason(response: reqwest::blocking::Response) -> String {
     let body = response.text().expect("read error body failed");
     let value: Value = serde_json::from_str(&body)

@@ -7,14 +7,8 @@
 mod common;
 
 use std::fs;
-use std::io::Write;
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
 use chrono::DateTime;
+use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::*;
@@ -26,20 +20,15 @@ fn get_page_meta_returns_latest_info() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/meta", "meta body");
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/meta",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/meta", "meta body");
+
+    let url = format!("{}/{}/meta", base_url, page_id);
     let response = client
         .get(&url)
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -112,20 +101,15 @@ fn get_page_meta_respects_revision() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/meta-rev", "rev1");
-
-    let source_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/source",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/meta-rev", "rev1");
+
+    let source_url = format!("{}/{}/source", base_url, page_id);
     let response = client
         .put(&source_url)
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -135,11 +119,7 @@ fn get_page_meta_respects_revision() {
         .expect("put source failed");
     assert_eq!(response.status().as_u16(), 204);
 
-    let meta_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/meta",
-        port,
-        page_id
-    );
+    let meta_url = format!("{}/{}/meta", base_url, page_id);
 
     let response = client
         .get(&meta_url)
@@ -191,16 +171,12 @@ fn get_page_meta_requires_auth_and_valid_id() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let url = format!(
-        "http://127.0.0.1:{}/api/pages/not-a-ulid/meta",
-        port
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
     );
-    let client = build_client();
+    let url = format!("{}/pages/not-a-ulid/meta", api_base_url);
 
     let response = client
         .get(&url)
@@ -225,25 +201,21 @@ fn get_page_meta_reflects_lock_state() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/meta-lock", "meta body");
-
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let meta_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/meta",
-        port,
-        page_id
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(
+        &client,
+        &base_url,
+        "/meta-lock",
+        "meta body",
     );
-    let client = build_client();
+
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
+    let meta_url = format!("{}/{}/meta", base_url, page_id);
 
     let response = client
         .post(&lock_url)
@@ -267,11 +239,27 @@ fn get_page_meta_reflects_lock_state() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
-fn create_page(base_url: &str, path: &str, body: &str) -> String {
+///
+/// テスト用ページを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `base_url` - APIベースURL
+/// * `path` - ページパス
+/// * `body` - ページ本文
+///
+/// # 戻り値
+/// 作成したページID
+///
+fn create_page(
+    client: &Client,
+    base_url: &str,
+    path: &str,
+    body: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if base_url.ends_with("/pages") {
         base_url.to_string()
     } else {

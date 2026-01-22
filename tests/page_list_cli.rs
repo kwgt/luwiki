@@ -10,24 +10,33 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::*;
 
 #[test]
+///
+/// page list が作成済みページを表示することを確認する。
+///
+/// # 注記
+/// 1) テスト用ユーザを作成する
+/// 2) APIでページを作成する
+/// 3) page list を実行し結果を確認する
 fn page_list_cli_shows_created_pages() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
+    let base_url = format!("{}/pages", api_url);
 
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-
-    create_page(&base_url, "/a");
-    create_page(&base_url, "/b");
+    create_page(&client, &base_url, "/a");
+    create_page(&client, &base_url, "/b");
 
     drop(server);
 
@@ -44,11 +53,21 @@ fn page_list_cli_shows_created_pages() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
-fn create_page(base_url: &str, path: &str) {
+///
+/// テスト用ページを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `base_url` - APIベースURL
+/// * `path` - ページパス
+///
+/// # 戻り値
+/// なし
+///
+fn create_page(client: &Client, base_url: &str, path: &str) {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if base_url.ends_with("/pages") {
         base_url.to_string()
     } else {
@@ -101,6 +120,17 @@ fn create_page(base_url: &str, path: &str) {
     assert_eq!(response.status().as_u16(), 204);
 }
 
+///
+/// page list を実行して標準出力を返す。
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `long_info` - 詳細表示フラグ
+///
+/// # 戻り値
+/// 標準出力
+///
 fn run_page_list(db_path: &Path, assets_dir: &Path, long_info: bool) -> String {
     let exe = test_binary_path();
     let mut command = Command::new(exe);

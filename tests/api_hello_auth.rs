@@ -7,10 +7,9 @@
 mod common;
 
 use std::fs;
-
 use common::{
-    build_client, prepare_test_dirs, reserve_port, run_add_user,
-    wait_for_server, ServerGuard, TEST_PASSWORD, TEST_USERNAME,
+    prepare_test_dirs, reserve_port, run_add_user,
+    wait_for_server_with_scheme, ServerGuard, TEST_PASSWORD, TEST_USERNAME,
 };
 
 #[test]
@@ -20,11 +19,11 @@ fn api_hello_requires_basic_auth() {
 
     run_add_user(&db_path, &assets_dir);
     let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let base_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&base_url);
-
-    let client = build_client();
+    let (api_base_url, client) = wait_for_server_with_scheme(
+        port,
+        _server.stderr_path(),
+    );
+    let base_url = format!("{}/hello", api_base_url);
 
     let response = client.get(&base_url).send().expect("request failed");
     assert_eq!(response.status().as_u16(), 401);

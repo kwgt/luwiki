@@ -7,8 +7,9 @@
 //!
 //! 結合テスト用の共通ヘルパー
 //!
+#![allow(dead_code)]
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,11 @@ pub const TEST_USERNAME: &str = "test_user";
 /// テスト用パスワード
 pub const TEST_PASSWORD: &str = "password123";
 
+/// サーバ起動待機のリトライ回数
+const SERVER_START_RETRY_COUNT: usize = 300;
+/// サーバ起動待機のリトライ間隔(ミリ秒)
+const SERVER_START_RETRY_INTERVAL_MS: u64 = 100;
+
 ///
 /// 全文検索インデックスのパスを返す
 ///
@@ -32,6 +38,7 @@ pub const TEST_PASSWORD: &str = "password123";
 /// # 戻り値
 /// インデックス格納パス
 ///
+#[allow(dead_code)]
 pub fn fts_index_path(db_path: &Path) -> PathBuf {
     db_path
         .parent()
@@ -45,6 +52,7 @@ pub fn fts_index_path(db_path: &Path) -> PathBuf {
 /// # 戻り値
 /// (ベースディレクトリ, DBパス, アセットディレクトリ)
 ///
+#[allow(dead_code)]
 pub fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
     /*
      * ベースディレクトリの生成
@@ -72,6 +80,7 @@ pub fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
 /// # 戻り値
 /// サフィックス文字列
 ///
+#[allow(dead_code)]
 pub fn unique_suffix() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -91,7 +100,32 @@ pub fn unique_suffix() -> String {
 /// # 戻り値
 /// ポート番号
 ///
+#[allow(dead_code)]
 pub fn reserve_port() -> u16 {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /*
+     * プロセス毎の開始ポートを算出
+     */
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let pid = std::process::id() as usize;
+    let base = 20000usize + (pid % 1000) * 40;
+
+    /*
+     * 予約可能なポートを探索
+     */
+    for _ in 0..80 {
+        let offset = COUNTER.fetch_add(1, Ordering::Relaxed) % 40;
+        let port = (base + offset) as u16;
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            drop(listener);
+            return port;
+        }
+    }
+
+    /*
+     * 最終手段としてOSに割り当てを委ねる
+     */
     let listener = TcpListener::bind("127.0.0.1:0")
         .expect("bind failed");
     listener.local_addr().expect("addr failed").port()
@@ -107,6 +141,7 @@ pub fn reserve_port() -> u16 {
 /// # 戻り値
 /// なし
 ///
+#[allow(dead_code)]
 pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
     /*
      * CLI起動
@@ -155,8 +190,10 @@ pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
 ///
 /// APIサーバの起動を管理するガード
 ///
+#[allow(dead_code)]
 pub struct ServerGuard {
     child: Child,
+    stderr_path: PathBuf,
 }
 
 impl ServerGuard {
@@ -171,6 +208,7 @@ impl ServerGuard {
     /// # 戻り値
     /// ServerGuard
     ///
+    #[allow(dead_code)]
     pub fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         /*
          * サーバ起動
@@ -180,6 +218,23 @@ impl ServerGuard {
             .parent()
             .expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
+        /*
+         * テスト用設定の準備
+         */
+        let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
+        fs::create_dir_all(&config_dir)
+            .expect("create config dir failed");
+        let config_path = config_dir.join("config.toml");
+        fs::write(
+            &config_path,
+            "[run]\nuse_tls = false\n",
+        ).expect("write test config failed");
+        let stdout_path = base_dir.join("server.stdout.log");
+        let stdout = File::create(&stdout_path)
+            .expect("create server stdout failed");
+        let stderr_path = base_dir.join("server.stderr.log");
+        let stderr = File::create(&stderr_path)
+            .expect("create server stderr failed");
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
@@ -192,12 +247,23 @@ impl ServerGuard {
             .arg("run")
             .arg(format!("127.0.0.1:{}", port))
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .spawn()
             .expect("spawn server failed");
 
-        Self { child }
+        Self { child, stderr_path }
+    }
+
+    ///
+    /// サーバの標準エラーパスを取得する
+    ///
+    /// # 戻り値
+    /// 標準エラーログのパス
+    ///
+    #[allow(dead_code)]
+    pub fn stderr_path(&self) -> &Path {
+        &self.stderr_path
     }
 }
 
@@ -213,33 +279,147 @@ impl Drop for ServerGuard {
 ///
 /// # 引数
 /// * `url` - ヘルスチェックURL
+/// * `stderr_path` - サーバ標準エラーログのパス
 ///
 /// # 戻り値
 /// なし
 ///
 #[allow(dead_code)]
-pub fn wait_for_server(url: &str) {
+pub fn wait_for_server(url: &str, stderr_path: &Path) {
     /*
      * 起動確認
      */
     let client = build_client();
+    let mut last_error: Option<String> = None;
 
-    for _ in 0..50 {
+    for _ in 0..SERVER_START_RETRY_COUNT {
         let response = client
             .get(url)
             .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
             .send();
 
         if let Ok(resp) = response {
-            if resp.status().as_u16() == 200 {
+            let status = resp.status().as_u16();
+            if status == 200 {
                 return;
+            }
+            last_error = Some(format!("status {}", status));
+        } else if let Err(err) = response {
+            last_error = Some(format!("request error: {}", err));
+        }
+
+        thread::sleep(Duration::from_millis(
+            SERVER_START_RETRY_INTERVAL_MS
+        ));
+    }
+
+    /*
+     * 失敗時のログ出力
+     */
+    let stderr_log = fs::read_to_string(stderr_path)
+        .unwrap_or_else(|_| "<stderr log not available>".to_string());
+    let stdout_path = stderr_path
+        .with_file_name("server.stdout.log");
+    let stdout_log = fs::read_to_string(&stdout_path)
+        .unwrap_or_else(|_| "<stdout log not available>".to_string());
+    let last_error = last_error.unwrap_or_else(|| "unknown".to_string());
+    panic!(
+        "server did not start\nstdout:\n{}\nstderr:\n{}\nlast error: {}",
+        stdout_log,
+        stderr_log,
+        last_error
+    );
+}
+
+///
+/// APIサーバの起動完了を待機し、HTTP/HTTPSのスキームを返す。
+///
+/// # 概要
+/// HTTPで疎通を試し、TLSが有効な場合はHTTPSで疎通を確認する。
+///
+/// # 引数
+/// * `port` - 待受ポート
+/// * `stderr_path` - サーバ標準エラーログのパス
+///
+/// # 戻り値
+/// (APIベースURL, HTTPクライアント)のタプルを返す。
+///
+pub fn wait_for_server_with_scheme(
+    port: u16,
+    stderr_path: &Path,
+) -> (String, Client) {
+    /*
+     * 事前情報の準備
+     */
+    let http_base = format!("http://127.0.0.1:{}/api", port);
+    let https_base = format!("https://127.0.0.1:{}/api", port);
+    let http_url = format!("{}/hello", http_base);
+    let https_url = format!("{}/hello", https_base);
+    let http_client = build_client();
+    let https_client = Client::builder()
+        .timeout(Duration::from_millis(7000))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("https client build failed");
+    let mut last_error: Option<String> = None;
+
+    /*
+     * 起動確認
+     */
+    for _ in 0..SERVER_START_RETRY_COUNT {
+        let response = http_client
+            .get(&http_url)
+            .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+            .send();
+
+        if let Ok(resp) = response {
+            let status = resp.status().as_u16();
+            if status == 200 {
+                return (http_base, http_client);
+            }
+            last_error = Some(format!("http status {}", status));
+        } else if let Err(err) = response {
+            let message = err.to_string();
+            if message.contains("invalid HTTP version") {
+                let https_response = https_client
+                    .get(&https_url)
+                    .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+                    .send();
+                if let Ok(resp) = https_response {
+                    let status = resp.status().as_u16();
+                    if status == 200 {
+                        return (https_base, https_client);
+                    }
+                    last_error = Some(format!("https status {}", status));
+                } else if let Err(err) = https_response {
+                    last_error = Some(format!("https error: {}", err));
+                }
+            } else {
+                last_error = Some(format!("http error: {}", err));
             }
         }
 
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(
+            SERVER_START_RETRY_INTERVAL_MS
+        ));
     }
 
-    panic!("server did not start");
+    /*
+     * 失敗時のログ出力
+     */
+    let stderr_log = fs::read_to_string(stderr_path)
+        .unwrap_or_else(|_| "<stderr log not available>".to_string());
+    let stdout_path = stderr_path
+        .with_file_name("server.stdout.log");
+    let stdout_log = fs::read_to_string(&stdout_path)
+        .unwrap_or_else(|_| "<stdout log not available>".to_string());
+    let last_error = last_error.unwrap_or_else(|| "unknown".to_string());
+    panic!(
+        "server did not start\nstdout:\n{}\nstderr:\n{}\nlast error: {}",
+        stdout_log,
+        stderr_log,
+        last_error
+    );
 }
 
 ///
@@ -262,6 +442,7 @@ pub fn build_client() -> Client {
 /// # 戻り値
 /// 実行バイナリのパス
 ///
+#[allow(dead_code)]
 pub fn test_binary_path() -> PathBuf {
     if let Some(exe) = std::env::var_os("CARGO_BIN_EXE_luwiki") {
         return PathBuf::from(exe);

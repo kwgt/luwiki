@@ -9,6 +9,7 @@ mod common;
 use std::fs;
 use std::sync::Mutex;
 
+use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::*;
@@ -26,20 +27,15 @@ fn page_lock_lifecycle_works() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/lock", "lock source");
-
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/lock", "lock source");
+
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
 
     let response = client
         .post(&lock_url)
@@ -98,20 +94,15 @@ fn page_lock_conflict_and_auth_checks() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/lock2", "lock source");
-
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/lock2", "lock source");
+
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
 
     let response = client
         .get(&lock_url)
@@ -143,20 +134,20 @@ fn page_lock_rejects_invalid_token_on_update_and_delete() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/lock-invalid", "lock source");
-
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(
+        &client,
+        &base_url,
+        "/lock-invalid",
+        "lock source",
+    );
+
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
 
     let response = client
         .post(&lock_url)
@@ -191,20 +182,20 @@ fn page_lock_requires_token_on_update_and_delete() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let base_url = format!("http://127.0.0.1:{}/api/pages", port);
-    let page_id = create_page(&base_url, "/lock-missing", "lock source");
-
-    let lock_url = format!(
-        "http://127.0.0.1:{}/api/pages/{}/lock",
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(
         port,
-        page_id
+        server.stderr_path(),
     );
-    let client = build_client();
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(
+        &client,
+        &base_url,
+        "/lock-missing",
+        "lock source",
+    );
+
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
 
     let response = client
         .post(&lock_url)
@@ -230,6 +221,15 @@ fn page_lock_requires_token_on_update_and_delete() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
+///
+/// ロックレスポンスのヘッダからトークンを抽出する。
+///
+/// # 引数
+/// * `response` - レスポンス
+///
+/// # 戻り値
+/// トークン文字列(存在しない場合はNone)
+///
 fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
     let raw = response.headers().get("X-Page-Lock")?.to_str().ok()?;
     for part in raw.split_whitespace() {
@@ -240,11 +240,27 @@ fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
     None
 }
 
-fn create_page(base_url: &str, path: &str, body: &str) -> String {
+///
+/// テスト用ページを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `base_url` - APIベースURL
+/// * `path` - ページパス
+/// * `body` - ページ本文
+///
+/// # 戻り値
+/// 作成したページID
+///
+fn create_page(
+    client: &Client,
+    base_url: &str,
+    path: &str,
+    body: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if base_url.ends_with("/pages") {
         base_url.to_string()
     } else {

@@ -407,7 +407,7 @@ function buildAssetDownloadUrl(fileName: string): string {
         </p>
       </div>
     </div>
-    <div class="mx-auto flex min-h-screen max-w-none flex-col gap-1 px-4 py-8 lg:px-8">
+    <div class="mx-auto flex min-h-screen max-w-none flex-col gap-1 px-4 pt-8 pb-[0.25rem] lg:px-8">
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">

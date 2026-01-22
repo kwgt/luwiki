@@ -256,6 +256,9 @@ onMounted(() => {
   if (savedCollapsed === '1') {
     sidePanelCollapsed.value = true;
   }
+  if (!window.matchMedia('(min-width: 768px)').matches) {
+    sidePanelCollapsed.value = true;
+  }
   setupRevisionObserver();
   void loadPage();
 });
@@ -263,7 +266,7 @@ onMounted(() => {
 
 <template>
   <div class="min-h-screen bg-base-200 text-base-content" :data-theme="selectedTheme">
-    <div class="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-8 lg:px-10">
+    <div class="mx-auto flex max-w-6xl flex-col gap-1 px-4 pt-8 pb-[0.25rem] lg:px-10">
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
@@ -321,23 +324,23 @@ onMounted(() => {
         </nav>
       </header>
 
-      <div class="hidden items-center justify-start lg:flex">
+      <div class="flex items-center justify-start">
         <button class="btn btn-ghost btn-xs" type="button" @click="toggleSidePanel">
           {{ sidePanelCollapsed ? 'サイドパネルを開く' : 'サイドパネルを閉じる' }}
         </button>
       </div>
 
       <main
-        class="grid min-h-[calc(100vh-11.2em)] items-stretch gap-1 lg:min-h-[calc(100vh-12.8em)]"
+        class="relative grid items-stretch gap-1 min-h-[calc(100vh-12.8em)]"
         :class="
           sidePanelCollapsed
-            ? 'lg:grid-cols-[minmax(0,1fr)]'
-            : 'lg:grid-cols-[220px_minmax(0,1fr)]'
+            ? 'md:grid-cols-[minmax(0,1fr)]'
+            : 'md:grid-cols-[220px_minmax(0,1fr)]'
         "
       >
         <aside
           v-if="!sidePanelCollapsed"
-          class="order-2 hidden flex-col gap-2 lg:flex lg:order-1"
+          class="order-2 flex flex-col gap-2 absolute inset-y-0 left-0 z-20 w-[220px] max-w-[85vw] md:static md:inset-auto md:z-auto md:w-auto md:max-w-none md:order-1"
         >
           <section class="h-full border border-base-300 bg-base-100 p-2 shadow-sm">
             <div class="mb-2 text-lg font-semibold">リビジョン一覧</div>
@@ -346,7 +349,7 @@ onMounted(() => {
               <button
                 v-for="rev in revisions"
                 :key="rev"
-                class="flex items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs"
+                class="flex items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs font-semibold"
                 :class="isSelected(rev) ? 'bg-primary text-primary-content' : 'bg-base-200'"
                 type="button"
                 :ref="(el) => setRevisionRef(rev, el)"
@@ -357,11 +360,11 @@ onMounted(() => {
                     <span class="font-mono">Rev {{ rev }}</span>
                     <span
                       v-if="isRenameRevision(rev)"
-                      class="tooltip tooltip-right"
+                      class="tooltip tooltip-right font-normal"
                       :data-tip="getRenameTooltip(rev)"
                       @mouseenter="preloadRenameMeta(rev)"
                     >
-                      <span class="badge badge-sm font-bold">rename</span>
+                      <span class="badge badge-sm font-bold">Rename</span>
                     </span>
                   </div>
                   <span
@@ -382,7 +385,7 @@ onMounted(() => {
           </section>
         </aside>
 
-        <section class="order-1 flex min-h-[240px] flex-col gap-2 lg:order-2">
+        <section class="order-1 flex min-h-[240px] flex-col gap-2 md:order-2">
           <div class="border border-base-300 bg-base-100 p-2 shadow-sm">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="text-lg font-semibold">

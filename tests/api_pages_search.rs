@@ -8,12 +8,12 @@ mod common;
 
 use std::fs;
 
+use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::{
-    build_client, prepare_test_dirs, reserve_port, run_add_user,
-    unique_suffix, wait_for_server, ServerGuard, TEST_PASSWORD,
-    TEST_USERNAME,
+    prepare_test_dirs, reserve_port, run_add_user, unique_suffix,
+    wait_for_server_with_scheme, ServerGuard, TEST_PASSWORD, TEST_USERNAME,
 };
 
 #[test]
@@ -29,23 +29,30 @@ fn search_defaults_to_body_target() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * ページ作成
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     let token = format!("body-token-{}", unique_suffix());
     let body = format!("body {}", token);
-    let page_id = create_page(&api_url, "/search-body", &body);
+    let page_id = create_page(&client, &api_url, "/search-body", &body);
 
     /*
      * 検索と検証
      */
-    let results = search_pages(&api_url, &token, None, None, None);
+    let results = search_pages(
+        &client,
+        &api_url,
+        &token,
+        None,
+        None,
+        None,
+    );
     assert!(contains_page(&results, &page_id));
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -65,23 +72,24 @@ fn search_target_code_and_combination() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * ページ作成
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     let token = format!("code-token-{}", unique_suffix());
     let body = format!("body only\n\n```\n{}\n```", token);
-    let page_id = create_page(&api_url, "/search-code", &body);
+    let page_id = create_page(&client, &api_url, "/search-code", &body);
 
     /*
      * 検索と検証
      */
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         Some("code"),
@@ -91,6 +99,7 @@ fn search_target_code_and_combination() {
     assert!(contains_page(&results, &page_id));
 
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         Some("body"),
@@ -100,6 +109,7 @@ fn search_target_code_and_combination() {
     assert!(!contains_page(&results, &page_id));
 
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         Some("body,code"),
@@ -124,23 +134,24 @@ fn search_target_combination_deduplicates_results() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * ページ作成
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     let token = format!("combo-token-{}", unique_suffix());
     let body = format!("# {}\n\n本文 {}", token, token);
-    let page_id = create_page(&api_url, "/search-combo", &body);
+    let page_id = create_page(&client, &api_url, "/search-combo", &body);
 
     /*
      * 検索と検証
      */
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         Some("headings,body"),
@@ -166,16 +177,17 @@ fn search_rejects_invalid_expr() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * 検索と検証
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     assert_search_error(
+        &client,
         &api_url,
         Some(""),
         None,
@@ -184,6 +196,7 @@ fn search_rejects_invalid_expr() {
         "invalid query parameter: expr",
     );
     assert_search_error(
+        &client,
         &api_url,
         None,
         None,
@@ -208,16 +221,17 @@ fn search_rejects_invalid_target() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * 検索と検証
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     assert_search_error(
+        &client,
         &api_url,
         Some("token"),
         Some("body,unknown"),
@@ -226,6 +240,7 @@ fn search_rejects_invalid_target() {
         "invalid query parameter: target",
     );
     assert_search_error(
+        &client,
         &api_url,
         Some("token"),
         Some(""),
@@ -250,16 +265,17 @@ fn search_rejects_invalid_flags() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * 検索と検証
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     assert_search_error(
+        &client,
         &api_url,
         Some("token"),
         None,
@@ -268,6 +284,7 @@ fn search_rejects_invalid_flags() {
         "invalid query parameter: with_deleted",
     );
     assert_search_error(
+        &client,
         &api_url,
         Some("token"),
         None,
@@ -293,28 +310,36 @@ fn search_with_deleted_and_all_revision_behavior() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
-
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
 
     /*
      * ページ作成とリビジョン更新
      */
-    let api_url = format!("http://127.0.0.1:{}/api", port);
     let token = format!("rev-token-{}", unique_suffix());
     let body = format!("body {}", token);
-    let page_id = create_page(&api_url, "/search-rev", &body);
+    let page_id = create_page(&client, &api_url, "/search-rev", &body);
 
-    update_page_source(&api_url, &page_id, "updated body");
+    update_page_source(&client, &api_url, &page_id, "updated body");
 
     /*
      * all_revision の検証
      */
-    let results = search_pages(&api_url, &token, None, None, None);
+    let results = search_pages(
+        &client,
+        &api_url,
+        &token,
+        None,
+        None,
+        None,
+    );
     assert!(!contains_page(&results, &page_id));
 
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         None,
@@ -328,9 +353,10 @@ fn search_with_deleted_and_all_revision_behavior() {
     /*
      * with_deleted の検証
      */
-    delete_page(&api_url, &page_id);
+    delete_page(&client, &api_url, &page_id);
 
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         None,
@@ -340,6 +366,7 @@ fn search_with_deleted_and_all_revision_behavior() {
     assert!(!contains_page(&results, &page_id));
 
     let results = search_pages(
+        &client,
         &api_url,
         &token,
         None,
@@ -389,6 +416,7 @@ fn find_page<'a>(results: &'a [Value], page_id: &str) -> Option<&'a Value> {
 /// 検索APIを呼び出して結果配列を返す
 ///
 /// # 引数
+/// * `client` - HTTPクライアント
 /// * `api_url` - APIベースURL
 /// * `expr` - 検索式
 /// * `target` - 対象指定
@@ -399,6 +427,7 @@ fn find_page<'a>(results: &'a [Value], page_id: &str) -> Option<&'a Value> {
 /// 検索結果配列
 ///
 fn search_pages(
+    client: &Client,
     api_url: &str,
     expr: &str,
     target: Option<&str>,
@@ -423,7 +452,6 @@ fn search_pages(
     /*
      * リクエスト実行
      */
-    let client = build_client();
     let response = client
         .get(&format!("{}/pages/search", api_url))
         .query(&params)
@@ -446,6 +474,7 @@ fn search_pages(
 /// エラー応答を期待する検索リクエストを実行する
 ///
 /// # 引数
+/// * `client` - HTTPクライアント
 /// * `api_url` - APIベースURL
 /// * `expr` - 検索式
 /// * `target` - 対象指定
@@ -457,6 +486,7 @@ fn search_pages(
 /// なし
 ///
 fn assert_search_error(
+    client: &Client,
     api_url: &str,
     expr: Option<&str>,
     target: Option<&str>,
@@ -484,7 +514,6 @@ fn assert_search_error(
     /*
      * リクエスト実行と検証
      */
-    let client = build_client();
     let response = client
         .get(&format!("{}/pages/search", api_url))
         .query(&params)
@@ -519,6 +548,7 @@ fn read_error_reason(response: reqwest::blocking::Response) -> String {
 /// 更新APIでページソースを更新する
 ///
 /// # 引数
+/// * `client` - HTTPクライアント
 /// * `api_url` - APIベースURL
 /// * `page_id` - 対象ページID
 /// * `body` - 更新後の本文
@@ -526,8 +556,12 @@ fn read_error_reason(response: reqwest::blocking::Response) -> String {
 /// # 戻り値
 /// なし
 ///
-fn update_page_source(api_url: &str, page_id: &str, body: &str) {
-    let client = build_client();
+fn update_page_source(
+    client: &Client,
+    api_url: &str,
+    page_id: &str,
+    body: &str,
+) {
     let response = client
         .put(&format!("{}/pages/{}/source", api_url, page_id))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -543,14 +577,14 @@ fn update_page_source(api_url: &str, page_id: &str, body: &str) {
 /// 削除APIでページを削除する
 ///
 /// # 引数
+/// * `client` - HTTPクライアント
 /// * `api_url` - APIベースURL
 /// * `page_id` - 対象ページID
 ///
 /// # 戻り値
 /// なし
 ///
-fn delete_page(api_url: &str, page_id: &str) {
-    let client = build_client();
+fn delete_page(client: &Client, api_url: &str, page_id: &str) {
     let response = client
         .delete(&format!("{}/pages/{}", api_url, page_id))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -561,14 +595,10 @@ fn delete_page(api_url: &str, page_id: &str) {
 }
 
 ///
-/// テスト用ディレクトリを準備する
-///
-/// # 戻り値
-/// (ベースディレクトリ, DBパス, アセットディレクトリ)
-///
 /// ページを作成してIDを返す
-/// 
+///
 /// # 引数
+/// * `client` - HTTPクライアント
 /// * `api_url` - APIベースURL
 /// * `path` - ページパス
 /// * `body` - 初期本文
@@ -576,11 +606,15 @@ fn delete_page(api_url: &str, page_id: &str) {
 /// # 戻り値
 /// ページID
 ///
-fn create_page(api_url: &str, path: &str, body: &str) -> String {
+fn create_page(
+    client: &Client,
+    api_url: &str,
+    path: &str,
+    body: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = format!("{}/pages", api_url);
     let response = client
         .post(&pages_url)

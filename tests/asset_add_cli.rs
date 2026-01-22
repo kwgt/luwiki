@@ -10,6 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::*;
@@ -29,11 +30,11 @@ fn asset_add_cli_creates_asset() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let api_url = format!("http://127.0.0.1:{}/api", port);
-    let page_id = create_page(&api_url, "/asset-add", "body");
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
+    let page_id = create_page(&client, &api_url, "/asset-add", "body");
 
     drop(server);
 
@@ -50,8 +51,11 @@ fn asset_add_cli_creates_asset() {
     );
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    wait_for_server(&hello_url);
-    let assets = list_page_assets(&api_url, &page_id);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
+    let assets = list_page_assets(&client, &api_url, &page_id);
     assert_eq!(assets.len(), 1);
     assert_eq!(
         assets[0]["file_name"].as_str().expect("file_name missing"),
@@ -87,11 +91,16 @@ fn asset_add_cli_uses_default_user_from_config() {
     ).expect("write config failed");
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
-
-    let api_url = format!("http://127.0.0.1:{}/api", port);
-    let page_id = create_page(&api_url, "/asset-add-config", "body");
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
+    let page_id = create_page(
+        &client,
+        &api_url,
+        "/asset-add-config",
+        "body",
+    );
 
     drop(server);
 
@@ -108,19 +117,38 @@ fn asset_add_cli_uses_default_user_from_config() {
     );
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    wait_for_server(&hello_url);
-    let assets = list_page_assets(&api_url, &page_id);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
+    let assets = list_page_assets(&client, &api_url, &page_id);
     assert_eq!(assets.len(), 1);
 
     drop(server);
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
-fn create_page(api_url: &str, path: &str, body: &str) -> String {
+///
+/// テスト用ページを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `api_url` - APIベースURL
+/// * `path` - ページパス
+/// * `body` - ページ本文
+///
+/// # 戻り値
+/// 作成したページID
+///
+fn create_page(
+    client: &Client,
+    api_url: &str,
+    path: &str,
+    body: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if api_url.ends_with("/pages") {
         api_url.to_string()
     } else {
@@ -175,8 +203,22 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
     page_id
 }
 
-fn list_page_assets(api_url: &str, page_id: &str) -> Vec<Value> {
-    let client = build_client();
+///
+/// ページに紐づくアセット一覧を取得する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `api_url` - APIベースURL
+/// * `page_id` - 対象ページID
+///
+/// # 戻り値
+/// アセット一覧
+///
+fn list_page_assets(
+    client: &Client,
+    api_url: &str,
+    page_id: &str,
+) -> Vec<Value> {
     let response = client
         .get(&format!("{}/pages/{}/assets", api_url, page_id))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -190,6 +232,20 @@ fn list_page_assets(api_url: &str, page_id: &str) -> Vec<Value> {
     value.as_array().expect("assets is not array").clone()
 }
 
+///
+/// asset add を実行して成功を確認する
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `config_path` - 設定ファイルパス
+/// * `user_name` - ユーザ名
+/// * `file_path` - アセットファイルパス
+/// * `target` - 対象ページID
+///
+/// # 戻り値
+/// なし
+///
 fn run_asset_add(
     db_path: &Path,
     assets_dir: &Path,
