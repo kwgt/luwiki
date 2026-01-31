@@ -163,6 +163,8 @@ fn create_server(
             .route("/edit", web::get().to(page_view::get_edit_root))
             .route("/edit/{page_path:.*}", web::get().to(page_view::get_edit))
             .route("/search", web::get().to(page_view::get_search))
+            .route("/pages", web::get().to(page_view::get_pages_root))
+            .route("/pages/{page_path:.*}", web::get().to(page_view::get_pages))
             .route("/rev", web::get().to(page_view::get_rev_root))
             .route("/rev/{page_path:.*}", web::get().to(page_view::get_rev))
 

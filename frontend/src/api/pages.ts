@@ -55,6 +55,25 @@ export interface TemplatePageItem {
   name: string;
 }
 
+export interface PageListItem {
+  page_id: string;
+  path: string;
+  deleted: boolean;
+  last_update: PageListLastUpdate;
+}
+
+export interface PageListLastUpdate {
+  revision: number;
+  timestamp: string;
+  username: string;
+}
+
+export interface PageListResponse {
+  items: PageListItem[];
+  has_more: boolean;
+  anchor?: string;
+}
+
 function parseLockToken(headerValue: string): string | null {
   const parts = headerValue.split(/\s+/);
   for (const part of parts) {
@@ -238,6 +257,35 @@ export async function fetchTemplatePages(): Promise<TemplatePageItem[]> {
   const res = await apiClient.get<TemplatePageItem[]>(
     '/pages/template',
     {
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+  return res.data;
+}
+
+/**
+ * ページ一覧を取得する
+ */
+export async function fetchPageList(params: {
+  prefix: string;
+  forward?: string;
+  rewind?: string;
+  limit?: number;
+  withDeleted?: boolean;
+}): Promise<PageListResponse> {
+  const res = await apiClient.get<PageListResponse>(
+    '/pages',
+    {
+      params: {
+        prefix: params.prefix,
+        forward: params.forward,
+        rewind: params.rewind,
+        limit: params.limit,
+        with_deleted: params.withDeleted,
+      },
       validateStatus: () => true,
     },
   );

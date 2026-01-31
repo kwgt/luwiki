@@ -80,6 +80,25 @@ pub(crate) async fn get_search(
 }
 
 ///
+/// ページ一覧画面(ルート)
+///
+pub(crate) async fn get_pages_root(
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    get_pages_by_path(String::new(), data).await
+}
+
+///
+/// ページ一覧画面
+///
+pub(crate) async fn get_pages(
+    path: web::Path<String>,
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    get_pages_by_path(path.into_inner(), data).await
+}
+
+///
 /// リビジョン管理画面(ルート)
 ///
 pub(crate) async fn get_rev_root(
@@ -194,6 +213,23 @@ async fn get_edit_by_path(
     }
 
     render_page_html(&state, &page_id, &revision)
+}
+
+async fn get_pages_by_path(
+    raw_path: String,
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    let page_path = normalize_path(&raw_path);
+    if let Err(reason) = rest_api::validate_page_path(&page_path) {
+        return HttpResponse::BadRequest().body(reason);
+    }
+
+    let state = match data.read() {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    render_page_html(&state, "", "")
 }
 
 fn normalize_path(raw_path: &str) -> String {

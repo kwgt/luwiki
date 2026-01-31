@@ -15,6 +15,7 @@ pub(crate) mod path;
 pub(crate) mod assets;
 pub(crate) mod delete;
 pub(crate) mod deleted;
+pub(crate) mod list;
 pub(crate) mod parent;
 pub(crate) mod search;
 pub(crate) mod template;

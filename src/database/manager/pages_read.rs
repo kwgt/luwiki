@@ -12,14 +12,18 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
-use redb::{ReadableDatabase, ReadableTable};
+use redb::{ReadableDatabase, ReadableMultimapTable, ReadableTable};
 
-use crate::database::entries::{PageIndexEntry, PageListEntry, PageSourceEntry};
+use crate::database::entries::{
+    PageIndexEntry, PageListEntry, PageSourceEntry,
+};
 use crate::database::schema::{
     DELETED_PAGE_PATH_TABLE, LOCK_INFO_TABLE, PAGE_INDEX_TABLE, PAGE_PATH_TABLE,
     PAGE_SOURCE_TABLE, USER_INFO_TABLE,
 };
-use crate::database::types::{PageId, PageIndex, PageSource};
+use crate::database::types::{
+    PageId, PageIndex, PageSource, UserId, UserInfo,
+};
 use super::DatabaseManager;
 
 impl DatabaseManager {
@@ -203,6 +207,73 @@ impl DatabaseManager {
     }
 
     ///
+    /// パスプレフィックスに対するページ一覧取得
+    ///
+    /// # 引数
+    /// * `base_path` - 起点パス
+    /// * `with_deleted` - 削除済みページの取得有無
+    ///
+    /// # 戻り値
+    /// ページパス一覧を返す。
+    ///
+    ///
+    /// パスプレフィックスに対するページ一覧取得
+    ///
+    /// # 引数
+    /// * `base_path` - 起点パス
+    /// * `with_deleted` - 削除済みページの取得有無
+    ///
+    /// # 戻り値
+    /// ページ情報の一覧を返す。
+    ///
+    pub(crate) fn list_page_entries_by_prefix(
+        &self,
+        base_path: &str,
+        with_deleted: bool,
+    ) -> Result<Vec<PageListEntry>> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+        let path_table = txn.open_table(PAGE_PATH_TABLE)?;
+        let source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+        let user_table = txn.open_table(USER_INFO_TABLE)?;
+        let mut entries = Vec::new();
+
+        /*
+         * 通常ページの収集
+         */
+        collect_page_list_entries(
+            &path_table,
+            &index_table,
+            &source_table,
+            &user_table,
+            base_path,
+            &mut entries,
+        )?;
+
+        /*
+         * 削除済みページの収集
+         */
+        if with_deleted {
+            let deleted_table = txn.open_multimap_table(
+                DELETED_PAGE_PATH_TABLE,
+            )?;
+            collect_deleted_page_list_entries(
+                &deleted_table,
+                &index_table,
+                &source_table,
+                &user_table,
+                base_path,
+                &mut entries,
+            )?;
+        }
+
+        Ok(entries)
+    }
+
+    ///
     /// FTS用にページインデックスの一覧を取得する
     ///
     pub(crate) fn list_page_index_entries(
@@ -333,4 +404,139 @@ impl DatabaseManager {
 
         Ok(page_ids)
     }
+}
+
+fn collect_page_list_entries<T1, T2, T3, T4>(
+    path_table: &T1,
+    index_table: &T2,
+    source_table: &T3,
+    user_table: &T4,
+    base_path: &str,
+    entries: &mut Vec<PageListEntry>,
+) -> Result<()>
+where
+    T1: ReadableTable<String, PageId>,
+    T2: ReadableTable<PageId, PageIndex>,
+    T3: ReadableTable<(PageId, u64), PageSource>,
+    T4: ReadableTable<UserId, UserInfo>,
+{
+    let prefix = build_recursive_prefix(base_path);
+    let mut iter = path_table.range(base_path.to_string()..)?;
+
+    for entry in &mut iter {
+        let (path, page_id) = entry?;
+        let path = path.value();
+        if path != base_path && !path.starts_with(&prefix) {
+            break;
+        }
+
+        let page_id = page_id.value().clone();
+        let index = match index_table.get(page_id.clone())? {
+            Some(entry) => entry.value(),
+            None => return Err(anyhow!("page index not found")),
+        };
+
+        if index.is_draft() {
+            continue;
+        }
+
+        if index.deleted() {
+            continue;
+        }
+
+        let latest_revision = index.latest();
+        let source = source_table
+            .get((page_id.clone(), latest_revision))?
+            .ok_or_else(|| anyhow!("page source not found"))?
+            .value();
+        let user_id = source.user();
+        let user_info = user_table
+            .get(user_id.clone())?
+            .ok_or_else(|| anyhow!("user not found"))?
+            .value();
+
+        entries.push(PageListEntry::new(
+            page_id,
+            path.to_string(),
+            latest_revision,
+            source.timestamp(),
+            user_info.username(),
+            false,
+            false,
+            false,
+        ));
+    }
+
+    Ok(())
+}
+
+fn collect_deleted_page_list_entries<T1, T2, T3, T4>(
+    deleted_table: &T1,
+    index_table: &T2,
+    source_table: &T3,
+    user_table: &T4,
+    base_path: &str,
+    entries: &mut Vec<PageListEntry>,
+) -> Result<()>
+where
+    T1: ReadableMultimapTable<String, PageId>,
+    T2: ReadableTable<PageId, PageIndex>,
+    T3: ReadableTable<(PageId, u64), PageSource>,
+    T4: ReadableTable<UserId, UserInfo>,
+{
+    let prefix = build_recursive_prefix(base_path);
+    let mut iter = deleted_table.range(base_path.to_string()..)?;
+
+    for entry in &mut iter {
+        let (path, page_ids) = entry?;
+        let path = path.value();
+        if path != base_path && !path.starts_with(&prefix) {
+            break;
+        }
+
+        for page_id in page_ids {
+            let page_id = page_id?.value().clone();
+            let index = match index_table.get(page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!("page index not found")),
+            };
+
+            if index.is_draft() {
+                continue;
+            }
+
+            if !index.deleted() {
+                continue;
+            }
+
+            let latest_revision = index.latest();
+            let source = source_table
+                .get((page_id.clone(), latest_revision))?
+                .ok_or_else(|| anyhow!("page source not found"))?
+                .value();
+            let user_id = source.user();
+            let user_info = user_table
+                .get(user_id.clone())?
+                .ok_or_else(|| anyhow!("user not found"))?
+                .value();
+
+            entries.push(PageListEntry::new(
+                page_id,
+                path.to_string(),
+                latest_revision,
+                source.timestamp(),
+                user_info.username(),
+                true,
+                false,
+                false,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn build_recursive_prefix(base_path: &str) -> String {
+    let base = base_path.trim_end_matches('/');
+    format!("{}/", base)
 }

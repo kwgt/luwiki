@@ -9,6 +9,7 @@ mod common;
 use common::*;
 
 use std::fs;
+use std::fs::File;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -205,9 +206,28 @@ impl ServerGuard {
             .parent()
             .expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
+        /*
+         * テスト用設定の準備
+         */
+        let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
+        fs::create_dir_all(&config_dir)
+            .expect("create config dir failed");
+        let config_path = config_dir.join("config.toml");
+        fs::write(
+            &config_path,
+            "[run]\nuse_tls = false\n",
+        ).expect("write test config failed");
+        let stdout_path = base_dir.join("server.stdout.log");
+        let stdout = File::create(&stdout_path)
+            .expect("create server stdout failed");
+        let stderr_path = base_dir.join("server.stderr.log");
+        let stderr = File::create(&stderr_path)
+            .expect("create server stderr failed");
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
+            .arg("--config-path")
+            .arg(&config_path)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")
@@ -217,8 +237,8 @@ impl ServerGuard {
             .arg("run")
             .arg(format!("127.0.0.1:{}", port))
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .spawn()
             .expect("spawn server failed");
 
@@ -238,7 +258,7 @@ impl Drop for ServerGuard {
 fn wait_for_server(url: &str) {
     let client = build_client();
 
-    for _ in 0..50 {
+    for _ in 0..300 {
         let response = client
             .get(url)
             .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))

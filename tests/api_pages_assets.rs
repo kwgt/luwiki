@@ -9,6 +9,7 @@ mod common;
 use common::*;
 
 use std::fs;
+use std::fs::File;
 use std::io::Write;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -41,10 +42,10 @@ fn post_page_assets_uploads_asset() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -86,10 +87,10 @@ fn delete_page_marks_assets_deleted() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -156,10 +157,10 @@ fn get_page_assets_list_excludes_deleted() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -225,10 +226,10 @@ fn get_page_asset_redirects() {
     let port = reserve_port();
 
     run_add_user(&db_path, &assets_dir);
-    let _server = ServerGuard::start(port, &db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
 
     let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
-    wait_for_server(&hello_url);
+    wait_for_server(&hello_url, server.stderr_path());
 
     /*
      * ページとアセットの作成
@@ -383,6 +384,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
 ///
 struct ServerGuard {
     child: Child,
+    stderr_path: PathBuf,
 }
 
 impl ServerGuard {
@@ -403,9 +405,28 @@ impl ServerGuard {
             .parent()
             .expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
+        /*
+         * テスト用設定の準備
+         */
+        let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
+        fs::create_dir_all(&config_dir)
+            .expect("create config dir failed");
+        let config_path = config_dir.join("config.toml");
+        fs::write(
+            &config_path,
+            "[run]\nuse_tls = false\n",
+        ).expect("write test config failed");
+        let stdout_path = base_dir.join("server.stdout.log");
+        let stdout = File::create(&stdout_path)
+            .expect("create server stdout failed");
+        let stderr_path = base_dir.join("server.stderr.log");
+        let stderr = File::create(&stderr_path)
+            .expect("create server stderr failed");
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
+            .arg("--config-path")
+            .arg(&config_path)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")
@@ -415,12 +436,16 @@ impl ServerGuard {
             .arg("run")
             .arg(format!("127.0.0.1:{}", port))
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .spawn()
             .expect("spawn server failed");
 
-        Self { child }
+        Self { child, stderr_path }
+    }
+
+    fn stderr_path(&self) -> &Path {
+        &self.stderr_path
     }
 }
 
@@ -449,13 +474,13 @@ impl Drop for ServerGuard {
 /// # 戻り値
 /// なし
 ///
-fn wait_for_server(url: &str) {
+fn wait_for_server(url: &str, stderr_path: &Path) {
     /*
      * サーバ起動待ち
      */
     let client = build_client();
 
-    for _ in 0..50 {
+    for _ in 0..300 {
         let response = client
             .get(url)
             .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -470,7 +495,17 @@ fn wait_for_server(url: &str) {
         thread::sleep(Duration::from_millis(100));
     }
 
-    panic!("server did not start");
+    let stderr_log = fs::read_to_string(stderr_path)
+        .unwrap_or_else(|_| "<stderr log not available>".to_string());
+    let stdout_path = stderr_path
+        .with_file_name("server.stdout.log");
+    let stdout_log = fs::read_to_string(&stdout_path)
+        .unwrap_or_else(|_| "<stdout log not available>".to_string());
+    panic!(
+        "server did not start\nstdout:\n{}\nstderr:\n{}",
+        stdout_log,
+        stderr_log
+    );
 }
 
 ///

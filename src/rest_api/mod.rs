@@ -212,6 +212,7 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
         ))
         .route("/hello", web::get().to(hello::get))
         .route("/pages", web::post().to(pages::post))
+        .route("/pages", web::get().to(pages::list::get))
         .route("/pages/deleted", web::get().to(pages::deleted::get))
         .route("/pages/search", web::get().to(pages::search::get))
         .route("/pages/template", web::get().to(pages::template::get))

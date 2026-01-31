@@ -33,6 +33,7 @@ properties:
   | メソッド | エンドポイント | 用途
   |:--|:--|:--
   |POST   | `/api/pages?path={page_path}`                     | [ドラフトページの作成](#create-page)
+  |GET    | `/api/pages?prefix={page_path}[&forward={page_path}][&rewind={page_path}][&limit={number}][&with_deleted={boolean}]` | [ページの一覧取得](#get-pages)
   |GET    | `/api/pages/deleted?path={page_path}`             | [削除済みページの一覧取得](#get-deleted-pages)
   |GET    | `/api/pages/template` | [テンプレートの一覧取得](#get-template-pages)
   |GET    | `/api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]` | [ページの検索](#search-pages)
@@ -112,6 +113,120 @@ properties:
   - レスポンスの`X-Page-Lock`でロック情報が返される
   - ドラフト作成とロック取得は同一トランザクションで行う
   - ドラフトページにはソースが存在しないため、`GET /api/pages/{page_id}/source`は404となる
+
+<a id="get-pages"></a>
+### `GET /api/pages?prefix={page_path}[&forward={page_path}][&rewind={page_path}][&limit={number}][&with_deleted={boolean}]`
+#### 概要
+ページ一覧の取得
+
+#### クエリーパラメータ
+  |名称|型|説明|必須|
+  |:--|:--|:--|:--|
+  | `prefix` | string | 対象ページパス | 必須 |
+  | `forward` | string | カーソルの指定(昇順指定) | 任意 |
+  | `rewind` | string | カーソルの指定(降順指定) | 任意 |
+  | `limit` | number | 取得する最大件数 | 任意 |
+  | `with_deleted` | boolean | 削除済みページを含めるか否か | 任意 |
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+
+ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "object"
+required:
+    - "items"
+    - "has_more"
+properties:
+  items:
+    description: >-
+      ページ情報のリストが格納される。
+    type: "array"
+    items:
+      description: >-
+        一件分のページ情報が格納される
+      type: "object"
+      required:
+        - "page_id"
+        - "path"
+        - "deleted"
+        - "last_update"
+      properties:
+        page_id:
+          description: >-
+            ページIDが格納される
+          type: "string"
+
+        path:
+          description: >-
+            ページの絶対パスが格納される。
+          type: "string"
+
+        deleted:
+          description: >-
+            ページが削除されているか否かを表すフラグ値が格納される (削除されてい
+            る場合true)。
+          type: "boolean" 
+
+        last_update:
+          description: >-
+            最終更新情報をパックしたオブジェクトが格納される
+          type: "object"
+          required:
+            - "revision"
+            - "timestamp"
+            - "username"
+          properties:
+            revision:
+              description: >-
+                リビジョン番号が格納される
+              type: "integer"
+
+            timestamp:
+              description: >-
+                更新日時が格納される(ISO8601,タイムゾーン無し)
+              type: "string"
+
+            username:
+              description: >-
+                更新を行ったユーザの名前が格納される
+              type: "string"
+ 
+  has_more:
+    description: >-
+      同じ方向で継続して一覧取得可能か否かを表すフラグ値が格納される (trueの場合、
+      継続して一覧取得が可能)。
+    type: "boolean"
+
+  anchor:
+    description: >-
+      次回の forward / rewind に指定すべきカーソル値 (has_moreがtrueの場合のみ格
+      納される)。
+    type: "string"
+```
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 400 Bad Request | `prefix`,`forward`,`rewind`で指定されたパスのフォーマットが不正<br>`forward`と`rewind`が同時に指定された
+
+#### 注記
+  - `prefix`で指定されたパス配下のページ一覧を取得する
+  - `forward`もしくは`rewind`でカーソルを指定し、ページパス順に`limit`で指定した件数を上限としてエントリを取得する。
+      - カーソルを`forward`で指定した場合は、起点から昇順に`prefix`の配下にあるパスエントリを取得する
+      - カーソルを`rewind`で指定した場合は、起点から降順に`prefix`の配下にあるパスエントリを取得する
+      - なお、昇順・降順にかかわらずカーソルとして指定されたパスは取得範囲に含まれない
+      - `forward`と`rewind`の両方共が指定されない場合は、`forward`に`prefix`と同じパスを指定した物として動作する
+      - `forward`と`rewind`の両方共が指定された場合はエラーとする
+  - `limit`が指定されなかった場合は、`limit`に50を指定した物として動作する
+  - `with_deleted`が指定されなかった場合は、`with_deleted`に`false`を指定した物として動作する
+  - 対象が存在しない場合は空配列を返す
 
 <a id="get-deleted-pages"></a>
 ### `GET /api/pages/deleted?path={page_path}`

@@ -127,6 +127,7 @@ const breadcrumbItems = computed(() => {
 });
 const editUrl = computed(() => buildEditUrl(pagePath.value));
 const revisionUrl = computed(() => buildRevisionUrl(pagePath.value));
+const pageListUrl = computed(() => buildPageListUrl(pagePath.value));
 const canDeletePage = computed(
   () => !interactionDisabled.value
     && !pageMeta.value?.page_info.deleted
@@ -334,6 +335,21 @@ function buildRevisionUrl(currentPath: string): string {
   return `/rev/${encoded}`;
 }
 
+function buildPageListUrl(currentPath: string): string {
+  if (!currentPath || currentPath === '/') {
+    return '/pages/';
+  }
+  const trimmed = currentPath.replace(/^\/+|\/+$/g, '');
+  if (!trimmed) {
+    return '/pages/';
+  }
+  const encoded = trimmed
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `/pages/${encoded}`;
+}
+
 async function handleEditClick(): Promise<void> {
   if (interactionDisabled.value || isLocking.value || !tabIdReady.value) {
     return;
@@ -513,6 +529,7 @@ watch(renderedHtml, async (value) => {
             情報表示
           </button>
           <a class="btn btn-link btn-sm text-info hidden md:inline-flex" :href="revisionUrl">履歴</a>
+          <a class="btn btn-link btn-sm text-info hidden md:inline-flex" :href="pageListUrl">ページ一覧</a>
           <button
             class="btn btn-link btn-sm text-info ml-auto"
             type="button"
