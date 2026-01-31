@@ -222,7 +222,10 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
         .route("/pages/{page_id}/parent", web::get().to(pages::parent::get))
         .route("/pages/{page_id}/path", web::get().to(pages::path::get))
         .route("/pages/{page_id}/path", web::post().to(pages::path::post))
-        .route("/pages/{page_id}/revision", web::post().to(pages::revision::post))
+        .route(
+            "/pages/{page_id}/revision",
+            web::post().to(pages::revision::post)
+        )
         .route("/pages/{page_id}/assets", web::get().to(pages::assets::get))
         .route(
             "/pages/{page_id}/assets/{file_name}",
@@ -239,7 +242,16 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
         .route("/pages/{page_id}", web::delete().to(pages::delete::delete))
         .route("/assets", web::post().to(assets::post))
         .route("/assets", web::get().to(assets::get))
-        .route("/assets/{asset_id}/data", web::get().to(assets::get_data))
-        .route("/assets/{asset_id}/meta", web::get().to(assets::get_meta))
-        .route("/assets/{asset_id}", web::delete().to(assets::delete))
+        .route(
+            "/assets/{asset_id}/data",
+            web::get().to(assets::data::get),
+        )
+        .route(
+            "/assets/{asset_id}/meta",
+            web::get().to(assets::meta::get),
+        )
+        .route(
+            "/assets/{asset_id}",
+            web::delete().to(assets::delete::delete),
+        )
 }
