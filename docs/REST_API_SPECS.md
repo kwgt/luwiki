@@ -59,6 +59,7 @@ properties:
   |GET    | `/api/assets/{asset_id}/data`                     | [アセットの本体データの取得](#get-asset)
   |GET    | `/api/assets/{asset_id}/meta`                     | [アセットのメタ情報の取得](#get-asset-metadata)
   |DELETE | `/api/assets/{asset_id}`                          | [アセットの削除](#delete-asset)
+  |GET    | `/api/users/me`                                   | [自分自身のユーザ情報の取得](#get-users-me)
 
 --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 
@@ -1344,3 +1345,50 @@ properties:
   | 404 Not Found | `asset_id`で指定されたアセットが存在しない
   | 410 Gone | `asset_id`で削除済みのアセットを指定した
   | 423 Locked | ロックされているページのアセットを削除しようとした
+
+<a id="get-users-me"></a>
+### `GET /api/users/me`
+#### 概要
+自分自身のユーザ情報の取得
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+  | `Cache-Control` | "private, no-cache" (固定)
+  | `ETag` | {user_id}:{unixtime_millis}
+
+また、ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "object"
+required:
+  - "id"
+  - "username"
+  - "display_name"
+  - "timestamp"
+
+properties:
+  id:
+    description: >-
+      ユーザIDが格納される
+    type: "string"
+
+  username:
+    description: >-
+      ユーザ名が格納される
+    type: "string"
+
+  display_name:
+    description: >-
+      表示名が格納される
+    type: "string"
+
+  timestamp:
+    description: >-
+       ユーザ情報の更新日時が格納される(ISO8601,タイムゾーン無し)
+    type: "string"
+
+```

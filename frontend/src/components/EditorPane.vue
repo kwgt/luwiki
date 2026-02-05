@@ -10,12 +10,17 @@ import {
   type EditorKeymap,
   type EditorTheme,
 } from '../lib/editorExtensions';
+import { collectImmediateMacroChanges } from '../lib/macroEngine';
 
 const props = defineProps<{
   modelValue: string;
   theme: EditorTheme;
   keymap: EditorKeymap;
   lineNumbers: boolean;
+  macroPagePath?: string;
+  macroPageId?: string;
+  macroUserId?: string;
+  macroUserDisplayName?: string;
   readOnly?: boolean;
   placeholder?: string;
   editorStyle?: Record<string, string>;
@@ -30,6 +35,7 @@ const viewRef = ref<EditorView | null>(null);
 const themeCompartment = new Compartment();
 const keymapCompartment = new Compartment();
 const lineNumberCompartment = new Compartment();
+const applyingImmediateMacro = ref(false);
 
 function buildEditorState(): EditorState {
   const placeholderExtension = props.placeholder
@@ -51,6 +57,29 @@ function buildEditorState(): EditorState {
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {
           return;
+        }
+        if (!props.readOnly && !applyingImmediateMacro.value) {
+          const fullText = update.state.doc.toString();
+          const changes = collectImmediateMacroChanges(fullText, {
+            pagePath: props.macroPagePath ?? '/',
+            pageId: props.macroPageId,
+            userId: props.macroUserId,
+            userDisplayName: props.macroUserDisplayName,
+          });
+          if (changes.length > 0) {
+            applyingImmediateMacro.value = true;
+            update.view.dispatch({
+              changes: changes
+                .sort((left, right) => right.from - left.from)
+                .map((change) => ({
+                  from: change.from,
+                  to: change.to,
+                  insert: change.insert,
+                })),
+            });
+            applyingImmediateMacro.value = false;
+            return;
+          }
         }
         emit('update:modelValue', update.state.doc.toString());
       }),

@@ -11,6 +11,7 @@
 mod hello;
 mod assets;
 mod pages;
+mod users;
 
 use std::sync::{Arc, RwLock};
 
@@ -254,4 +255,5 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
             "/assets/{asset_id}",
             web::delete().to(assets::delete::delete),
         )
+        .route("/users/me", web::get().to(users::me::get))
 }

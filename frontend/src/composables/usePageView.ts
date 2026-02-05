@@ -25,11 +25,13 @@ import {
   getMetaContent,
   normalizeWikiPath,
   parseAssetMaxBytes,
+  resolveUploadMimeType,
   resolvePagePath,
   toErrorMessage,
 } from '../lib/pageCommon';
 import { tryBuildLockTokenKey } from '../lib/lockToken';
 import { buildAmendRefreshKey } from '../lib/amendRefresh';
+import { expandRenderMacros } from '../lib/macroEngine';
 
 
 function copyToClipboard(text: string): void {
@@ -224,13 +226,26 @@ export function usePageView() {
     return '';
   });
 
-  const renderedHtml = computed(() => {
+  const renderedHtml = ref('');
+  let renderMacroSeq = 0;
+
+  async function rebuildRenderedHtml(): Promise<void> {
     if (!pagePath.value) {
-      return '';
+      renderedHtml.value = '';
+      return;
     }
+
+    const seq = ++renderMacroSeq;
     const md = createMarkdownRenderer(pagePath.value, '/wiki');
-    return md.render(source.value);
-  });
+    const expanded = await expandRenderMacros(source.value, {
+      pagePath: pagePath.value,
+      pageId: pageId.value,
+    });
+    if (seq !== renderMacroSeq) {
+      return;
+    }
+    renderedHtml.value = md.render(expanded);
+  }
 
   const assetItems = computed(() =>
     [...assets.value]
@@ -327,7 +342,7 @@ export function usePageView() {
           pageId.value,
           fileName,
           file,
-          file.type,
+          resolveUploadMimeType(fileName, file.type),
           (loaded, total) => {
             if (!total || total <= 0) {
               return;
@@ -688,6 +703,9 @@ export function usePageView() {
       pageCreateError.value = '';
     }
   });
+  watch([source, pagePath, pageId], () => {
+    void rebuildRenderedHtml();
+  }, { immediate: true });
 
   return {
     pageId,

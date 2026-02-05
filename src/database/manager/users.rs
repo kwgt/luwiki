@@ -172,6 +172,32 @@ impl DatabaseManager {
     }
 
     ///
+    /// ユーザ名からユーザ情報を取得
+    ///
+    /// # 引数
+    /// * `user_name` - ユーザ名
+    ///
+    /// # 戻り値
+    /// 取得に成功した場合は`Ok(Some(UserInfo))`を返す。
+    /// 存在しない場合は`Ok(None)`を返す。
+    ///
+    pub(crate) fn get_user_info_by_name(
+        &self,
+        user_name: &str,
+    ) -> Result<Option<UserInfo>> {
+        let txn = self.db.begin_read()?;
+        let id_table = txn.open_table(USER_ID_TABLE)?;
+        let key = user_name.to_string();
+        let user_id = match id_table.get(&key)? {
+            Some(entry) => entry.value(),
+            None => return Ok(None),
+        };
+
+        let info_table = txn.open_table(USER_INFO_TABLE)?;
+        Ok(info_table.get(user_id)?.map(|entry| entry.value()))
+    }
+
+    ///
     /// ユーザ情報の一覧取得
     ///
     /// # 戻り値

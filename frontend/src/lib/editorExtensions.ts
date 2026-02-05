@@ -12,6 +12,7 @@ import { emacs } from '@replit/codemirror-emacs';
 import { csharp } from '@replit/codemirror-lang-csharp';
 import { vim } from '@replit/codemirror-vim';
 import { vscodeKeymap } from '@replit/codemirror-vscode-keymap';
+import { wikiLinkExtension } from './markdown/wikiLinkExtension';
 
 export type EditorKeymap = 'default' | 'vim' | 'emacs' | 'vscode';
 export type EditorTheme = 'light' | 'dark';
@@ -94,7 +95,10 @@ export function buildBaseExtensions(): Extension[] {
     history(),
     search(),
     highlightSelectionMatches(),
-    markdown({ codeLanguages }),
+    markdown({
+      codeLanguages,
+      extensions: [wikiLinkExtension],
+    }),
     baseTheme,
   ];
 }

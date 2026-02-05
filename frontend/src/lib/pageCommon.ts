@@ -347,6 +347,51 @@ export function normalizeLanguage(lang?: string): string | null {
   return Prism.languages[resolved] ? resolved : null;
 }
 
+export function resolveUploadMimeType(
+  fileName: string,
+  browserMimeType?: string,
+): string {
+  const normalizedBrowser = (browserMimeType ?? '').trim().toLowerCase();
+  if (normalizedBrowser && normalizedBrowser !== 'application/octet-stream') {
+    return normalizedBrowser;
+  }
+
+  const lower = fileName.trim().toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  const ext = dot >= 0 ? lower.slice(dot + 1) : '';
+  const mimeByExt: Record<string, string> = {
+    rs: 'text/x-rust',
+    ts: 'text/typescript',
+    js: 'text/javascript',
+    jsx: 'text/jsx',
+    tsx: 'text/tsx',
+    py: 'text/x-python',
+    go: 'text/x-go',
+    cs: 'text/x-csharp',
+    java: 'text/x-java-source',
+    c: 'text/x-c',
+    h: 'text/x-c',
+    cpp: 'text/x-c++src',
+    cc: 'text/x-c++src',
+    hpp: 'text/x-c++hdr',
+    md: 'text/markdown',
+    txt: 'text/plain',
+    csv: 'text/csv',
+    toml: 'text/toml',
+    yaml: 'text/yaml',
+    yml: 'text/yaml',
+    json: 'application/json',
+    sql: 'text/x-sql',
+    sh: 'text/x-shellscript',
+    bash: 'text/x-shellscript',
+    html: 'text/html',
+    css: 'text/css',
+    xml: 'text/xml',
+  };
+
+  return mimeByExt[ext] ?? 'application/octet-stream';
+}
+
 export function toErrorMessage(err: unknown): string {
   if (err && typeof err === 'object' && 'status' in err) {
     const status = (err as { status?: unknown }).status;

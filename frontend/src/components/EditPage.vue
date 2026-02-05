@@ -3,12 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { usePageEdit } from '../composables/usePageEdit';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
+import { fetchCurrentUser } from '../api/users';
 import {
   createMarkdownRenderer,
   extractTitle,
   extractToc,
   normalizeWikiPath,
 } from '../lib/pageCommon';
+import { expandRenderMacros } from '../lib/macroEngine';
 
 const {
   pageId,
@@ -88,11 +90,14 @@ const editorPaneRef = ref<{ focusToStart: () => void } | null>(null);
 const renderedHtml = ref('');
 const markdownRenderer = ref<ReturnType<typeof createMarkdownRenderer> | null>(null);
 const markdownRendererPath = ref('');
+const macroUserId = ref('');
+const macroUserDisplayName = ref('');
 
 const sourceByteLength = computed(() => new TextEncoder().encode(sourceText.value).length);
 const editorTitle = ref('');
 const tocItems = ref<{ level: number; text: string; anchor: string }[]>([]);
 let derivedTimer: number | null = null;
+let derivedRenderSeq = 0;
 const previewMode = ref(false);
 
 const {
@@ -170,6 +175,14 @@ onMounted(async () => {
   if (autoLoadSource) {
     await loadPage();
   }
+  try {
+    const me = await fetchCurrentUser();
+    macroUserId.value = me.id;
+    macroUserDisplayName.value = me.display_name;
+  } catch {
+    macroUserId.value = '';
+    macroUserDisplayName.value = '';
+  }
   await checkTemplateAvailability();
   await nextTick();
   editorPaneRef.value?.focusToStart();
@@ -209,12 +222,20 @@ function resolveFallbackTitle(): string {
   return '編集画面';
 }
 
-function updateDerivedFromText(text: string): void {
+async function updateDerivedFromText(text: string): Promise<void> {
   const path = pagePath.value || resolveEditPath();
   editorTitle.value = extractTitle(text, path) || resolveFallbackTitle();
   tocItems.value = extractToc(text);
   const renderer = ensureMarkdownRenderer();
-  renderedHtml.value = renderer.render(text);
+  const seq = ++derivedRenderSeq;
+  const expanded = await expandRenderMacros(text, {
+    pagePath: path,
+    pageId: pageId.value,
+  });
+  if (seq !== derivedRenderSeq) {
+    return;
+  }
+  renderedHtml.value = renderer.render(expanded);
 }
 
 function scheduleDerivedUpdate(text: string): void {
@@ -223,7 +244,7 @@ function scheduleDerivedUpdate(text: string): void {
   }
   derivedTimer = window.setTimeout(() => {
     derivedTimer = null;
-    updateDerivedFromText(text);
+    void updateDerivedFromText(text);
   }, 300);
 }
 
@@ -232,7 +253,7 @@ watch(sourceText, (value) => {
 });
 
 watch(pagePath, () => {
-  updateDerivedFromText(sourceText.value);
+  void updateDerivedFromText(sourceText.value);
 });
 
 watch(isLoading, (loading) => {
@@ -574,6 +595,10 @@ function buildAssetDownloadUrl(fileName: string): string {
               :theme="selectedTheme"
               :keymap="selectedEditorKeymap"
               :line-numbers="selectedEditorLineNumbers"
+              :macro-page-path="pagePath"
+              :macro-page-id="pageId"
+              :macro-user-id="macroUserId"
+              :macro-user-display-name="macroUserDisplayName"
               :editor-style="editorStyle"
               class="h-full w-full"
             />

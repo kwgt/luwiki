@@ -26,6 +26,7 @@ import {
   getMetaContent,
   normalizeWikiPath,
   parseAssetMaxBytes,
+  resolveUploadMimeType,
   toErrorMessage,
 } from '../lib/pageCommon';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
@@ -720,7 +721,7 @@ export function usePageEdit() {
           pageId.value,
           fileName,
           file,
-          file.type,
+          resolveUploadMimeType(fileName, file.type),
           (loaded, total) => {
             if (!total || total <= 0) {
               return;
