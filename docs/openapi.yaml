@@ -594,6 +594,7 @@ paths:
         "200":
           description: バイナリデータ
           headers:
+            Content-Disposition: { schema: { type: string } }
             Cache-Control: { schema: { type: string } }
             ETag: { schema: { type: string } }
           content:

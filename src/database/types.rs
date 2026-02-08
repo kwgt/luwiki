@@ -1061,6 +1061,16 @@ impl AssetInfo {
     }
 
     ///
+    /// ファイル名の更新
+    ///
+    /// # 引数
+    /// * `file_name` - 更新後のファイル名
+    ///
+    pub(crate) fn set_file_name(&mut self, file_name: String) {
+        self.file_name = file_name;
+    }
+
+    ///
     /// MIME種別へのアクセサ
     ///
     /// # 戻り値

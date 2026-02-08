@@ -113,6 +113,11 @@ export function usePageEdit() {
   const assetDetailsLoading = ref(false);
   const assetDeleteTarget = ref<PageAsset | null>(null);
   const assetDeleteLoading = ref(false);
+  const assetReplaceTarget = ref<{
+    file_name: string;
+    existing: PageAsset;
+  } | null>(null);
+  let assetReplaceResolver: ((value: boolean) => void) | null = null;
   const errorMessage = ref('');
   const lockToken = ref('');
   const lockExtendTimer = ref<number | null>(null);
@@ -216,6 +221,44 @@ export function usePageEdit() {
 
   function resolveUploadFileName(file: File): string {
     return file.name;
+  }
+
+  function findExistingAsset(fileName: string): PageAsset | null {
+    const exact = assets.value.find((asset) => asset.file_name === fileName);
+    if (exact) {
+      return exact;
+    }
+    const lowered = fileName.toLowerCase();
+    return assets.value.find((asset) => asset.file_name.toLowerCase() === lowered) ?? null;
+  }
+
+  function requestAssetReplace(
+    fileName: string,
+    existing: PageAsset,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      assetReplaceResolver = resolve;
+      assetReplaceTarget.value = {
+        file_name: fileName,
+        existing,
+      };
+    });
+  }
+
+  function confirmAssetReplace(): void {
+    if (assetReplaceResolver) {
+      assetReplaceResolver(true);
+    }
+    assetReplaceResolver = null;
+    assetReplaceTarget.value = null;
+  }
+
+  function dismissAssetReplace(): void {
+    if (assetReplaceResolver) {
+      assetReplaceResolver(false);
+    }
+    assetReplaceResolver = null;
+    assetReplaceTarget.value = null;
   }
 
   function applyEditorValue(editor: { setValue: (value: string) => void }) {
@@ -714,6 +757,14 @@ export function usePageEdit() {
         if (!fileName) {
           throw new Error('file name not found');
         }
+        const existing = findExistingAsset(fileName);
+        if (existing) {
+          const approved = await requestAssetReplace(fileName, existing);
+          if (!approved) {
+            continue;
+          }
+          await deleteAsset(existing.id, lockToken.value || undefined);
+        }
         uploadingIndex.value = index + 1;
         uploadingFileName.value = fileName;
         uploadProgress.value = 0;
@@ -809,7 +860,7 @@ export function usePageEdit() {
     }
     assetDeleteLoading.value = true;
     try {
-      await deleteAsset(assetDeleteTarget.value.id);
+      await deleteAsset(assetDeleteTarget.value.id, lockToken.value || undefined);
       assetDeleteTarget.value = null;
       const pageAssets = await fetchPageAssets(pageId.value, Date.now());
       assets.value = pageAssets;
@@ -906,6 +957,7 @@ export function usePageEdit() {
     assetDetailsLoading,
     assetDeleteTarget,
     assetDeleteLoading,
+    assetReplaceTarget,
     assetInteractionDisabled,
     interactionDisabled,
     errorMessage,
@@ -934,6 +986,8 @@ export function usePageEdit() {
     openAssetDeleteConfirm,
     dismissAssetDeleteConfirm,
     confirmAssetDelete,
+    confirmAssetReplace,
+    dismissAssetReplace,
     reportError,
     dismissError,
     setAmendChecked,

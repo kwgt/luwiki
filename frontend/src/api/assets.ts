@@ -99,6 +99,13 @@ export async function fetchAssetMeta(assetId: string): Promise<AssetMetaResponse
 /**
  * アセットを削除する
  */
-export async function deleteAsset(assetId: string): Promise<void> {
-  await apiClient.delete(`/assets/${assetId}`);
+export async function deleteAsset(
+  assetId: string,
+  lockToken?: string,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (lockToken) {
+    headers['X-Lock-Authentication'] = `token=${lockToken}`;
+  }
+  await apiClient.delete(`/assets/${assetId}`, { headers });
 }

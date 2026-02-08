@@ -164,6 +164,47 @@ impl DatabaseManager {
     }
 
     ///
+    /// 削除済みアセットの存在確認
+    ///
+    /// # 引数
+    /// * `page_id` - ページID
+    /// * `file_name` - ファイル名
+    ///
+    /// # 戻り値
+    /// 削除済みアセットが存在する場合は`true`を返す。
+    ///
+    pub(crate) fn has_deleted_asset_by_page_file(
+        &self,
+        page_id: &PageId,
+        file_name: &str,
+    ) -> Result<bool> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
+        let info_table = txn.open_table(ASSET_INFO_TABLE)?;
+
+        for entry in group_table.get(page_id.clone())? {
+            let asset_id = entry?.value();
+            let asset_info = match info_table.get(asset_id.clone())? {
+                Some(info) => info.value(),
+                None => continue,
+            };
+
+            if !asset_info.deleted() {
+                continue;
+            }
+
+            if asset_info.file_name() == file_name {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    ///
     /// アセットデータの取得
     ///
     /// # 引数
@@ -257,8 +298,22 @@ impl DatabaseManager {
              * 既存アセットの確認
              */
             let lookup_key = (page_id.clone(), file_name.clone());
-            if lookup_table.get(&lookup_key)?.is_some() {
-                return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+            let conflict_id = match lookup_table.get(&lookup_key)? {
+                Some(entry) => Some(entry.value().clone()),
+                None => None,
+            };
+
+            if let Some(conflict_id) = conflict_id {
+                let deleted_conflict = match info_table.get(conflict_id.clone())? {
+                    Some(info) => info.value().deleted(),
+                    None => false,
+                };
+
+                if deleted_conflict {
+                    let _ = lookup_table.remove(lookup_key.clone());
+                } else {
+                    return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+                }
             }
 
             /*
@@ -317,6 +372,7 @@ impl DatabaseManager {
         let txn = self.db.begin_write()?;
         let delete_result = (|| -> Result<()> {
             let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let mut asset_info = match info_table.get(asset_id.clone())? {
                 Some(info) => info.value(),
                 None => return Err(anyhow!(crate::database::DbError::AssetNotFound)),
@@ -332,8 +388,29 @@ impl DatabaseManager {
             /*
              * 削除フラグ更新
              */
+            let page_id = asset_info.page_id();
+            let file_name = asset_info.file_name();
             asset_info.set_deleted(true);
             info_table.insert(asset_id.clone(), asset_info)?;
+
+            /*
+             * lookup解除
+             */
+            if let Some(page_id) = page_id {
+                let lookup_key = (page_id, file_name);
+                let _ = lookup_table.remove(lookup_key);
+            } else {
+                let mut remove_keys = Vec::new();
+                for entry in lookup_table.iter()? {
+                    let (key, value) = entry?;
+                    if value.value() == asset_id.clone() {
+                        remove_keys.push(key.value());
+                    }
+                }
+                for (page_id, file_name) in remove_keys {
+                    let _ = lookup_table.remove((page_id, file_name));
+                }
+            }
 
             Ok(())
         })();
@@ -384,8 +461,9 @@ impl DatabaseManager {
              * 参照の削除
              */
             let page_id = asset_info.page_id();
+            let file_name = asset_info.file_name();
             if let Some(page_id) = page_id.clone() {
-                let lookup_key = (page_id.clone(), asset_info.file_name());
+                let lookup_key = (page_id.clone(), file_name.clone());
                 let _ = lookup_table.remove(lookup_key);
                 let _ = group_table.remove(page_id, asset_id.clone());
             } else {
@@ -407,7 +485,7 @@ impl DatabaseManager {
              */
             let _ = info_table.remove(asset_id.clone())?;
 
-            Ok(page_id.map(|id| (id, asset_info.file_name())))
+            Ok(page_id.map(|id| (id, file_name)))
         })();
 
         if let Err(err) = delete_result {
@@ -440,13 +518,18 @@ impl DatabaseManager {
     /// # 戻り値
     /// 復帰に成功した場合は`Ok(())`を返す。
     ///
-    pub(crate) fn undelete_asset(&self, asset_id: &AssetId) -> Result<()> {
+    pub(crate) fn undelete_asset(
+        &self,
+        asset_id: &AssetId,
+        new_name: Option<&str>,
+    ) -> Result<()> {
         /*
          * 書き込みトランザクション開始
          */
         let txn = self.db.begin_write()?;
         let update_result = (|| -> Result<()> {
             let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let mut asset_info = match info_table.get(asset_id.clone())? {
                 Some(info) => info.value(),
                 None => return Err(anyhow!(crate::database::DbError::AssetNotFound)),
@@ -454,6 +537,26 @@ impl DatabaseManager {
 
             if !asset_info.deleted() {
                 return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+            }
+
+            let target_name = new_name
+                .unwrap_or(asset_info.file_name().as_str())
+                .to_string();
+
+            if let Some(page_id) = asset_info.page_id() {
+                let lookup_key = (page_id.clone(), target_name.clone());
+                if lookup_table.get(&lookup_key)?.is_some() {
+                    return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+                }
+
+                let current_name = asset_info.file_name();
+                if current_name != target_name {
+                    let _ = lookup_table.remove((page_id.clone(), current_name));
+                }
+                asset_info.set_file_name(target_name.clone());
+                lookup_table.insert(lookup_key, asset_id.clone())?;
+            } else if asset_info.file_name() != target_name {
+                asset_info.set_file_name(target_name);
             }
 
             asset_info.set_deleted(false);

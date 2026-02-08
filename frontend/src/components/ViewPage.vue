@@ -28,6 +28,7 @@ const {
   assetDetailsLoading,
   assetDeleteTarget,
   assetDeleteLoading,
+  assetReplaceTarget,
   assetInteractionDisabled,
   interactionDisabled,
   errorMessage,
@@ -69,6 +70,8 @@ const {
   openAssetDeleteConfirm,
   dismissAssetDeleteConfirm,
   confirmAssetDelete,
+  confirmAssetReplace,
+  dismissAssetReplace,
   requestEditLock,
   cleanupViewLock,
   reportError,
@@ -670,8 +673,8 @@ watch(renderedHtml, async (value) => {
             </div>
             <div class="flex flex-wrap gap-2">
               <div
-                v-for="asset in assetItems"
-                :key="asset.file_name"
+              v-for="asset in assetItems"
+              :key="asset.id"
                 class="border border-base-300 bg-base-200/70 p-2"
               >
                 <div class="max-w-[16em] text-sm font-semibold truncate" :title="asset.file_name">
@@ -688,7 +691,11 @@ watch(renderedHtml, async (value) => {
                   >
                     詳細
                   </button>
-                  <a class="link link-hover" :href="buildAssetDownloadUrl(asset.file_name)">
+                  <a
+                    class="link link-hover"
+                    :href="buildAssetDownloadUrl(asset.file_name)"
+                    :download="asset.file_name"
+                  >
                     DL
                   </a>
                   <button
@@ -886,6 +893,27 @@ watch(renderedHtml, async (value) => {
             @click="confirmAssetDelete"
           >
             削除
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="assetReplaceTarget" class="modal modal-open">
+      <div class="modal-box space-y-4">
+        <h3 class="text-lg font-bold">アセット置き換え</h3>
+        <p class="text-sm text-base-content/70">
+          "{{ assetReplaceTarget.file_name }}" は既に存在します。置き換えますか？
+        </p>
+        <div class="modal-action">
+          <button class="btn" type="button" @click="dismissAssetReplace">
+            キャンセル
+          </button>
+          <button
+            class="btn btn-error"
+            type="button"
+            @click="confirmAssetReplace"
+          >
+            置き換える
           </button>
         </div>
       </div>

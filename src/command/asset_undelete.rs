@@ -21,6 +21,7 @@ use super::CommandContext;
 struct AssetUndeleteCommandContext {
     manager: DatabaseManager,
     asset_id: AssetId,
+    rename_to: Option<String>,
 }
 
 impl AssetUndeleteCommandContext {
@@ -32,6 +33,7 @@ impl AssetUndeleteCommandContext {
         Ok(Self {
             manager: opts.open_database()?,
             asset_id,
+            rename_to: sub_opts.rename_to(),
         })
     }
 }
@@ -46,7 +48,10 @@ impl CommandContext for AssetUndeleteCommandContext {
             return Err(anyhow!("asset not deleted"));
         }
 
-        self.manager.undelete_asset(&self.asset_id)?;
+        self.manager.undelete_asset(
+            &self.asset_id,
+            self.rename_to.as_deref(),
+        )?;
         Ok(())
     }
 }

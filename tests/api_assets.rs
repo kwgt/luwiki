@@ -229,6 +229,21 @@ fn get_assets_returns_redirect_and_data() {
             .expect("content-type to_str failed"),
         "application/octet-stream"
     );
+    let content_disposition = response
+        .headers()
+        .get("Content-Disposition")
+        .expect("missing content-disposition")
+        .to_str()
+        .expect("content-disposition to_str failed")
+        .to_lowercase();
+    assert!(
+        content_disposition.contains("attachment"),
+        "content-disposition must contain attachment"
+    );
+    assert!(
+        content_disposition.contains("data.bin"),
+        "content-disposition must contain file name"
+    );
     assert_eq!(
         response.bytes().expect("read data failed").as_ref(),
         b"data-contents"

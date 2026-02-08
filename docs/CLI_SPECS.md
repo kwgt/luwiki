@@ -66,6 +66,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - [add](#asset-add) : アセットの追加
     - [list](#asset-list) : アセット一覧の表示
     - [delete](#asset-delete) : アセットの削除
+    - [purge](#asset-purge) : 削除済みアセットのパージ
     - [undelete](#asset-undelete) : アセットの回復(削除の取消)
     - [move_to](#asset-move-to) : アセットの所有ページの付け替え
   - fts : 全文検索の管理
@@ -97,6 +98,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - add : `a`
     - list : `l`, `ls`
     - delete : `d`, `del`
+    - purge : `p`
     - undelete : `ud`
     - move_to : `m`, `mv`
   - fts : `i`
@@ -564,7 +566,6 @@ luwiki [OPTIONS] asset delete [OPTIONS] <ASSET-ID|ASSET-PATH|PAGE-PATH|PAGE-ID>
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
 | `-H`, `--hard-delete` | ハードデリートを行う |
-| `-p`, `--purge` | ソフトデリートされているファイルをハードデリートする |
 
 #### 概要
 アセットID(`ASSET-ID`)かアセットパス(`ASSET-PATH`)で指定されたアセットの削除を行う。アセットパスはページパスとファイル名をパスセパレータで連結して表現する。
@@ -574,11 +575,21 @@ luwiki [OPTIONS] asset delete [OPTIONS] <ASSET-ID|ASSET-PATH|PAGE-PATH|PAGE-ID>
 
 `--hard-delete`は削除済みアセットに対しても使用でき、DB上から完全に消去する。
 
-`--purge`は指定されたページに付随するアセットのうち、ソフトデリート中の物を選択的にハードデリートする。このオプションを指定した場合はページパスかページID以外は指定できない。
-
 指定されたアセットが存在しない場合はエラーとする。
 
 削除済みアセットに対する削除は、`--hard-delete`指定時のみ許可する。
+
+<a id="asset-purge"></a>
+### asset purgeコマンド
+アセットの削除済みデータをパージ
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] asset purge [PAGE-PATH|PAGE-ID]
+```
+
+#### 概要
+削除済みアセットをハードデリートする。引数が指定されない場合は全ページが対象となる。ページパス(`PAGE-PATH`)またはページID(`PAGE-ID`)を指定した場合は、そのページに付随する削除済みアセットのみを削除する。
 
 <a id="asset-undelete"></a>
 ### asset undeleteコマンド
@@ -586,15 +597,16 @@ luwiki [OPTIONS] asset delete [OPTIONS] <ASSET-ID|ASSET-PATH|PAGE-PATH|PAGE-ID>
 
 #### コマンドライン
 ```sh
-luwiki [OPTIONS] asset undelete <ASSET-ID>
+luwiki [OPTIONS] asset undelete <ASSET-ID> [ASSET-NAME]
 ```
 #### 概要
-`ASSET-ID`で指定されたアセットを削除状態から通常状態に復活させる。`ASSET-ID`のみを受け付ける。
+`ASSET-ID`で指定されたアセットを削除状態から通常状態に復活させる。`ASSET-NAME`が指定された場合は、その名前にリネームして復帰する。
 
 以下の場合はエラーとする。
 
   - 指定されたIDのアセットが存在しなかった
   - 指定されたIDのアセットが削除状態ではなかった
+  - 同名の生存アセットが存在する
 
 <a id="asset-move-to"></a>
 ### asset move_toコマンド

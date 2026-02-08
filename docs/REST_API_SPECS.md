@@ -1253,12 +1253,20 @@ properties:
 #### パスエレメント
   - `asset_id` : 操作対象のアセットのID
 
+#### リクエストヘッダ
+ロックされているページに紐付くアセットを削除する場合は以下のヘッダを設定する必要がある。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `X-Lock-Authentication` | "token={lock_token}"
+
 #### レスポンス
 リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
 
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | (アセットのMIME種別)
+  | `Content-Disposition` | attachment; filename="{file_name}"
   | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
   | `ETag` | {asset_id}
 
@@ -1345,6 +1353,7 @@ properties:
   | 404 Not Found | `asset_id`で指定されたアセットが存在しない
   | 410 Gone | `asset_id`で削除済みのアセットを指定した
   | 423 Locked | ロックされているページのアセットを削除しようとした
+  | 403 Forbidden | ロック認証に失敗した<br>ロック取得者と異なるユーザが削除しようとした
 
 <a id="get-users-me"></a>
 ### `GET /api/users/me`

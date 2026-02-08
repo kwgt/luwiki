@@ -408,6 +408,7 @@ pub(in crate::database) fn delete_page_soft_in_txn<'txn>(
     index_table: &mut Table<'txn, PageId, PageIndex>,
     lock_table: &mut Table<'txn, LockToken, LockInfo>,
     asset_table: &mut Table<'txn, AssetId, AssetInfo>,
+    lookup_table: &mut Table<'txn, (PageId, String), AssetId>,
     group_table: &MultimapTable<'txn, PageId, AssetId>,
 ) -> Result<()> {
     /*
@@ -464,9 +465,11 @@ pub(in crate::database) fn delete_page_soft_in_txn<'txn>(
             continue;
         }
 
+        let file_name = asset_info.file_name();
         asset_info.set_deleted(true);
         asset_info.clear_page_id();
         asset_table.insert(asset_id.clone(), asset_info)?;
+        let _ = lookup_table.remove((page_id.clone(), file_name));
     }
 
     Ok(())

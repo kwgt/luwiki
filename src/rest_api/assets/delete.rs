@@ -11,12 +11,16 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::StatusCode;
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 
 use crate::database::DbError;
 use crate::database::types::AssetId;
 use crate::http_server::app_state::AppState;
+use crate::rest_api::AuthUser;
 use super::super::resp_error_json;
+
+/// ロック認証ヘッダの名称
+const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
 
 ///
 /// DELETE /api/assets/{asset_id} の実体
@@ -32,6 +36,7 @@ use super::super::resp_error_json;
 /// actix-webのレスポンスオブジェクト
 ///
 pub async fn delete(
+    req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 )
@@ -99,11 +104,58 @@ pub async fn delete(
                 }
             };
 
-            if lock_info.is_some() {
-                return Ok(resp_error_json(
-                    StatusCode::LOCKED,
-                    "page locked",
-                ));
+            if let Some(lock_info) = lock_info {
+                if !req.headers().contains_key(LOCK_AUTH_HEADER) {
+                    return Ok(resp_error_json(
+                        StatusCode::LOCKED,
+                        "page locked",
+                    ));
+                }
+
+                let token = match parse_lock_token(&req) {
+                    Ok(token) => token,
+                    Err(resp) => return Ok(resp),
+                };
+
+                if lock_info.token() != token {
+                    return Ok(resp_error_json(
+                        StatusCode::FORBIDDEN,
+                        "lock token invalid",
+                    ));
+                }
+
+                let auth_user = match req.extensions().get::<AuthUser>() {
+                    Some(user) => user.user_id().to_string(),
+                    None => {
+                        return Ok(resp_error_json(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "auth context missing",
+                        ));
+                    }
+                };
+
+                let user_id = match state.db().get_user_id_by_name(&auth_user) {
+                    Ok(Some(user_id)) => user_id,
+                    Ok(None) => {
+                        return Ok(resp_error_json(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "user not found",
+                        ));
+                    }
+                    Err(_) => {
+                        return Ok(resp_error_json(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "user lookup failed",
+                        ));
+                    }
+                };
+
+                if lock_info.user() != user_id {
+                    return Ok(resp_error_json(
+                        StatusCode::FORBIDDEN,
+                        "lock forbidden",
+                    ));
+                }
             }
         }
     }
@@ -159,6 +211,57 @@ fn parse_asset_id(raw: String) -> Result<AssetId, HttpResponse> {
         Err(_) => Err(resp_error_json(
             StatusCode::NOT_FOUND,
             "asset not found",
+        )),
+    }
+}
+
+///
+/// ロック解除トークンの解析
+///
+fn parse_lock_token(req: &HttpRequest) -> Result<crate::database::types::LockToken, HttpResponse> {
+    let raw = match req.headers().get(LOCK_AUTH_HEADER) {
+        Some(raw) => raw,
+        None => {
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
+        }
+    };
+
+    let raw = match raw.to_str() {
+        Ok(raw) => raw.trim(),
+        Err(_) => {
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
+        }
+    };
+
+    let mut token_value = None;
+    for part in raw.split_whitespace() {
+        if let Some(value) = part.strip_prefix("token=") {
+            token_value = Some(value);
+            break;
+        }
+    }
+
+    let token = match token_value {
+        Some(value) => value,
+        None => {
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
+        }
+    };
+
+    match crate::database::types::LockToken::from_string(token) {
+        Ok(token) => Ok(token),
+        Err(_) => Err(resp_error_json(
+            StatusCode::FORBIDDEN,
+            "lock token invalid",
         )),
     }
 }

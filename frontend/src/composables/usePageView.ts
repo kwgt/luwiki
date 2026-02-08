@@ -82,6 +82,11 @@ export function usePageView() {
   const assetDetailsLoading = ref(false);
   const assetDeleteTarget = ref<PageAsset | null>(null);
   const assetDeleteLoading = ref(false);
+  const assetReplaceTarget = ref<{
+    file_name: string;
+    existing: PageAsset;
+  } | null>(null);
+  let assetReplaceResolver: ((value: boolean) => void) | null = null;
   const pageDeleteOpen = ref(false);
   const pageDeleteLoading = ref(false);
   const pageDeleteRecursive = ref(false);
@@ -265,6 +270,44 @@ export function usePageView() {
     return file.name;
   }
 
+  function findExistingAsset(fileName: string): PageAsset | null {
+    const exact = assets.value.find((asset) => asset.file_name === fileName);
+    if (exact) {
+      return exact;
+    }
+    const lowered = fileName.toLowerCase();
+    return assets.value.find((asset) => asset.file_name.toLowerCase() === lowered) ?? null;
+  }
+
+  function requestAssetReplace(
+    fileName: string,
+    existing: PageAsset,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      assetReplaceResolver = resolve;
+      assetReplaceTarget.value = {
+        file_name: fileName,
+        existing,
+      };
+    });
+  }
+
+  function confirmAssetReplace(): void {
+    if (assetReplaceResolver) {
+      assetReplaceResolver(true);
+    }
+    assetReplaceResolver = null;
+    assetReplaceTarget.value = null;
+  }
+
+  function dismissAssetReplace(): void {
+    if (assetReplaceResolver) {
+      assetReplaceResolver(false);
+    }
+    assetReplaceResolver = null;
+    assetReplaceTarget.value = null;
+  }
+
   async function loadPage(): Promise<void> {
     const rawPageId = getMetaContent('wiki-page-id');
     const rawRevision = getMetaContent('wiki-page-revision');
@@ -334,6 +377,14 @@ export function usePageView() {
         const fileName = resolveUploadFileName(file);
         if (!fileName) {
           throw new Error('file name not found');
+        }
+        const existing = findExistingAsset(fileName);
+        if (existing) {
+          const approved = await requestAssetReplace(fileName, existing);
+          if (!approved) {
+            continue;
+          }
+          await deleteAsset(existing.id);
         }
         uploadingIndex.value = index + 1;
         uploadingFileName.value = fileName;
@@ -733,6 +784,7 @@ export function usePageView() {
     assetDetailsLoading,
     assetDeleteTarget,
     assetDeleteLoading,
+    assetReplaceTarget,
     assetInteractionDisabled,
     interactionDisabled,
     errorMessage,
@@ -774,6 +826,8 @@ export function usePageView() {
     openAssetDeleteConfirm,
     dismissAssetDeleteConfirm,
     confirmAssetDelete,
+    confirmAssetReplace,
+    dismissAssetReplace,
     requestEditLock,
     cleanupViewLock,
     reportError,

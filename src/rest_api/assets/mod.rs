@@ -425,6 +425,22 @@ pub async fn get(
     {
         Ok(Some(asset_id)) => asset_id,
         Ok(None) => {
+            match state.db().has_deleted_asset_by_page_file(&page_id, &file_name) {
+                Ok(true) => {
+                    return Ok(resp_error_json(
+                        StatusCode::GONE,
+                        "asset deleted",
+                    ));
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    return Ok(resp_error_json(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "asset lookup failed",
+                    ));
+                }
+            }
+
             return Ok(resp_error_json(
                 StatusCode::NOT_FOUND,
                 "asset not found",

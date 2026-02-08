@@ -23,7 +23,6 @@ struct AssetDeleteCommandContext {
     manager: DatabaseManager,
     target: String,
     hard_delete: bool,
-    purge: bool,
 }
 
 impl AssetDeleteCommandContext {
@@ -31,16 +30,10 @@ impl AssetDeleteCommandContext {
     /// オブジェクトの生成
     ///
     fn new(opts: &Options, sub_opts: &AssetDeleteOpts) -> Result<Self> {
-        if sub_opts.is_purge() && sub_opts.is_hard_delete() {
-            return Err(anyhow!(
-                "purge option cannot be used with hard-delete",
-            ));
-        }
         Ok(Self {
             manager: opts.open_database()?,
             target: sub_opts.target(),
             hard_delete: sub_opts.is_hard_delete(),
-            purge: sub_opts.is_purge(),
         })
     }
 
@@ -88,6 +81,19 @@ impl AssetDeleteCommandContext {
                 {
                     return Ok(AssetDeleteTarget::Asset(asset_id));
                 }
+
+                let mut matches = Vec::new();
+                for asset in self.manager.list_page_assets(&page_id)? {
+                    if asset.file_name() == file_name && asset.deleted() {
+                        matches.push(asset.id());
+                    }
+                }
+                if matches.len() == 1 {
+                    return Ok(AssetDeleteTarget::Asset(matches[0].clone()));
+                }
+                if matches.len() > 1 {
+                    return Err(anyhow!("asset path is ambiguous"));
+                }
             }
         }
 
@@ -116,36 +122,11 @@ impl AssetDeleteCommandContext {
         Ok(())
     }
 
-    fn purge_page_assets(&self, page_id: &crate::database::types::PageId) -> Result<()> {
-        let assets = self.manager.list_page_assets(page_id)?;
-        let mut deleted_assets = Vec::new();
-        for asset in assets {
-            if asset.deleted() {
-                deleted_assets.push(asset.id());
-            }
-        }
-
-        if deleted_assets.is_empty() {
-            return Ok(());
-        }
-
-        for asset_id in deleted_assets {
-            self.manager.delete_asset_hard(&asset_id)?;
-        }
-
-        Ok(())
-    }
 }
 
 // CommandContextの実装
 impl CommandContext for AssetDeleteCommandContext {
     fn exec(&self) -> Result<()> {
-        if self.purge {
-            let page_id = self.resolve_page_id(&self.target)
-                .map_err(|_| anyhow!("purge option requires page id or page path"))?;
-            return self.purge_page_assets(&page_id);
-        }
-
         match self.resolve_target()? {
             AssetDeleteTarget::Asset(asset_id) => {
                 if self.hard_delete {

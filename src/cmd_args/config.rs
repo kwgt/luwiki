@@ -906,7 +906,7 @@ impl Default for Config {
                 bind_addr: Some("0.0.0.0".to_string()),
                 bind_port: Some(8080),
                 use_tls: Some(false),
-                server_cert: Some(default_cert_path()),
+                server_cert: None,
             }),
 
             user: Some(UserSection {

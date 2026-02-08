@@ -103,9 +103,16 @@ pub async fn get(
      * レスポンス生成
      */
     let etag = asset_id.to_string();
+    let content_disposition = header::ContentDisposition {
+        disposition: header::DispositionType::Attachment,
+        parameters: vec![header::DispositionParam::Filename(
+            asset_info.file_name().to_string(),
+        )],
+    };
 
     Ok(HttpResponse::Ok()
         .content_type(asset_info.mime())
+        .insert_header((header::CONTENT_DISPOSITION, content_disposition))
         .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_IMMUTABLE))
         .insert_header((header::ETAG, etag))
         .body(data))

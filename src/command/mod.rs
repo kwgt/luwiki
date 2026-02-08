@@ -13,6 +13,7 @@ pub(crate) mod asset_add;
 pub(crate) mod asset_delete;
 pub(crate) mod asset_list;
 pub(crate) mod asset_move_to;
+pub(crate) mod asset_purge;
 pub(crate) mod asset_undelete;
 pub(crate) mod commands;
 pub(crate) mod fts_merge;

@@ -337,6 +337,7 @@ impl DatabaseManager {
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let mut group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
 
             /*
@@ -403,7 +404,6 @@ impl DatabaseManager {
              */
             if hard_delete {
                 let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
-                let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
                 for target_id in targets.iter() {
                     delete_page_hard_in_txn(
                         target_id,
@@ -427,6 +427,7 @@ impl DatabaseManager {
                         &mut index_table,
                         &mut lock_table,
                         &mut asset_table,
+                        &mut lookup_table,
                         &mut group_table,
                     )?;
                 }
@@ -837,6 +838,7 @@ impl DatabaseManager {
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
 
             delete_page_soft_in_txn(
@@ -846,6 +848,7 @@ impl DatabaseManager {
                 &mut index_table,
                 &mut lock_table,
                 &mut asset_table,
+                &mut lookup_table,
                 &group_table,
             )?;
         }
@@ -891,6 +894,7 @@ impl DatabaseManager {
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
             let now = Local::now();
 
@@ -968,6 +972,7 @@ impl DatabaseManager {
                     &mut index_table,
                     &mut lock_table,
                     &mut asset_table,
+                    &mut lookup_table,
                     &group_table,
                 )?;
             }

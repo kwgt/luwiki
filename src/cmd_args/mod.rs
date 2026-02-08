@@ -24,10 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{
     CommandContext, asset_add, asset_list, asset_delete, asset_move_to,
-    asset_undelete, commands, fts_merge, fts_rebuild, fts_search, help_all,
-    lock_delete, lock_list, page_add, page_delete, page_list, page_move_to,
-    page_undelete, page_unlock, run, user_add, user_delete, user_edit,
-    user_list,
+    asset_purge, asset_undelete, commands, fts_merge, fts_rebuild, fts_search,
+    help_all, lock_delete, lock_list, page_add, page_delete, page_list,
+    page_move_to, page_undelete, page_unlock, run, user_add, user_delete,
+    user_edit, user_list,
 };
 use crate::database::DatabaseManager;
 use crate::database::types::{AssetId, PageId};
@@ -495,6 +495,7 @@ impl Options {
                         AssetSubCommand::Add(opts) => Some(opts),
                         AssetSubCommand::List(opts) => Some(opts),
                         AssetSubCommand::Delete(_) => None,
+                        AssetSubCommand::Purge(_) => None,
                         AssetSubCommand::Undelete(_) => None,
                         AssetSubCommand::MoveTo(_) => None,
                     }
@@ -555,6 +556,7 @@ impl Options {
                     AssetSubCommand::Add(opts) => Some(opts),
                     AssetSubCommand::List(opts) => Some(opts),
                     AssetSubCommand::Delete(opts) => Some(opts),
+                    AssetSubCommand::Purge(opts) => Some(opts),
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
                 }
@@ -632,6 +634,7 @@ impl Options {
                     AssetSubCommand::Add(opts) => Some(opts),
                     AssetSubCommand::List(opts) => Some(opts),
                     AssetSubCommand::Delete(opts) => Some(opts),
+                    AssetSubCommand::Purge(opts) => Some(opts),
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
                 }
@@ -690,6 +693,7 @@ impl Options {
                 AssetSubCommand::Add(opts) => asset_add::build_context(self, opts),
                 AssetSubCommand::List(opts) => asset_list::build_context(self, opts),
                 AssetSubCommand::Delete(opts) => asset_delete::build_context(self, opts),
+                AssetSubCommand::Purge(opts) => asset_purge::build_context(self, opts),
                 AssetSubCommand::Undelete(opts) => {
                     asset_undelete::build_context(self, opts)
                 }
@@ -847,6 +851,10 @@ enum AssetSubCommand {
     /// アセットの削除
     #[command(name = "delete", alias = "d", alias = "del")]
     Delete(AssetDeleteOpts),
+
+    /// アセット削除のパージ
+    #[command(name = "purge", alias = "p")]
+    Purge(AssetPurgeOpts),
 
     /// アセットの回復
     #[command(name = "undelete", alias = "ud")]
@@ -1313,6 +1321,27 @@ impl Validate for AssetDeleteOpts {
 }
 
 // Validateトレイトの実装
+impl Validate for AssetPurgeOpts {
+    fn validate(&mut self) -> Result<()> {
+        if let Some(target) = &self.target {
+            if target.trim().is_empty() {
+                return Err(anyhow!("page id or path is empty"));
+            }
+
+            if PageId::from_string(target).is_ok() {
+                return Ok(());
+            }
+
+            if let Err(message) = validate_page_path(target) {
+                return Err(anyhow!("invalid page path: {}", message));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// Validateトレイトの実装
 impl Validate for AssetUndeleteOpts {
     fn validate(&mut self) -> Result<()> {
         if self.target.trim().is_empty() {
@@ -1321,6 +1350,12 @@ impl Validate for AssetUndeleteOpts {
 
         if AssetId::from_string(&self.target).is_err() {
             return Err(anyhow!("invalid asset id"));
+        }
+
+        if let Some(name) = &self.rename_to {
+            if let Err(message) = validate_asset_file_name(name) {
+                return Err(anyhow!("invalid file name: {}", message));
+            }
         }
 
         Ok(())
@@ -2028,10 +2063,6 @@ pub(crate) struct AssetDeleteOpts {
     #[arg(short = 'H', long = "hard-delete")]
     hard_delete: bool,
 
-    /// ソフトデリート済みのアセットをハードデリートする
-    #[arg(short = 'p', long = "purge")]
-    purge: bool,
-
     /// 削除対象のアセットIDまたはアセットパス
     #[arg()]
     target: String,
@@ -2046,16 +2077,6 @@ impl AssetDeleteOpts {
     ///
     pub(crate) fn is_hard_delete(&self) -> bool {
         self.hard_delete
-    }
-
-    ///
-    /// パージ指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// パージが指定されている場合はtrue
-    ///
-    pub(crate) fn is_purge(&self) -> bool {
-        self.purge
     }
 
     ///
@@ -2074,8 +2095,37 @@ impl ShowOptions for AssetDeleteOpts {
     fn show_options(&self) {
         println!("asset delete command options");
         println!("   hard_delete: {:?}", self.is_hard_delete());
-        println!("   purge:       {:?}", self.is_purge());
         println!("   target:      {}", self.target());
+    }
+}
+
+///
+/// サブコマンドasset_purgeのオプション
+///
+#[derive(Clone, Args, Debug)]
+pub(crate) struct AssetPurgeOpts {
+    /// 削除済みアセットを削除する対象ページ
+    #[arg()]
+    target: Option<String>,
+}
+
+impl AssetPurgeOpts {
+    ///
+    /// 削除対象指定へのアクセサ
+    ///
+    /// # 戻り値
+    /// 削除対象指定を返す
+    ///
+    pub(crate) fn target(&self) -> Option<String> {
+        self.target.clone()
+    }
+}
+
+// ShowOptionsトレイトの実装
+impl ShowOptions for AssetPurgeOpts {
+    fn show_options(&self) {
+        println!("asset purge command options");
+        println!("   target: {:?}", self.target());
     }
 }
 
@@ -2087,6 +2137,10 @@ pub(crate) struct AssetUndeleteOpts {
     /// 復帰対象のアセットID
     #[arg()]
     target: String,
+
+    /// 復帰時のアセット名
+    #[arg()]
+    rename_to: Option<String>,
 }
 
 impl AssetUndeleteOpts {
@@ -2099,6 +2153,16 @@ impl AssetUndeleteOpts {
     pub(crate) fn target(&self) -> String {
         self.target.clone()
     }
+
+    ///
+    /// 復帰時のアセット名へのアクセサ
+    ///
+    /// # 戻り値
+    /// 復帰時のアセット名を返す
+    ///
+    pub(crate) fn rename_to(&self) -> Option<String> {
+        self.rename_to.clone()
+    }
 }
 
 // ShowOptionsトレイトの実装
@@ -2106,6 +2170,7 @@ impl ShowOptions for AssetUndeleteOpts {
     fn show_options(&self) {
         println!("asset undelete command options");
         println!("   target: {}", self.target());
+        println!("   rename_to: {:?}", self.rename_to());
     }
 }
 
@@ -2767,6 +2832,7 @@ fn save_config(opts: &Options) -> Result<()> {
                 config.set_asset_list_long_info(opts.is_long_info());
             }
             AssetSubCommand::Delete(_) => {}
+            AssetSubCommand::Purge(_) => {}
             AssetSubCommand::Undelete(_) => {}
             AssetSubCommand::MoveTo(_) => {}
         }
