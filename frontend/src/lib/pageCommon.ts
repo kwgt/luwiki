@@ -257,6 +257,12 @@ export function createMarkdownRenderer(
     html: false,
     linkify: true,
     highlight(code, lang) {
+      const normalizedRaw = (lang ?? '').trim().toLowerCase();
+      if (normalizedRaw === 'mermaid') {
+        const escaped = md.utils.escapeHtml(code);
+        return `<pre class="mermaid">${escaped}</pre>`;
+      }
+
       const normalized = normalizeLanguage(lang);
       if (!normalized) {
         const escaped = md.utils.escapeHtml(code);

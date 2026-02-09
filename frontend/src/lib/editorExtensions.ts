@@ -1,12 +1,26 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import {
+  autocompletion,
+  completeFromList,
+  type CompletionSource,
+  snippetCompletion,
+} from '@codemirror/autocomplete';
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
 import { python } from '@codemirror/lang-python';
 import { rust } from '@codemirror/lang-rust';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { type Extension } from '@codemirror/state';
+import { type EditorState, type Extension, RangeSetBuilder } from '@codemirror/state';
 import { tags as t } from '@lezer/highlight';
-import { EditorView, keymap, lineNumbers } from '@codemirror/view';
+import {
+  Decoration,
+  EditorView,
+  type DecorationSet,
+  keymap,
+  lineNumbers,
+  ViewPlugin,
+  type ViewUpdate,
+} from '@codemirror/view';
 import { oneDark, oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { emacs } from '@replit/codemirror-emacs';
 import { csharp } from '@replit/codemirror-lang-csharp';
@@ -29,6 +43,18 @@ const baseTheme = EditorView.theme(
     '.cm-content': {
       fontFamily: 'var(--cm-font-family)',
       padding: '0.75rem',
+    },
+    '.cm-mermaid-keyword': {
+      color: '#005cc5',
+      fontWeight: '600',
+    },
+    '.cm-mermaid-arrow': {
+      color: '#6f42c1',
+      fontWeight: '600',
+    },
+    '.cm-mermaid-comment': {
+      color: '#6a737d',
+      fontStyle: 'italic',
     },
   },
   { dark: false },
@@ -89,6 +115,159 @@ const codeLanguages = [
   }),
 ];
 
+const mermaidKeywordDecoration = Decoration.mark({ class: 'cm-mermaid-keyword' });
+const mermaidArrowDecoration = Decoration.mark({ class: 'cm-mermaid-arrow' });
+const mermaidCommentDecoration = Decoration.mark({ class: 'cm-mermaid-comment' });
+
+function parseFenceInfo(text: string): { marker: string; lang: string } | null {
+  const matched = text.match(/^(\s*)(`{3,}|~{3,})([^\n]*)$/);
+  if (!matched) {
+    return null;
+  }
+
+  const marker = matched[2];
+  const rest = matched[3].trim();
+  const lang = rest.split(/\s+/, 1)[0]?.toLowerCase() ?? '';
+  return { marker, lang };
+}
+
+function isMermaidFenceOpen(state: EditorState, pos: number): boolean {
+  let inMermaid = false;
+  let fenceMarker = '';
+  const targetLine = state.doc.lineAt(pos).number;
+  for (let lineNo = 1; lineNo <= targetLine; lineNo += 1) {
+    const line = state.doc.line(lineNo);
+    const info = parseFenceInfo(line.text);
+    if (!inMermaid) {
+      if (info?.lang === 'mermaid') {
+        inMermaid = true;
+        fenceMarker = info.marker;
+      }
+      continue;
+    }
+    if (info && info.marker[0] === fenceMarker[0] && info.marker.length >= fenceMarker.length) {
+      inMermaid = false;
+      fenceMarker = '';
+    }
+  }
+  return inMermaid;
+}
+
+function buildMermaidDecorations(view: EditorView): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  let inMermaid = false;
+  let fenceMarker = '';
+
+  for (let lineNo = 1; lineNo <= view.state.doc.lines; lineNo += 1) {
+    const line = view.state.doc.line(lineNo);
+    const info = parseFenceInfo(line.text);
+
+    if (!inMermaid) {
+      if (info?.lang === 'mermaid') {
+        inMermaid = true;
+        fenceMarker = info.marker;
+      }
+      continue;
+    }
+
+    if (info && info.marker[0] === fenceMarker[0] && info.marker.length >= fenceMarker.length) {
+      inMermaid = false;
+      fenceMarker = '';
+      continue;
+    }
+
+    const lineStart = line.from;
+    const lineText = line.text;
+
+    const commentMatch = lineText.match(/%%.*/);
+    if (commentMatch && commentMatch.index !== undefined) {
+      builder.add(
+        lineStart + commentMatch.index,
+        lineStart + commentMatch.index + commentMatch[0].length,
+        mermaidCommentDecoration,
+      );
+    }
+
+    const keywordRegex = /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|erDiagram|journey|gantt|pie|mindmap|timeline|quadrantChart|gitGraph|subgraph|end|participant|actor|class|linkStyle|style)\b/g;
+    for (;;) {
+      const matched = keywordRegex.exec(lineText);
+      if (!matched || matched.index === undefined) {
+        break;
+      }
+      builder.add(
+        lineStart + matched.index,
+        lineStart + matched.index + matched[0].length,
+        mermaidKeywordDecoration,
+      );
+    }
+
+    const arrowRegex = /(<-->|-->|==>|-.->|---|--x|x--|o--|--o|<--|<->)/g;
+    for (;;) {
+      const matched = arrowRegex.exec(lineText);
+      if (!matched || matched.index === undefined) {
+        break;
+      }
+      builder.add(
+        lineStart + matched.index,
+        lineStart + matched.index + matched[0].length,
+        mermaidArrowDecoration,
+      );
+    }
+  }
+
+  return builder.finish();
+}
+
+const mermaidHighlightPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildMermaidDecorations(view);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = buildMermaidDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (value) => value.decorations,
+  },
+);
+
+const mermaidCompletionList = completeFromList([
+  snippetCompletion('flowchart TD\n  A[Start] --> B[End]', {
+    label: 'flowchart template',
+    type: 'snippet',
+  }),
+  snippetCompletion('sequenceDiagram\n  participant A\n  participant B\n  A->>B: message', {
+    label: 'sequence template',
+    type: 'snippet',
+  }),
+  { label: 'flowchart', type: 'keyword' },
+  { label: 'graph', type: 'keyword' },
+  { label: 'sequenceDiagram', type: 'keyword' },
+  { label: 'classDiagram', type: 'keyword' },
+  { label: 'stateDiagram-v2', type: 'keyword' },
+  { label: 'erDiagram', type: 'keyword' },
+  { label: 'gantt', type: 'keyword' },
+  { label: 'subgraph', type: 'keyword' },
+  { label: 'participant', type: 'keyword' },
+  { label: 'linkStyle', type: 'keyword' },
+  { label: '-->', type: 'operator' },
+  { label: '==>', type: 'operator' },
+  { label: '-.->', type: 'operator' },
+]);
+
+const mermaidCompletionSource: CompletionSource = (context) => {
+  if (!isMermaidFenceOpen(context.state, context.pos)) {
+    return null;
+  }
+  return mermaidCompletionList(context);
+};
+
 export function buildBaseExtensions(): Extension[] {
   return [
     EditorView.lineWrapping,
@@ -99,6 +278,10 @@ export function buildBaseExtensions(): Extension[] {
       codeLanguages,
       extensions: [wikiLinkExtension],
     }),
+    autocompletion({
+      override: [mermaidCompletionSource],
+    }),
+    mermaidHighlightPlugin,
     baseTheme,
   ];
 }

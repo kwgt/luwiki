@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { usePageView } from '../composables/usePageView';
 import { useUiSettings } from '../composables/useUiSettings';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
+import { renderMermaidBlocks } from '../lib/mermaidRenderer';
 
 const {
   pageId,
@@ -107,6 +108,8 @@ const isGlobalDragging = ref(false);
 const globalDragDepth = ref(0);
 const pageMoveInputRef = ref<HTMLInputElement | null>(null);
 const pageCreateInputRef = ref<HTMLInputElement | null>(null);
+const renderedArticleRef = ref<HTMLElement | null>(null);
+let mermaidRenderSeq = 0;
 const breadcrumbItems = computed(() => {
   const currentPath = pagePath.value || '/';
   if (currentPath === '/') {
@@ -444,7 +447,17 @@ watch(renderedHtml, async (value) => {
   if (!value) {
     return;
   }
+  const seq = ++mermaidRenderSeq;
   await nextTick();
+  if (seq !== mermaidRenderSeq) {
+    return;
+  }
+  if (renderedArticleRef.value) {
+    await renderMermaidBlocks(renderedArticleRef.value);
+  }
+  if (seq !== mermaidRenderSeq) {
+    return;
+  }
   scrollToHashIfPresent();
 });
 </script>
@@ -611,6 +624,7 @@ watch(renderedHtml, async (value) => {
             class="flex min-h-0 flex-1 overflow-hidden border border-base-300 bg-transparent shadow-sm"
           >
             <article
+              ref="renderedArticleRef"
               class="markdown-body h-full flex-1 min-h-0 min-w-0 w-full overflow-auto p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"

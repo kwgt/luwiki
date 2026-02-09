@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     default_assets_path,
-    default_cert_path,
     default_db_path,
     default_fts_index_path,
     default_log_path,

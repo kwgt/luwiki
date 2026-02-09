@@ -90,6 +90,15 @@
   padding: 0;
 }
 
+.markdown-body pre.mermaid {
+  overflow-x: auto;
+}
+
+.markdown-body pre.mermaid svg {
+  height: auto;
+  max-width: 100%;
+}
+
 .markdown-body blockquote {
   border-left: 4px solid var(--md-border, #d0d7de);
   color: var(--md-muted, #57606a);

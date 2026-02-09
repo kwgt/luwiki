@@ -11,6 +11,7 @@ import {
   normalizeWikiPath,
 } from '../lib/pageCommon';
 import { expandRenderMacros } from '../lib/macroEngine';
+import { renderMermaidBlocks } from '../lib/mermaidRenderer';
 
 const {
   pageId,
@@ -102,6 +103,8 @@ const tocItems = ref<{ level: number; text: string; anchor: string }[]>([]);
 let derivedTimer: number | null = null;
 let derivedRenderSeq = 0;
 const previewMode = ref(false);
+const previewArticleRef = ref<HTMLElement | null>(null);
+let mermaidRenderSeq = 0;
 
 const {
   themeOptions,
@@ -164,6 +167,21 @@ function updateScreenState(): void {
 
 const showEditorPanel = computed(() => isLargeScreen.value || !previewMode.value);
 const showPreviewPanel = computed(() => isLargeScreen.value || previewMode.value);
+
+async function renderPreviewMermaid(): Promise<void> {
+  if (!renderedHtml.value) {
+    return;
+  }
+  const seq = ++mermaidRenderSeq;
+  await nextTick();
+  if (seq !== mermaidRenderSeq) {
+    return;
+  }
+  if (!showPreviewPanel.value || !previewArticleRef.value) {
+    return;
+  }
+  await renderMermaidBlocks(previewArticleRef.value);
+}
 
 function ensureMarkdownRenderer(): ReturnType<typeof createMarkdownRenderer> {
   const path = pagePath.value || resolveEditPath();
@@ -257,6 +275,20 @@ watch(sourceText, (value) => {
 
 watch(pagePath, () => {
   void updateDerivedFromText(sourceText.value);
+});
+
+watch(renderedHtml, async (value) => {
+  if (!value) {
+    return;
+  }
+  await renderPreviewMermaid();
+});
+
+watch(showPreviewPanel, async (visible) => {
+  if (!visible) {
+    return;
+  }
+  await renderPreviewMermaid();
 });
 
 watch(isLoading, (loading) => {
@@ -617,6 +649,7 @@ function buildAssetDownloadUrl(fileName: string): string {
             class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 overflow-hidden border border-base-300 bg-transparent shadow-sm md:min-h-0"
           >
             <article
+              ref="previewArticleRef"
               class="markdown-body flex-1 min-h-0 w-full overflow-auto p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"
