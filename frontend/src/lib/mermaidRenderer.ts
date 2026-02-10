@@ -30,6 +30,7 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
+      suppressErrorRendering: true,
     });
     mermaidInitialized = true;
   }
@@ -49,7 +50,7 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
     mermaidRenderCount += 1;
 
     try {
-      const { svg } = await mermaid.render(renderId, source);
+      const { svg } = await mermaid.render(renderId, source, block);
       block.innerHTML = svg;
       block.setAttribute('data-mermaid-source', source);
     } catch {
