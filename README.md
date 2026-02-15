@@ -88,6 +88,8 @@ Options:
   - [ ] バックアップ(インポート／エクスポート)機能の実装
   - Markdown追加機能
       - [x] Github風チェックボックス
+      - [x] Mermaid対応 (Mermaid.js組み込み)
+      - [x] 数式対応 (@mdit/plugin-katexを使用)
   - [x] テンプレート機能
   - マクロ機能
       - [x] コメント記述マクロ

@@ -2,6 +2,7 @@ import axios from 'axios';
 import MarkdownIt from 'markdown-it';
 import anchor from 'markdown-it-anchor';
 import taskLists from 'markdown-it-task-lists';
+import { katex } from '@mdit/plugin-katex';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-markup';
 import 'prismjs/components/prism-markdown';
@@ -284,6 +285,11 @@ export function createMarkdownRenderer(
   if (taskListEnabled) {
     md.use(taskLists, { enabled: false });
   }
+
+  md.use(katex, {
+    throwOnError: false,
+    errorColor: '#cc0000',
+  });
 
   md.use(anchor, {
     slugify: slugifyHeading,
