@@ -13,7 +13,7 @@
   |:--|:--|:--
   | `now[:utc][:iso8601]` | 即時変換型 | [現在の日時を展開](#macro-now)
   | `today[:utc][:iso8601]` | 即時変換型 | [現在の日付を展開](#macro-today)
-  | `page[:id]` | 即時変換型 | [ページ情報を展開](#macro-page)
+  | `page[:id][:basename]` | 即時変換型 | [ページ情報を展開](#macro-page)
   | `user[:display]` | 即時変換型 | [ユーザ情報を展開](#macro-user)
   | `children[:depth={number}][:recursive]` | レンダリング時変換型 | [子ページのリストへ展開](#macro-children)
   | `toc[:depth={number}]` | レンダリング時変換型 | [ページ内のTOCへ展開](#macro-toc)
@@ -72,6 +72,10 @@
 | 引数 | 意味 | 省略形 | 指定
 |:--|:--|:--|:--
 | `id` | ページIDの展開を行う | (なし) | 任意
+| `basename` | ページ名(パスの最後のエレメント)の展開を行う | b,bn | 任意
+
+#### 注記
+- `id`と`basename`の同時指定はエラーとして扱う。
 
 <a id="macro-user"></a>
 ### user
@@ -190,5 +194,4 @@ Obsidian 系由来
 
 ### 注記
 - `![[asset:/path/to/page:image.png]]`は`[image.png](!asset:/path/to/page:image.png)`と等価に展開される。
-
 

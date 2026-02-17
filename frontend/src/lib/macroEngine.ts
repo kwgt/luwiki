@@ -226,12 +226,24 @@ function formatToday(args: MacroArgs): string {
   return `${pad4(now.getFullYear())}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())}`;
 }
 
-function expandPageMacro(args: MacroArgs, context: MacroContext): string {
-  if (hasFlag(args, ['id'])) {
+function expandPageMacro(args: MacroArgs, context: MacroContext): string | null {
+  const useId = hasFlag(args, ['id']);
+  const useBasename = hasFlag(args, ['basename', 'b', 'bn']);
+
+  if (useId && useBasename) {
+    return null;
+  }
+
+  if (useId) {
     return context.pageId && context.pageId.length > 0
       ? context.pageId
       : context.pagePath;
   }
+
+  if (useBasename) {
+    return extractPageName(context.pagePath);
+  }
+
   return context.pagePath;
 }
 
