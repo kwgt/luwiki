@@ -2,8 +2,14 @@ let mermaidModulePromise: Promise<typeof import('mermaid')> | null = null;
 let panZoomModulePromise: Promise<any> | null = null;
 let mermaidInitialized = false;
 let mermaidRenderCount = 0;
-const panZoomBySvg = new WeakMap<SVGSVGElement, any>();
 let activeViewerSvg: SVGSVGElement | null = null;
+
+const INLINE_MAX_SCALE_ABS = 2.0;
+const INLINE_MAX_FONT_PX = 16;
+const INLINE_MAX_HEIGHT_VH_RATIO = 0.6;
+const INLINE_MAX_HEIGHT_PX = 480;
+const INLINE_MIN_LOGICAL_WIDTH = 480;
+const INLINE_TEXT_MEASURE_CORRECTION = 0.50;
 
 interface MermaidViewerModal {
   root: HTMLDivElement;
@@ -83,6 +89,13 @@ function ensureViewerModal(): MermaidViewerModal {
 
 function closeViewerModal(): void {
   const modal = ensureViewerModal();
+  if (activeViewerSvg) {
+    const instance = (activeViewerSvg as any).__luwikiViewerPanZoom;
+    if (instance && typeof instance.destroy === 'function') {
+      instance.destroy();
+    }
+    delete (activeViewerSvg as any).__luwikiViewerPanZoom;
+  }
   modal.root.classList.add('hidden');
   modal.root.classList.remove('is-fullscreen');
   modal.canvas.innerHTML = '';
@@ -131,27 +144,190 @@ function normalizeSvgElement(svg: SVGSVGElement): void {
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 }
 
-function applyInlineSvgSizing(svg: SVGSVGElement): void {
-  svg.style.setProperty('width', '100%', 'important');
-  svg.style.setProperty('height', 'auto', 'important');
-  svg.style.setProperty('min-height', '0', 'important');
-  svg.style.setProperty('max-width', '100%', 'important');
-  svg.style.setProperty('overflow', 'visible', 'important');
-
-  let parent: HTMLElement | null = svg.parentElement;
-  while (parent && parent.tagName !== 'PRE') {
-    parent.style.setProperty('width', '100%', 'important');
-    parent.style.setProperty('height', 'auto', 'important');
-    parent.style.setProperty('min-height', '0', 'important');
-    parent.style.setProperty('max-height', 'none', 'important');
-    parent.style.setProperty('overflow', 'visible', 'important');
-    parent = parent.parentElement;
+function getSvgViewBoxSize(svg: SVGSVGElement): { width: number; height: number } | null {
+  const viewBox = svg.getAttribute('viewBox');
+  if (viewBox) {
+    const values = viewBox
+      .trim()
+      .split(/[\s,]+/)
+      .map((value) => Number.parseFloat(value));
+    if (values.length === 4) {
+      const width = values[2];
+      const height = values[3];
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        return { width, height };
+      }
+    }
   }
 
-  const block = svg.closest('pre.mermaid');
+  const width = toNumber(svg.getAttribute('width'));
+  const height = toNumber(svg.getAttribute('height'));
+  if (width && height) {
+    return { width, height };
+  }
+  return null;
+}
+
+function getInlineHeightLimitPx(): number {
+  const viewportHeight = Number.isFinite(window.innerHeight) ? window.innerHeight : INLINE_MAX_HEIGHT_PX;
+  const computed = Math.min(viewportHeight * INLINE_MAX_HEIGHT_VH_RATIO, INLINE_MAX_HEIGHT_PX);
+  return Math.max(240, computed);
+}
+
+function clampInlineAspectRatio(width: number, height: number): number {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return 1;
+  }
+  const ratio = width / height;
+  return Math.min(1.5, Math.max(2 / 3, ratio));
+}
+
+function computeInlineScale(
+  containerWidth: number,
+  viewBoxWidth: number,
+  viewBoxHeight: number,
+): number {
+  const scaleToContainer = containerWidth / viewBoxWidth;
+  const maxScaleByLogicalWidth = containerWidth / INLINE_MIN_LOGICAL_WIDTH;
+  const maxScaleByHeight = getInlineHeightLimitPx() / viewBoxHeight;
+
+  return Math.min(
+    scaleToContainer,
+    INLINE_MAX_SCALE_ABS,
+    maxScaleByLogicalWidth,
+    maxScaleByHeight,
+  );
+}
+
+function getInlineContainerWidth(
+  block: HTMLElement | null,
+  svg: SVGSVGElement,
+): number {
+  if (block && block.clientWidth > 0) {
+    return block.clientWidth;
+  }
+  const parent = block?.parentElement as HTMLElement | null;
+  if (parent && parent.clientWidth > 0) {
+    return parent.clientWidth;
+  }
+  const fallback = (svg.parentElement as HTMLElement | null)?.clientWidth ?? 0;
+  return fallback;
+}
+
+function measureMaxRenderedTextPx(svg: SVGSVGElement): number {
+  const svgSize = getSvgViewBoxSize(svg);
+  const svgRect = svg.getBoundingClientRect();
+  const renderScale =
+    svgSize && svgSize.width > 0 && Number.isFinite(svgRect.width) && svgRect.width > 0
+      ? svgRect.width / svgSize.width
+      : 0;
+
+  let maxSize = 0;
+  const textNodes = Array.from(svg.querySelectorAll<SVGTextElement>('text, tspan'));
+  for (const node of textNodes) {
+    const rect = node.getBoundingClientRect();
+    if (Number.isFinite(rect.height) && rect.height > 0) {
+      maxSize = Math.max(maxSize, rect.height);
+      continue;
+    }
+    try {
+      const bbox = node.getBBox();
+      if (Number.isFinite(bbox.height) && bbox.height > 0 && renderScale > 0) {
+        maxSize = Math.max(maxSize, bbox.height * renderScale);
+        continue;
+      }
+    } catch {
+      // Ignore and continue fallback.
+    }
+    const fontSize = toNumber(window.getComputedStyle(node).fontSize);
+    if (fontSize && renderScale > 0) {
+      maxSize = Math.max(maxSize, fontSize * renderScale);
+    }
+  }
+
+  const foreignNodes = Array.from(svg.querySelectorAll<HTMLElement>('foreignObject *'));
+  for (const node of foreignNodes) {
+    if ((node.textContent ?? '').trim().length === 0) {
+      continue;
+    }
+    const rect = node.getBoundingClientRect();
+    if (Number.isFinite(rect.height) && rect.height > 0) {
+      maxSize = Math.max(maxSize, rect.height);
+      continue;
+    }
+    const fontSize = toNumber(window.getComputedStyle(node).fontSize);
+    if (fontSize && renderScale > 0) {
+      maxSize = Math.max(maxSize, fontSize * renderScale);
+    }
+  }
+
+  return maxSize;
+}
+
+function applyInlineTargetWidth(
+  svg: SVGSVGElement,
+  targetWidthPx: number,
+): void {
+  const targetWidthStyle = `${Math.max(1, Math.floor(targetWidthPx))}px`;
+  svg.style.setProperty('width', targetWidthStyle, 'important');
+  svg.style.setProperty('max-width', '100%', 'important');
+  svg.style.setProperty('margin-left', 'auto', 'important');
+  svg.style.setProperty('margin-right', 'auto', 'important');
+}
+
+function enforceInlineMaxTextSize(
+  svg: SVGSVGElement,
+  currentTargetWidth: number,
+): void {
+  const renderedMaxText = measureMaxRenderedTextPx(svg) * INLINE_TEXT_MEASURE_CORRECTION;
+  if (renderedMaxText <= 0 || renderedMaxText <= INLINE_MAX_FONT_PX) {
+    return;
+  }
+  const shrinkRatio = INLINE_MAX_FONT_PX / renderedMaxText;
+  const adjustedWidth = currentTargetWidth * shrinkRatio;
+  applyInlineTargetWidth(svg, adjustedWidth);
+}
+
+function applyInlineSvgSizing(svg: SVGSVGElement): void {
+  const size = getSvgViewBoxSize(svg);
+  const block = svg.closest('pre.mermaid') as HTMLElement | null;
+  const containerWidth = getInlineContainerWidth(block, svg);
+  const maxHeightStyle = `${Math.ceil(getInlineHeightLimitPx())}px`;
+
+  svg.style.setProperty('width', '100%', 'important');
+  svg.style.setProperty('height', '100%', 'important');
+  svg.style.setProperty('min-height', '0', 'important');
+  svg.style.setProperty('max-width', '100%', 'important');
+  svg.style.setProperty('max-height', '100%', 'important');
+  svg.style.setProperty('overflow', 'hidden', 'important');
+
   if (block) {
-    (block as HTMLElement).style.setProperty('height', 'auto', 'important');
-    (block as HTMLElement).style.setProperty('max-height', 'none', 'important');
+    block.style.setProperty('height', 'auto', 'important');
+    block.style.setProperty('max-height', maxHeightStyle, 'important');
+    block.style.setProperty('overflow', 'hidden', 'important');
+    block.style.setProperty('display', 'flex', 'important');
+    block.style.setProperty('align-items', 'center', 'important');
+    block.style.setProperty('justify-content', 'center', 'important');
+    block.style.setProperty('width', '100%', 'important');
+    block.style.setProperty('max-width', '100%', 'important');
+    block.style.setProperty('margin-left', '0', 'important');
+    block.style.setProperty('margin-right', '0', 'important');
+    if (size) {
+      const aspectRatio = clampInlineAspectRatio(size.width, size.height);
+      block.style.setProperty('aspect-ratio', `${aspectRatio}`, 'important');
+    } else {
+      block.style.setProperty('aspect-ratio', '1', 'important');
+    }
+
+    if (size && containerWidth > 0) {
+      const scale = computeInlineScale(containerWidth, size.width, size.height);
+      const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+      const targetWidth = Math.min(containerWidth, size.width * safeScale);
+      applyInlineTargetWidth(svg, targetWidth);
+      enforceInlineMaxTextSize(svg, targetWidth);
+    } else {
+      svg.style.setProperty('width', '100%', 'important');
+    }
   }
 }
 
@@ -176,47 +352,39 @@ function refitPanZoom(svg: SVGSVGElement | null): void {
   if (!svg) {
     return;
   }
-  const instance = panZoomBySvg.get(svg);
+  const instance = (svg as any).__luwikiViewerPanZoom;
   if (!instance) {
     return;
   }
   instance.resize();
-  if (svg === activeViewerSvg) {
-    instance.fit();
-    instance.center();
-  } else {
-    applyInlineSvgSizing(svg);
-  }
+  instance.fit();
+  instance.center();
 }
 
-async function initializePanZoom(svg: SVGSVGElement, mode: 'inline' | 'viewer'): Promise<void> {
-  const existing = panZoomBySvg.get(svg);
+async function initializeViewerPanZoom(svg: SVGSVGElement): Promise<void> {
+  const existing = (svg as any).__luwikiViewerPanZoom;
   if (existing) {
     existing.resize();
-    if (mode === 'viewer') {
-      existing.fit();
-      existing.center();
-    }
+    existing.fit();
+    existing.center();
     return;
   }
 
   const svgPanZoom = await loadPanZoom();
   const instance = svgPanZoom(svg, {
     zoomEnabled: true,
-    controlIconsEnabled: mode === 'viewer',
-    fit: mode === 'viewer',
-    center: mode === 'viewer',
+    controlIconsEnabled: true,
+    fit: true,
+    center: true,
     minZoom: 0.2,
     maxZoom: 20,
     dblClickZoomEnabled: true,
     mouseWheelZoomEnabled: true,
   });
-  panZoomBySvg.set(svg, instance);
-  if (mode === 'viewer') {
-    instance.resize();
-    instance.fit();
-    instance.center();
-  }
+  (svg as any).__luwikiViewerPanZoom = instance;
+  instance.resize();
+  instance.fit();
+  instance.center();
 }
 
 async function openViewer(source: string, mode: 'expanded' | 'fullscreen'): Promise<void> {
@@ -237,7 +405,7 @@ async function openViewer(source: string, mode: 'expanded' | 'fullscreen'): Prom
       normalizeSvgElement(svgElement);
       fitViewBoxToContent(svgElement);
       svgElement.style.height = '100%';
-      await initializePanZoom(svgElement, 'viewer');
+      await initializeViewerPanZoom(svgElement);
       activeViewerSvg = svgElement;
       requestAnimationFrame(() => {
         refitPanZoom(svgElement);
@@ -325,12 +493,10 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
       if (svgElement) {
         normalizeSvgElement(svgElement);
         fitViewBoxToContent(svgElement);
-        await initializePanZoom(svgElement, 'inline');
         applyInlineSvgSizing(svgElement);
         requestAnimationFrame(() => {
           fitViewBoxToContent(svgElement);
           applyInlineSvgSizing(svgElement);
-          refitPanZoom(svgElement);
         });
       }
     } catch {
@@ -359,4 +525,14 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   viewerModal.closeButton.click();
+});
+
+window.addEventListener('resize', () => {
+  window.requestAnimationFrame(() => {
+    const inlineSvgs = document.querySelectorAll<SVGSVGElement>('pre.mermaid svg');
+    inlineSvgs.forEach((svg) => {
+      applyInlineSvgSizing(svg);
+    });
+    refitPanZoom(activeViewerSvg);
+  });
 });

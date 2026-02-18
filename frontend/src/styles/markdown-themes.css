@@ -91,44 +91,32 @@
 }
 
 .markdown-body pre.mermaid {
-  overflow: auto;
+  overflow: hidden;
   position: relative;
   padding: 0;
   height: auto !important;
   max-height: none;
+  min-height: 16rem;
 }
 
 .markdown-body pre.mermaid svg {
-  height: auto !important;
-  max-width: none;
-  overflow: visible !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  max-width: 100%;
+  overflow: hidden !important;
   width: 100% !important;
 }
 
-.markdown-body pre.mermaid .svg-pan-zoom_container {
-  display: block !important;
-  height: auto !important;
-  max-height: none !important;
-  width: 100% !important;
-}
-
-.markdown-body pre.mermaid .svg-pan-zoom_container > svg {
-  height: auto !important;
-  max-height: none !important;
-  overflow: visible !important;
-  width: 100% !important;
-}
-
-.markdown-body pre.mermaid > * {
-  height: auto !important;
-  max-height: none !important;
+.markdown-body pre.mermaid > *:not(.mermaid-toolbar) {
+  height: 100% !important;
+  max-height: 100% !important;
   min-height: 0 !important;
 }
 
-.markdown-body pre.mermaid > * svg {
-  height: auto !important;
-  max-height: none !important;
-  overflow: visible !important;
+.markdown-body pre.mermaid > *:not(.mermaid-toolbar) svg {
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
 }
 
 .markdown-body pre.mermaid .mermaid-toolbar {
