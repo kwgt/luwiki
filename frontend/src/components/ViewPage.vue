@@ -4,6 +4,7 @@ import { usePageView } from '../composables/usePageView';
 import { useUiSettings } from '../composables/useUiSettings';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
 import { renderMermaidBlocks } from '../lib/mermaidRenderer';
+import { getWikiTitle } from '../lib/pageCommon';
 
 const {
   pageId,
@@ -144,6 +145,7 @@ const canMovePage = computed(
     && !pageMeta.value?.page_info.deleted
     && (pagePath.value || '/') !== '/',
 );
+const wikiTitle = getWikiTitle();
 
 function applySidePanelCollapsed(value: boolean): void {
   localStorage.setItem('luwiki-side-collapsed', value ? '1' : '0');
@@ -460,6 +462,11 @@ watch(renderedHtml, async (value) => {
   }
   scrollToHashIfPresent();
 });
+
+watch(pageTitle, (value) => {
+  const title = value || '/';
+  document.title = `${title} | ${wikiTitle}`;
+}, { immediate: true });
 </script>
 
 <template>
@@ -478,7 +485,7 @@ watch(renderedHtml, async (value) => {
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            LuWiki VIEW
+            {{ wikiTitle }} VIEW
           </p>
           <h1
             class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"

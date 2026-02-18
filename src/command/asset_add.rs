@@ -19,9 +19,6 @@ use crate::database::{DatabaseManager, DbError};
 use crate::rest_api::{validate_asset_file_name, validate_page_path};
 use super::CommandContext;
 
-/// アセットの最大サイズ(10MiB)
-const MAX_ASSET_SIZE: u64 = 10 * 1024 * 1024;
-
 ///
 /// "asset add"サブコマンドのコンテキスト情報をパックした構造体
 ///
@@ -31,6 +28,7 @@ struct AssetAddCommandContext {
     mime_type: Option<String>,
     file_path: std::path::PathBuf,
     target: String,
+    asset_limit_size: u64,
 }
 
 impl AssetAddCommandContext {
@@ -44,6 +42,7 @@ impl AssetAddCommandContext {
             mime_type: sub_opts.mime_type(),
             file_path: sub_opts.file_path(),
             target: sub_opts.target(),
+            asset_limit_size: opts.asset_limit_size()?,
         })
     }
 }
@@ -52,7 +51,7 @@ impl AssetAddCommandContext {
 impl CommandContext for AssetAddCommandContext {
     fn exec(&self) -> Result<()> {
         let metadata = fs::metadata(&self.file_path)?;
-        if metadata.len() > MAX_ASSET_SIZE {
+        if metadata.len() > self.asset_limit_size {
             return Err(anyhow!("asset size exceeds limit"));
         }
 

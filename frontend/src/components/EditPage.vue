@@ -7,6 +7,7 @@ import { fetchCurrentUser } from '../api/users';
 import {
   createMarkdownRenderer,
   extractTitle,
+  getWikiTitle,
   extractToc,
   normalizeWikiPath,
 } from '../lib/pageCommon';
@@ -167,6 +168,7 @@ function updateScreenState(): void {
 
 const showEditorPanel = computed(() => isLargeScreen.value || !previewMode.value);
 const showPreviewPanel = computed(() => isLargeScreen.value || previewMode.value);
+const wikiTitle = getWikiTitle();
 
 async function renderPreviewMermaid(): Promise<void> {
   if (!renderedHtml.value) {
@@ -298,6 +300,11 @@ watch(isLoading, (loading) => {
   }
   sourceStatus.value = pageId.value ? '読込完了' : '新規ページ';
 });
+
+watch(editorTitle, (value) => {
+  const title = value || '編集画面';
+  document.title = `編集: ${title} | ${wikiTitle}`;
+}, { immediate: true });
 
 const isAssetDragging = ref(false);
 const assetDragDepth = ref(0);
@@ -467,7 +474,7 @@ function buildAssetDownloadUrl(fileName: string): string {
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            LuWiki EDIT
+            {{ wikiTitle }} EDIT
           </p>
           <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate">
             {{ editorTitle || '編集画面' }}

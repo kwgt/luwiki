@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePageRevision } from '../composables/usePageRevision';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
+import { getWikiTitle } from '../lib/pageCommon';
 
 const {
   themeOptions,
@@ -143,6 +144,7 @@ const diffHeaderLabel = computed(() => {
   const sorted = [...selectedRevisions.value].sort((a, b) => a - b);
   return `Rev ${sorted[0]} → Rev ${sorted[sorted.length - 1]}`;
 });
+const wikiTitle = getWikiTitle();
 
 function applySidePanelCollapsed(value: boolean): void {
   localStorage.setItem('luwiki-side-collapsed', value ? '1' : '0');
@@ -262,6 +264,11 @@ onMounted(() => {
   setupRevisionObserver();
   void loadPage();
 });
+
+watch(pageTitle, (value) => {
+  const title = value || '/';
+  document.title = `履歴: ${title} | ${wikiTitle}`;
+}, { immediate: true });
 </script>
 
 <template>
@@ -270,7 +277,7 @@ onMounted(() => {
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            LuWiki REVISION
+            {{ wikiTitle }} REVISION
           </p>
           <h1
             class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"

@@ -16,8 +16,6 @@ use crate::http_server::app_state::AppState;
 use crate::http_server::static_files;
 use crate::rest_api;
 
-const ASSET_MAX_BYTES: u64 = 10 * 1024 * 1024;
-
 ///
 /// ルートページ表示
 ///
@@ -275,6 +273,10 @@ fn render_page_html(
     html = html.replace("{{PAGE_ID}}", page_id);
     html = html.replace("{{REVISION}}", revision);
     html = html.replace(
+        "{{WIKI_TITLE}}",
+        &escape_html_attribute(state.wiki_title()),
+    );
+    html = html.replace(
         "{{FRONTEND_UI_FONT}}",
         &escape_html_attribute(state.frontend_config().ui_font()),
     );
@@ -296,7 +298,7 @@ fn render_page_html(
     );
     html = html.replace(
         "{{ASSET_MAX_BYTES}}",
-        &ASSET_MAX_BYTES.to_string(),
+        &state.asset_limit_size().to_string(),
     );
 
     HttpResponse::Ok()

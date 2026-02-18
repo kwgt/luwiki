@@ -114,8 +114,23 @@ fn default_cert_path() -> PathBuf {
     DEFAULT_DATA_PATH.join("server.pem")
 }
 
-/// アセットの最大サイズ(10MiB)
-const MAX_ASSET_SIZE: u64 = 10 * 1024 * 1024;
+/// デフォルトのWikiタイトル
+const DEFAULT_WIKI_TITLE: &str = "LUWIKI";
+
+/// アセットサイズ単位(KiB)
+const ASSET_SIZE_KIB: u64 = 1024;
+
+/// アセットサイズ単位(MiB)
+const ASSET_SIZE_MIB: u64 = ASSET_SIZE_KIB * 1024;
+
+/// アセットサイズ上限のデフォルト値
+const DEFAULT_ASSET_LIMIT_SIZE_TEXT: &str = "10M";
+
+/// アセットサイズ上限のデフォルト値(10MiB)
+const DEFAULT_ASSET_LIMIT_SIZE: u64 = 10 * ASSET_SIZE_MIB;
+
+/// アセットサイズ上限として許可する最大値(100MiB)
+const MAX_ASSET_LIMIT_SIZE: u64 = 100 * ASSET_SIZE_MIB;
 
 ///
 /// show_options()実装を要求するトレイト
@@ -248,6 +263,14 @@ pub struct Options {
     /// テンプレートページの格納パス
     #[arg(short = 't', long = "template-root", value_name = "PATH")]
     template_root: Option<String>,
+
+    /// Wikiタイトル
+    #[arg(short = 'T', long = "wiki-title", value_name = "TITLE")]
+    wiki_title: Option<String>,
+
+    /// アセットサイズ上限
+    #[arg(short = 'S', long = "asset-limit-size", value_name = "SIZE")]
+    asset_limit_size: Option<String>,
 
     /// 設定情報の表示
     #[arg(long = "show-options")]
@@ -395,6 +418,36 @@ impl Options {
     }
 
     ///
+    /// Wikiタイトルへのアクセサ
+    ///
+    /// # 戻り値
+    /// Wikiタイトルが設定されている場合はその値を返す。未設定または空白のみの
+    /// 場合はデフォルト値を返す。
+    ///
+    pub(crate) fn wiki_title(&self) -> String {
+        self.wiki_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| DEFAULT_WIKI_TITLE.to_string())
+    }
+
+    ///
+    /// アセットサイズ上限へのアクセサ
+    ///
+    /// # 戻り値
+    /// アップロード可能なアセットサイズの上限値(バイト単位)を返す。
+    ///
+    pub(crate) fn asset_limit_size(&self) -> Result<u64> {
+        let raw = self
+            .asset_limit_size
+            .as_deref()
+            .unwrap_or(DEFAULT_ASSET_LIMIT_SIZE_TEXT);
+        parse_asset_limit_size(raw)
+    }
+
+    ///
     /// コンフィギュレーションファイルの適用
     ///
     /// # 戻り値
@@ -469,6 +522,18 @@ impl Options {
                     }
                 }
 
+                if self.wiki_title.is_none() {
+                    if let Some(title) = config.wiki_title() {
+                        self.wiki_title = Some(title);
+                    }
+                }
+
+                if self.asset_limit_size.is_none() {
+                    if let Some(size) = config.asset_limit_size() {
+                        self.asset_limit_size = Some(size);
+                    }
+                }
+
                 // コマンド毎のオプション情報へもコンフィギュレーションの内容を
                 // 反映する。
                 let opts: Option<&mut dyn ApplyConfig> = match
@@ -529,6 +594,10 @@ impl Options {
             return Err(anyhow!(
                 "--show-options and --save-config can't be specified mutually"
             ));
+        }
+
+        if let Some(value) = self.asset_limit_size.as_deref() {
+            parse_asset_limit_size(value)?;
         }
 
         if let Some(command) = &mut self.command {
@@ -605,6 +674,11 @@ impl Options {
             self.template_root
                 .as_deref()
                 .unwrap_or("(none)")
+        );
+        println!("   wiki title:       {}", self.wiki_title());
+        println!(
+            "   asset limit size: {}",
+            self.asset_limit_size().unwrap_or(DEFAULT_ASSET_LIMIT_SIZE),
         );
 
         // サブコマンドが指定されており、そのサブコマンドがオプションを持つなら
@@ -1277,10 +1351,7 @@ impl Validate for AssetAddOpts {
             return Err(anyhow!("{} is not file", path.display()));
         }
 
-        let metadata = fs::metadata(path)?;
-        if metadata.len() > MAX_ASSET_SIZE {
-            return Err(anyhow!("asset size exceeds limit"));
-        }
+        fs::metadata(path)?;
 
         let file_name = path
             .file_name()
@@ -2774,6 +2845,8 @@ fn save_config(opts: &Options) -> Result<()> {
     config.set_fts_index(opts.fts_index_path());
     config.set_assets_path(opts.assets_path());
     config.set_template_root(opts.template_root());
+    config.set_wiki_title(opts.wiki_title.clone());
+    config.set_asset_limit_size(opts.asset_limit_size.clone());
 
     match &opts.command {
         Some(Command::Run(opts)) => {
@@ -2907,6 +2980,60 @@ where
     Ok(ans == "y" || ans == "yes")
 }
 
+///
+/// アセットサイズ指定文字列の解析
+///
+/// # 引数
+/// * `raw` - 解析対象の文字列
+///
+/// # 戻り値
+/// 解析後のバイト数を返す。
+///
+fn parse_asset_limit_size(raw: &str) -> Result<u64> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(anyhow!("asset limit size is empty"));
+    }
+
+    let (number_text, unit) = match value.chars().last() {
+        Some(last) if last.is_ascii_alphabetic() => {
+            (&value[..value.len() - last.len_utf8()], Some(last))
+        }
+        Some(_) => (value, None),
+        None => return Err(anyhow!("asset limit size is empty")),
+    };
+
+    if number_text.is_empty() {
+        return Err(anyhow!("asset limit size format is invalid"));
+    }
+
+    let number = number_text
+        .parse::<u64>()
+        .map_err(|_| anyhow!("asset limit size format is invalid"))?;
+    let multiplier = match unit {
+        None => 1_u64,
+        Some('k') | Some('K') => ASSET_SIZE_KIB,
+        Some('m') | Some('M') => ASSET_SIZE_MIB,
+        _ => return Err(anyhow!("asset limit size unit is invalid")),
+    };
+
+    let bytes = number
+        .checked_mul(multiplier)
+        .ok_or_else(|| anyhow!("asset limit size is too large"))?;
+
+    if bytes == 0 {
+        return Err(anyhow!("asset limit size must be greater than zero"));
+    }
+    if bytes > MAX_ASSET_LIMIT_SIZE {
+        return Err(anyhow!(
+            "asset limit size exceeds maximum ({})",
+            MAX_ASSET_LIMIT_SIZE
+        ));
+    }
+
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2953,5 +3080,40 @@ mod tests {
         let config = config::load(&config_path).expect("load failed");
         assert_eq!(config.use_tls(), Some(true));
         assert_eq!(config.server_cert(), Some(cert_path));
+    }
+
+    #[test]
+    fn parse_asset_limit_size_with_k_or_m() {
+        assert_eq!(
+            parse_asset_limit_size("10M").expect("parse failed"),
+            10 * 1024 * 1024,
+        );
+        assert_eq!(
+            parse_asset_limit_size("10m").expect("parse failed"),
+            10 * 1024 * 1024,
+        );
+        assert_eq!(
+            parse_asset_limit_size("10K").expect("parse failed"),
+            10 * 1024,
+        );
+        assert_eq!(
+            parse_asset_limit_size("10k").expect("parse failed"),
+            10 * 1024,
+        );
+    }
+
+    #[test]
+    fn parse_asset_limit_size_rejects_invalid_unit() {
+        assert!(parse_asset_limit_size("10Mi").is_err());
+        assert!(parse_asset_limit_size("10G").is_err());
+    }
+
+    #[test]
+    fn parse_asset_limit_size_rejects_over_limit() {
+        assert_eq!(
+            parse_asset_limit_size("100M").expect("parse failed"),
+            100 * 1024 * 1024,
+        );
+        assert!(parse_asset_limit_size("101M").is_err());
     }
 }

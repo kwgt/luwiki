@@ -22,6 +22,8 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 | `-I`, `--fts-index DIR` | 全文検索インデックスの格納パスを指定する | $XDG_DATA_HOME/luwiki/index
 | `-a`, `--assets-path` | アセットデータ格納パスを指定する | $XDG_DATA_HOME/luwiki/assets
 | `-t`, `--template-root` | テンプレートページのパスを指定する | 
+| `-T`, `--wiki-title` | Wiki名を指定する | LUWIKI
+| `-S`, `--asset-limit-size` | アップロード可能なアセットのサイズの上限 | 10Miバイト 
 |       `--show-options` | 設定情報の表示 |
 |       `--save-config` | config.tomlへの設定情報の保存指示 |
 | `-h`, `--help`          | ヘルプメッセージの表示 |
@@ -39,6 +41,8 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 `--log-output`にはログの出力先を指定できるが、ファイルのパスを指定した場合は単一ファイルへの出力となり、ディレクトリパスを指定した場合はログローテション付きで10本のファイルに自動切り替えを行いながら記録を行う(一本あたりのサイズ制限は2Mバイト)。
 
 `--template-root`にはテンプレートとして使用するページが格納されるWiki上のパスを指定する。このオプションが指定された場合はページ編集時に、このオプションで指定されたページの子ページをテンプレートとして使用することができる(`--template-root`未指定時はテンプレート機能自体が無効化される)。
+
+`--asset-limit-size`にはアップロード可能なアセットのサイズの上限を指定するが、"10K", "10M"などの補助単位を指定可能とする(いずれも2進接頭辞のKi,Miを意味する)。また最大は100Miまで指定可能。
 
 ---
 ## サブコマンド
@@ -729,6 +733,8 @@ luwiki [OPTIONS] fts search [OPTIONS] <SEARCH-EXPRESSION>
 | `assets_path` | アセットデータ格納ディレクトリのパス | `--assets-path` | `$XDG_DATA_HOME/luwiki/assets/`
 | `fts_index` | 全文検索インデックス格納ディレクトリのパス | `--fts-index` | `$XDG_DATA_HOME/luwiki/index/`
 | `template_root` | テンプレートページの格納パス(Wiki上のパス) | `--template-root` |
+| `wiki_title` | Wiki名 | `--wiki-title` |
+| `asset_limit_size` | アップロード可能なアセットサイズの上限 | `--asset-limit-size` |
 
 <a id="config-run"></a>
 ### runテーブル

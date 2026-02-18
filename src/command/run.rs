@@ -56,6 +56,12 @@ struct RunCommandContext {
 
     /// テンプレートルート
     template_root: Option<String>,
+
+    /// Wikiタイトル
+    wiki_title: String,
+
+    /// アセットサイズ上限
+    asset_limit_size: u64,
 }
 
 impl RunCommandContext {
@@ -91,6 +97,8 @@ impl RunCommandContext {
             cert_is_explicit: sub_opts.is_cert_path_explicit(),
             open_browser: sub_opts.is_browser_open(),
             template_root,
+            wiki_title: opts.wiki_title(),
+            asset_limit_size: opts.asset_limit_size()?,
         })
     }
 }
@@ -125,6 +133,8 @@ impl CommandContext for RunCommandContext {
             self.frontend_config.clone(),
             fts_config,
             self.template_root.clone(),
+            self.wiki_title.clone(),
+            self.asset_limit_size,
             self.use_tls,
             self.cert_path.clone(),
             self.cert_is_explicit,

@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue';
 import { usePageSearch } from '../composables/usePageSearch';
 import { useUiSettings } from '../composables/useUiSettings';
-import { normalizeWikiPath } from '../lib/pageCommon';
+import { getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
 
 type SortOrder = 'page_id' | 'score' | 'path';
 
@@ -22,6 +22,7 @@ const { selectedTheme } = useUiSettings();
 
 const sortOrder = ref<SortOrder>('score');
 const searchInputRef = ref<HTMLInputElement | null>(null);
+const wikiTitle = getWikiTitle();
 
 const sortedResults = computed(() => {
   const items = [...results.value];
@@ -64,6 +65,7 @@ function formatSnippet(raw: string): string {
 onMounted(async () => {
   await nextTick();
   searchInputRef.value?.focus();
+  document.title = `検索 | ${wikiTitle}`;
 });
 </script>
 
@@ -72,7 +74,7 @@ onMounted(async () => {
     <div class="mx-auto flex max-w-6xl flex-col gap-3 px-4 pt-8 pb-[0.25rem] lg:px-10">
       <header class="flex flex-col gap-2">
         <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-          LUWIKI SEARCH
+          {{ wikiTitle }} SEARCH
         </p>
         <h1 class="text-3xl font-bold leading-tight sm:text-4xl">
           検索

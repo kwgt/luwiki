@@ -27,6 +27,12 @@ pub(crate) struct AppState {
 
     /// テンプレートルート
     template_root: Option<String>,
+
+    /// Wikiタイトル
+    wiki_title: String,
+
+    /// アセットサイズ上限
+    asset_limit_size: u64,
 }
 
 impl AppState {
@@ -38,6 +44,8 @@ impl AppState {
     /// * `frontend_config` - frontend設定
     /// * `fts_config` - FTS設定
     /// * `template_root` - テンプレートルート
+    /// * `wiki_title` - Wikiタイトル
+    /// * `asset_limit_size` - アセットサイズ上限(バイト単位)
     ///
     /// # 戻り値
     /// 生成したオブジェクトを返す。
@@ -47,12 +55,16 @@ impl AppState {
         frontend_config: FrontendConfig,
         fts_config: FtsIndexConfig,
         template_root: Option<String>,
+        wiki_title: String,
+        asset_limit_size: u64,
     ) -> Self {
         Self {
             db,
             frontend_config,
             fts_config,
             template_root,
+            wiki_title,
+            asset_limit_size,
         }
     }
 
@@ -91,6 +103,26 @@ impl AppState {
     ///
     pub(crate) fn template_root<'a>(&'a self) -> Option<&'a str> {
         self.template_root.as_deref()
+    }
+
+    ///
+    /// Wikiタイトルへのアクセサ
+    ///
+    /// # 戻り値
+    /// Wikiタイトルへの参照を返す。
+    ///
+    pub(crate) fn wiki_title<'a>(&'a self) -> &'a str {
+        &self.wiki_title
+    }
+
+    ///
+    /// アセットサイズ上限へのアクセサ
+    ///
+    /// # 戻り値
+    /// アップロード可能なアセットサイズ上限(バイト単位)を返す。
+    ///
+    pub(crate) fn asset_limit_size(&self) -> u64 {
+        self.asset_limit_size
     }
 
     ///

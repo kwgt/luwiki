@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { usePageList } from '../composables/usePageList';
 import { useUiSettings } from '../composables/useUiSettings';
-import { normalizeWikiPath } from '../lib/pageCommon';
+import { getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
 
 const { selectedTheme } = useUiSettings();
 
@@ -33,6 +33,7 @@ const {
 
 const pageTitle = computed(() => pagePath.value || '/');
 const pageIndexLabel = computed(() => `ページ ${currentIndex.value + 1}`);
+const wikiTitle = getWikiTitle();
 
 const breadcrumbItems = computed(() => {
   const currentPath = pagePath.value || '/';
@@ -77,6 +78,11 @@ function formatListTimestamp(raw: string): string {
 onMounted(() => {
   void loadPageList(true);
 });
+
+watch(pageTitle, (value) => {
+  const title = value || '/';
+  document.title = `ページ一覧: ${title} | ${wikiTitle}`;
+}, { immediate: true });
 </script>
 
 <template>
@@ -85,7 +91,7 @@ onMounted(() => {
       <header class="flex flex-col gap-1">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            LUWIKI PAGES
+            {{ wikiTitle }} PAGES
           </p>
           <h1
             class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"

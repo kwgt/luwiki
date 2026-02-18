@@ -205,7 +205,7 @@ pub(crate) async fn validate_basic_auth(
 ///
 /// REST APIエンドポイントの生成
 ///
-pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
+pub(crate) fn create_api_scope(payload_limit: usize) -> impl HttpServiceFactory {
     web::scope("/api")
         .app_data(Config::default().realm("LuWiki REST API"))
         .wrap(actix_web_httpauth::middleware::HttpAuthentication::basic(
@@ -217,8 +217,14 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
         .route("/pages/deleted", web::get().to(pages::deleted::get))
         .route("/pages/search", web::get().to(pages::search::get))
         .route("/pages/template", web::get().to(pages::template::get))
-        .route("/pages/{page_id}/source", web::get().to(pages::source::get))
-        .route("/pages/{page_id}/source", web::put().to(pages::source::put))
+        .route(
+            "/pages/{page_id}/source",
+            web::get().to(pages::source::get),
+        )
+        .route(
+            "/pages/{page_id}/source",
+            web::put().to(pages::source::put),
+        )
         .route("/pages/{page_id}/meta", web::get().to(pages::meta::get))
         .route("/pages/{page_id}/parent", web::get().to(pages::parent::get))
         .route("/pages/{page_id}/path", web::get().to(pages::path::get))
@@ -228,21 +234,23 @@ pub(crate) fn create_api_scope() -> impl HttpServiceFactory {
             web::post().to(pages::revision::post)
         )
         .route("/pages/{page_id}/assets", web::get().to(pages::assets::get))
-        .route(
-            "/pages/{page_id}/assets/{file_name}",
-            web::post().to(pages::assets::post),
-        )
-        .route(
-            "/pages/{page_id}/assets/{file_name}",
-            web::get().to(pages::assets::redirect),
+        .service(
+            web::resource("/pages/{page_id}/assets/{file_name}")
+                .app_data(web::PayloadConfig::new(payload_limit))
+                .route(web::post().to(pages::assets::post))
+                .route(web::get().to(pages::assets::redirect))
         )
         .route("/pages/{page_id}/lock", web::post().to(pages::lock::post))
         .route("/pages/{page_id}/lock", web::put().to(pages::lock::put))
         .route("/pages/{page_id}/lock", web::get().to(pages::lock::get))
         .route("/pages/{page_id}/lock", web::delete().to(pages::lock::delete))
         .route("/pages/{page_id}", web::delete().to(pages::delete::delete))
-        .route("/assets", web::post().to(assets::post))
-        .route("/assets", web::get().to(assets::get))
+        .service(
+            web::resource("/assets")
+                .app_data(web::PayloadConfig::new(payload_limit))
+                .route(web::post().to(assets::post))
+                .route(web::get().to(assets::get))
+        )
         .route(
             "/assets/{asset_id}/data",
             web::get().to(assets::data::get),

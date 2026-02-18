@@ -119,6 +119,22 @@ impl Config {
     }
 
     ///
+    /// グローバル設定のWikiタイトルを更新
+    ///
+    pub(super) fn set_wiki_title(&mut self, title: Option<String>) {
+        let global = self.ensure_global();
+        global.wiki_title = title;
+    }
+
+    ///
+    /// グローバル設定のアセットサイズ上限を更新
+    ///
+    pub(super) fn set_asset_limit_size(&mut self, size: Option<String>) {
+        let global = self.ensure_global();
+        global.asset_limit_size = size;
+    }
+
+    ///
     /// runサブコマンドのバインドアドレスを更新
     ///
     pub(super) fn set_run_bind_addr(&mut self, addr: String) {
@@ -351,6 +367,24 @@ impl Config {
         self.global
             .as_ref()
             .and_then(|global| global.template_root.clone())
+    }
+
+    ///
+    /// Wikiタイトルへのアクセサ
+    ///
+    pub(super) fn wiki_title(&self) -> Option<String> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.wiki_title.clone())
+    }
+
+    ///
+    /// アセットサイズ上限へのアクセサ
+    ///
+    pub(super) fn asset_limit_size(&self) -> Option<String> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.asset_limit_size.clone())
     }
 
     ///
@@ -641,6 +675,8 @@ impl Config {
                 fts_index: None,
                 assets_path: None,
                 template_root: None,
+                wiki_title: None,
+                asset_limit_size: None,
                 use_tls: None,
                 server_cert: None,
             });
@@ -897,6 +933,8 @@ impl Default for Config {
                 fts_index: Some(default_fts_index_path()),
                 assets_path: Some(default_assets_path()),
                 template_root: None,
+                wiki_title: None,
+                asset_limit_size: None,
                 use_tls: None,
                 server_cert: None,
             }),
@@ -985,6 +1023,12 @@ struct GlobalInfo {
 
     /// テンプレートページの格納パス
     template_root: Option<String>,
+
+    /// Wikiタイトル
+    wiki_title: Option<String>,
+
+    /// アセットサイズ上限
+    asset_limit_size: Option<String>,
 
     /// TLSの使用
     use_tls: Option<bool>,

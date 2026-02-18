@@ -63,6 +63,8 @@ pub(crate) fn run(
     frontend_config: FrontendConfig,
     fts_config: FtsIndexConfig,
     template_root: Option<String>,
+    wiki_title: String,
+    asset_limit_size: u64,
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
@@ -86,12 +88,15 @@ pub(crate) fn run(
         frontend_config,
         fts_config,
         template_root,
+        wiki_title,
+        asset_limit_size,
     ))));
 
     let server = create_server(
         addr,
         port,
         state.clone(),
+        asset_limit_size,
         use_tls,
         cert_path,
         cert_is_explicit,
@@ -137,11 +142,12 @@ fn create_server(
     addr: String,
     port: u16,
     state: web::Data<Arc<RwLock<AppState>>>,
+    asset_limit_size: u64,
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
 ) -> Result<Server> {
-    let payload_limit = 10 * 1024 * 1024;
+    let payload_limit = asset_limit_size as usize;
     let server = HttpServer::new(move || {
         App::new()
             // ロガーの設定
@@ -153,8 +159,7 @@ fn create_server(
 
             // REST APIエンドポイント設定
             .app_data(state.clone())
-            .app_data(web::PayloadConfig::new(payload_limit))
-            .service(rest_api::create_api_scope())
+            .service(rest_api::create_api_scope(payload_limit))
 
             // Wiki閲覧用エンドポイント設定
             .route("/", web::get().to(page_view::get_root_redirect))
