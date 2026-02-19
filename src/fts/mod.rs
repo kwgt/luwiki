@@ -23,7 +23,7 @@ use tantivy::schema::{
     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions,
     Value, STORED, STRING, INDEXED,
 };
-use tantivy::tokenizer::{Token, TokenStream, Tokenizer, TextAnalyzer};
+use tantivy::tokenizer::{LowerCaser, Token, TokenStream, Tokenizer, TextAnalyzer};
 use tantivy::{doc, Index, Score, TantivyDocument, Term};
 
 use crate::cmd_args::FtsSearchTarget;
@@ -965,7 +965,9 @@ impl FtsIndexManager {
 ///
 fn register_tokenizer(index: &Index, kind: TokenizerKind) -> Result<()> {
     let tokenizer = LinderaAdapter::new(kind)?;
-    let analyzer = TextAnalyzer::from(tokenizer);
+    let analyzer = TextAnalyzer::builder(tokenizer)
+        .filter(LowerCaser)
+        .build();
     index.tokenizers().register(kind.name(), analyzer);
     Ok(())
 }

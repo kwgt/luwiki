@@ -59,6 +59,72 @@ fn search_defaults_to_body_target() {
 }
 
 #[test]
+/// GET: 英字トークンは大文字小文字を区別せず検索できることを確認する。
+///
+/// # 注記
+/// - 本文に小文字で保存したトークンを大文字検索で取得する。
+/// - 同一トークンを大文字で保存したページを小文字検索で取得する。
+fn search_is_case_insensitive_for_ascii_token() {
+    /*
+     * テスト環境の準備
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(
+        port,
+        server.stderr_path(),
+    );
+
+    /*
+     * ページ作成
+     */
+    let lower_token = format!("mixedtoken{}", unique_suffix());
+    let upper_token = lower_token.to_ascii_uppercase();
+    let lower_page_id = create_page(
+        &client,
+        &api_url,
+        "/search-case-lower",
+        &format!("body {}", lower_token),
+    );
+    let upper_page_id = create_page(
+        &client,
+        &api_url,
+        "/search-case-upper",
+        &format!("body {}", upper_token),
+    );
+
+    /*
+     * 検索と検証
+     */
+    let results = search_pages(
+        &client,
+        &api_url,
+        &upper_token,
+        None,
+        None,
+        None,
+    );
+    assert!(contains_page(&results, &lower_page_id));
+    assert!(contains_page(&results, &upper_page_id));
+
+    let results = search_pages(
+        &client,
+        &api_url,
+        &lower_token,
+        None,
+        None,
+        None,
+    );
+    assert!(contains_page(&results, &lower_page_id));
+    assert!(contains_page(&results, &upper_page_id));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 /// GET: code/combination 指定でコードブロック検索できることを確認する。
 ///
 /// # 注記

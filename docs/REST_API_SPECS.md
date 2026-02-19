@@ -309,6 +309,7 @@ items:
 ### `GET /api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]`
 #### 概要
 ページの検索
+英字を含む検索は大文字小文字を区別しない。
 
 #### クエリーパラメータ
   |名称|型|説明|必須

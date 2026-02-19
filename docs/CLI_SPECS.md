@@ -682,6 +682,7 @@ luwiki [OPTIONS] fts search [OPTIONS] <SEARCH-EXPRESSION>
 #### 概要
 テスト用に`<SEARCH-EXPRESSION>`で指定された検索式を用いて全文検索を行う。検索式はtantivyの検索式仕様に則る。
 ページID,リビジョン,スコア,テキスト を表示する。
+英字を含む検索は大文字小文字を区別しない。
 
 デフォルトでは検索対象は以下の通り。
 
