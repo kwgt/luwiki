@@ -71,6 +71,27 @@ pub(in crate::database) const ROOT_PAGE_PATH: &str = "/";
 pub(in crate::database) static DEFAULT_ROOT_SOURCE: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/default_root.md"));
 
+/// Sandboxページのパス
+pub(in crate::database) const SANDBOX_PAGE_PATH: &str = "/Sandbox";
+
+/// Sandboxページ雛形ソース
+pub(in crate::database) static DEFAULT_SANDBOX_SOURCE: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/default_sandbox.md"));
+
+/// Sandboxサンプルコードのファイル名
+pub(in crate::database) const SANDBOX_SAMPLE_CODE_FILE_NAME: &str = "sample.rs";
+
+/// SandboxサンプルCSVのファイル名
+pub(in crate::database) const SANDBOX_SAMPLE_CSV_FILE_NAME: &str = "table.csv";
+
+/// Sandboxサンプルコードのソース
+pub(in crate::database) static SANDBOX_SAMPLE_CODE_SOURCE: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sandbox_sample.rs"));
+
+/// SandboxサンプルCSVのソース
+pub(in crate::database) static SANDBOX_SAMPLE_CSV_SOURCE: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sandbox_table.csv"));
+
 ///
 /// データベース操作で使用するエラー種別
 ///

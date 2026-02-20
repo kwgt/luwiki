@@ -1,5 +1,10 @@
 # Welcome
 
-This is the default root page.
+このWikiはMarkdownでのページ作成をサポートしています。
 
-You can edit this page to add your notes.
+自由にページを作成・編集してください。ページの作成は以下の方法で行えます。
+
+- 「ページ作成」ボタンのクリック
+- ページを編集し新規ページへのリンクを埋め込んでそのリンクをクリックする
+
+初めての方は、構文を学ぶために[[Sandbox|練習用ページ]]から始めてください。

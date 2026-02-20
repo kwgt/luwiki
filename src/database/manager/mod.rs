@@ -14,8 +14,12 @@ use anyhow::Result;
 use redb::{Database, ReadableDatabase};
 
 use super::init::init_database;
-use super::schema::{DbError, DEFAULT_ROOT_SOURCE, ROOT_PAGE_PATH};
-use super::types::AssetId;
+use super::schema::{
+    DbError, DEFAULT_ROOT_SOURCE, DEFAULT_SANDBOX_SOURCE, ROOT_PAGE_PATH,
+    SANDBOX_PAGE_PATH, SANDBOX_SAMPLE_CODE_FILE_NAME, SANDBOX_SAMPLE_CODE_SOURCE,
+    SANDBOX_SAMPLE_CSV_FILE_NAME, SANDBOX_SAMPLE_CSV_SOURCE,
+};
+use super::types::{AssetId, PageId};
 
 pub(crate) mod assets;
 pub(crate) mod locks;
@@ -73,26 +77,38 @@ impl DatabaseManager {
     /// 初期化に成功した場合は`Ok(())`を返す。
     ///
     pub(crate) fn ensure_default_root(&self, user_name: &str) -> Result<()> {
-        if self.page_exists(ROOT_PAGE_PATH)? {
-            return Ok(());
-        }
-
-        match self.create_page(
+        self.create_page_if_missing(
             ROOT_PAGE_PATH,
+            DEFAULT_ROOT_SOURCE,
             user_name,
-            DEFAULT_ROOT_SOURCE.to_string(),
-        ) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                if let Some(DbError::PageAlreadyExists) =
-                    err.downcast_ref::<DbError>()
-                {
-                    return Ok(());
-                }
+        )?;
+        self.create_page_if_missing(
+            SANDBOX_PAGE_PATH,
+            DEFAULT_SANDBOX_SOURCE,
+            user_name,
+        )?;
 
-                Err(err)
-            }
-        }
+        let sandbox_page_id = match self.get_page_id_by_path(SANDBOX_PAGE_PATH)? {
+            Some(id) => id,
+            None => return Err(anyhow::anyhow!(DbError::PageNotFound)),
+        };
+
+        self.create_asset_if_missing(
+            &sandbox_page_id,
+            SANDBOX_SAMPLE_CODE_FILE_NAME,
+            "text/x-rust",
+            user_name,
+            SANDBOX_SAMPLE_CODE_SOURCE.as_bytes(),
+        )?;
+        self.create_asset_if_missing(
+            &sandbox_page_id,
+            SANDBOX_SAMPLE_CSV_FILE_NAME,
+            "text/csv",
+            user_name,
+            SANDBOX_SAMPLE_CSV_SOURCE.as_bytes(),
+        )?;
+
+        Ok(())
     }
 
     ///
@@ -108,6 +124,62 @@ impl DatabaseManager {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(super::schema::PAGE_PATH_TABLE)?;
         Ok(table.get(&path.to_string())?.is_some())
+    }
+
+    ///
+    /// ページが存在しない場合にページを作成する。
+    ///
+    fn create_page_if_missing(
+        &self,
+        path: &str,
+        source: &str,
+        user_name: &str,
+    ) -> Result<()> {
+        if self.page_exists(path)? {
+            return Ok(());
+        }
+
+        match self.create_page(path, user_name, source.to_string()) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if let Some(DbError::PageAlreadyExists) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(());
+                }
+
+                Err(err)
+            }
+        }
+    }
+
+    ///
+    /// アセットが存在しない場合にアセットを作成する。
+    ///
+    fn create_asset_if_missing(
+        &self,
+        page_id: &PageId,
+        file_name: &str,
+        mime: &str,
+        user_name: &str,
+        data: &[u8],
+    ) -> Result<()> {
+        if self.get_asset_id_by_page_file(page_id, file_name)?.is_some() {
+            return Ok(());
+        }
+
+        match self.create_asset(page_id, file_name, mime, user_name, data) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if let Some(DbError::AssetAlreadyExists) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(());
+                }
+
+                Err(err)
+            }
+        }
     }
 
     ///

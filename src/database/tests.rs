@@ -17,7 +17,10 @@ use redb::Database;
 use super::DatabaseManager;
 use super::init::init_database;
 use super::link_refs::build_link_refs;
-use super::schema::{PAGE_INDEX_TABLE, PAGE_PATH_TABLE, ROOT_PAGE_PATH};
+use super::schema::{
+    PAGE_INDEX_TABLE, PAGE_PATH_TABLE, ROOT_PAGE_PATH, SANDBOX_PAGE_PATH,
+    SANDBOX_SAMPLE_CODE_FILE_NAME, SANDBOX_SAMPLE_CSV_FILE_NAME,
+};
 use super::types::{PageId, PageIndex};
 
 ///
@@ -116,6 +119,22 @@ fn ensure_default_root_creates_root_page() {
         .expect("page exists failed")
         .is_some();
     assert!(exists);
+
+    let sandbox_page_id = manager.get_page_id_by_path(SANDBOX_PAGE_PATH)
+        .expect("sandbox page resolve failed")
+        .expect("sandbox page not found");
+    let code_asset_exists = manager.get_asset_id_by_page_file(
+        &sandbox_page_id,
+        SANDBOX_SAMPLE_CODE_FILE_NAME,
+    ).expect("sandbox code asset lookup failed")
+        .is_some();
+    assert!(code_asset_exists);
+    let csv_asset_exists = manager.get_asset_id_by_page_file(
+        &sandbox_page_id,
+        SANDBOX_SAMPLE_CSV_FILE_NAME,
+    ).expect("sandbox csv asset lookup failed")
+        .is_some();
+    assert!(csv_asset_exists);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

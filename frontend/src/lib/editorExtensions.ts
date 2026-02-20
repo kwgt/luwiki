@@ -10,7 +10,8 @@ import { markdown } from '@codemirror/lang-markdown';
 import { python } from '@codemirror/lang-python';
 import { rust } from '@codemirror/lang-rust';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { type EditorState, type Extension, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, type Extension, RangeSetBuilder } from '@codemirror/state';
+import { indentUnit } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import {
   Decoration,
@@ -271,6 +272,8 @@ const mermaidCompletionSource: CompletionSource = (context) => {
 export function buildBaseExtensions(): Extension[] {
   return [
     EditorView.lineWrapping,
+    EditorState.tabSize.of(4),
+    indentUnit.of('    '),
     history(),
     search(),
     highlightSelectionMatches(),
