@@ -10,10 +10,10 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 
-use crate::http_server::app_state::AppState;
 use super::resp_200;
+use crate::http_server::app_state::AppState;
 
 ///
 /// GET /api/hello の実体
@@ -30,10 +30,6 @@ use super::resp_200;
 /// # 戻り値
 /// actix-webのレスポンスオブジェクト
 ///
-pub async fn get(
-    _state: web::Data<Arc<RwLock<AppState>>>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+pub async fn get(_state: web::Data<Arc<RwLock<AppState>>>) -> actix_web::Result<HttpResponse> {
     Ok(resp_200("hello"))
 }

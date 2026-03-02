@@ -12,9 +12,9 @@ use anyhow::{Context, Result};
 use redb::Database;
 
 use super::schema::{
-    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE,
-    DELETED_PAGE_PATH_TABLE, LOCK_INFO_TABLE, PAGE_INDEX_TABLE,
-    PAGE_PATH_TABLE, PAGE_SOURCE_TABLE, USER_ID_TABLE, USER_INFO_TABLE,
+    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, DELETED_PAGE_PATH_TABLE,
+    LOCK_INFO_TABLE, PAGE_INDEX_TABLE, PAGE_PATH_TABLE, PAGE_SOURCE_TABLE, USER_ID_TABLE,
+    USER_INFO_TABLE,
 };
 
 ///
@@ -54,49 +54,59 @@ pub(in crate::database) fn init_database(db: &mut Database) -> Result<()> {
          * ページ関連テーブル作成
          */
         // ページパスインデックステーブル
-        let _ = txn.open_table(PAGE_PATH_TABLE)
+        let _ = txn
+            .open_table(PAGE_PATH_TABLE)
             .context("create PAGE_PATH_TABLE")?;
 
         // 削除済みページパスインデックステーブル
-        let _ = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)
+        let _ = txn
+            .open_multimap_table(DELETED_PAGE_PATH_TABLE)
             .context("create DELETED_PAGE_PATH_TABLE")?;
 
         // ページインデックステーブル
-        let _ = txn.open_table(PAGE_INDEX_TABLE)
+        let _ = txn
+            .open_table(PAGE_INDEX_TABLE)
             .context("create PAGE_INDEX_TABLE")?;
 
         // ページソーステーブル
-        let _ = txn.open_table(PAGE_SOURCE_TABLE)
+        let _ = txn
+            .open_table(PAGE_SOURCE_TABLE)
             .context("create PAGE_SOURCE_TABLE")?;
 
         /*
          * ロック・アセット関連テーブル作成
          */
         // ロック情報テーブル
-        let _ = txn.open_table(LOCK_INFO_TABLE)
+        let _ = txn
+            .open_table(LOCK_INFO_TABLE)
             .context("create LOCK_INFO_TABLE")?;
 
         // アセット情報テーブル
-        let _ = txn.open_table(ASSET_INFO_TABLE)
+        let _ = txn
+            .open_table(ASSET_INFO_TABLE)
             .context("create ASSET_INFO_TABLE")?;
 
         // アセットID特定テーブル
-        let _ = txn.open_table(ASSET_LOOKUP_TABLE)
+        let _ = txn
+            .open_table(ASSET_LOOKUP_TABLE)
             .context("create ASSET_LOOKUP_TABLE")?;
 
         // ページ所属アセット群取得テーブル
-        let _ = txn.open_multimap_table(ASSET_GROUP_TABLE)
+        let _ = txn
+            .open_multimap_table(ASSET_GROUP_TABLE)
             .context("create ASSET_GROUP_TABLE")?;
 
         /*
          * ユーザ関連テーブル作成
          */
         // ユーザIDテーブル
-        let _ = txn.open_table(USER_ID_TABLE)
+        let _ = txn
+            .open_table(USER_ID_TABLE)
             .context("create USER_ID_TABLE")?;
 
         // ユーザ情報テーブル
-        let _ = txn.open_table(USER_INFO_TABLE)
+        let _ = txn
+            .open_table(USER_INFO_TABLE)
             .context("create USER_INFO_TABLE")?;
     }
 

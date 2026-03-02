@@ -14,7 +14,6 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 #[test]
 ///
 /// page add がページを作成できることを確認する。
@@ -64,11 +63,9 @@ fn page_add_cli_uses_default_user_from_config() {
     let config_path = base_dir.join("config.toml");
     fs::write(
         &config_path,
-        format!(
-            "[page.add]\ndefault_user = \"{}\"\n",
-            TEST_USERNAME
-        ),
-    ).expect("write config failed");
+        format!("[page.add]\ndefault_user = \"{}\"\n", TEST_USERNAME),
+    )
+    .expect("write config failed");
 
     let md_path = base_dir.join("config_page.md");
     fs::write(&md_path, "# config test\n").expect("write markdown failed");
@@ -130,9 +127,7 @@ fn unique_suffix() -> String {
 /// * `assets_dir` - アセットディレクトリのパス
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -186,9 +181,7 @@ fn run_page_add(
 ) -> String {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -203,9 +196,7 @@ fn run_page_add(
         command.arg("--config-path").arg(config_path);
     }
 
-    command
-        .arg("page")
-        .arg("add");
+    command.arg("page").arg("add");
 
     if let Some(user_name) = user_name {
         command.arg("--user").arg(user_name);
@@ -237,9 +228,7 @@ fn run_page_add(
 /// 標準出力を返す。
 fn run_page_list(db_path: &Path, assets_dir: &Path) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)

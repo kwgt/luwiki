@@ -12,10 +12,9 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use flexi_logger::{
-    Cleanup, Criterion, DeferredNow, Duplicate, FileSpec, Logger, Naming,
-    WriteMode
+    Cleanup, Criterion, DeferredNow, Duplicate, FileSpec, Logger, Naming, WriteMode,
 };
 use log::Record;
 
@@ -51,21 +50,16 @@ pub(super) fn init(opts: &Options) -> Result<()> {
      */
     if path == Path::new("-") {
         init_for_stdout(level)?;
-
     } else if path.exists() {
         if path.is_file() {
             init_for_file(level, &path, tee)?;
-
         } else if path.is_dir() {
             init_for_directory(level, &path, tee)?;
-
         } else {
             return Err(anyhow!("invalid log output path"));
         }
-
     } else if path.extension().is_some() {
         init_for_file(level, &path, tee)?;
-
     } else {
         init_for_directory(level, &path, tee)?;
     }
@@ -88,9 +82,7 @@ pub(super) fn init(opts: &Options) -> Result<()> {
 /// フォーマッタへの書き込みに失敗した場合はエラー情報を `Err()`でパックして返
 /// す。
 ///
-fn format(writer: &mut dyn Write, now: &mut DeferredNow, record: &Record)
-    -> std::io::Result<()>
-{
+fn format(writer: &mut dyn Write, now: &mut DeferredNow, record: &Record) -> std::io::Result<()> {
     write!(
         writer,
         "[{} {:5}] - {} ({})",
@@ -147,7 +139,7 @@ fn source_info(record: &Record) -> String {
 ///
 fn init_for_stdout<S>(level: S) -> Result<()>
 where
-    S: AsRef<str>
+    S: AsRef<str>,
 {
     Logger::try_with_env_or_str(level)?
         .log_to_stdout()
@@ -167,7 +159,7 @@ where
 fn init_for_file<S, P>(level: S, path: P, tee: bool) -> Result<()>
 where
     S: AsRef<str>,
-    P: AsRef<Path>
+    P: AsRef<Path>,
 {
     let path = path.as_ref();
 
@@ -183,11 +175,7 @@ where
     Logger::try_with_env_or_str(level)?
         .log_to_file(FileSpec::try_from(std::fs::canonicalize(path)?)?)
         .format(format)
-        .duplicate_to_stdout(if tee {
-            Duplicate::All
-        } else {
-            Duplicate::None
-        })
+        .duplicate_to_stdout(if tee { Duplicate::All } else { Duplicate::None })
         .append()
         .write_mode(WriteMode::Direct)
         .start()?;
@@ -202,10 +190,10 @@ where
 /// ログローテションはログの量が2Mバイトを超えた場合に行う。また、ログファイル
 /// は10本までを保存する。
 ///
-fn init_for_directory<S, P>(level:S, path: P, tee: bool) -> Result<()>
+fn init_for_directory<S, P>(level: S, path: P, tee: bool) -> Result<()>
 where
     S: AsRef<str>,
-    P: AsRef<Path>
+    P: AsRef<Path>,
 {
     let path = path.as_ref();
 
@@ -219,11 +207,7 @@ where
     Logger::try_with_env_or_str(level)?
         .log_to_file(path)
         .format(format)
-        .duplicate_to_stdout(if tee {
-            Duplicate::All
-        } else {
-            Duplicate::None
-        })
+        .duplicate_to_stdout(if tee { Duplicate::All } else { Duplicate::None })
         .rotate(
             Criterion::Size(MAX_LOG_SIZE),
             Naming::Numbers,

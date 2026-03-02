@@ -11,57 +11,47 @@
 use redb::{MultimapTableDefinition, TableDefinition};
 
 use crate::database::types::{
-    AssetId, AssetInfo, LockInfo, LockToken, PageId, PageIndex, PageSource,
-    UserId, UserInfo,
+    AssetId, AssetInfo, LockInfo, LockToken, PageId, PageIndex, PageSource, UserId, UserInfo,
 };
 
 /// ページパスインデックステーブル (ページパス => ページID)
-pub(in crate::database) static PAGE_PATH_TABLE:
-    TableDefinition<String, PageId> = TableDefinition::new("page_path_table");
+pub(in crate::database) static PAGE_PATH_TABLE: TableDefinition<String, PageId> =
+    TableDefinition::new("page_path_table");
 
 /// 削除済みページパスインデックステーブル (ページパス => ページID)
-pub(in crate::database) static DELETED_PAGE_PATH_TABLE:
-    MultimapTableDefinition<String, PageId> =
+pub(in crate::database) static DELETED_PAGE_PATH_TABLE: MultimapTableDefinition<String, PageId> =
     MultimapTableDefinition::new("deleted_page_path_table");
 
 /// ページインデックステーブル (ページID => ページインデックス情報)
-pub(in crate::database) static PAGE_INDEX_TABLE:
-    TableDefinition<PageId, PageIndex> =
+pub(in crate::database) static PAGE_INDEX_TABLE: TableDefinition<PageId, PageIndex> =
     TableDefinition::new("page_index_table");
 
 /// ページソーステーブル (ページID,リビジョン番号 => ページソース情報)
-pub(in crate::database) static PAGE_SOURCE_TABLE:
-    TableDefinition<(PageId, u64), PageSource> =
+pub(in crate::database) static PAGE_SOURCE_TABLE: TableDefinition<(PageId, u64), PageSource> =
     TableDefinition::new("page_source_table");
 
 /// ロック情報テーブル (ロック解除トークン => ロック情報)
-pub(in crate::database) static LOCK_INFO_TABLE:
-    TableDefinition<LockToken, LockInfo> =
+pub(in crate::database) static LOCK_INFO_TABLE: TableDefinition<LockToken, LockInfo> =
     TableDefinition::new("lock_info_table");
 
 /// アセット情報テーブル (アセットID => アセット情報)
-pub(in crate::database) static ASSET_INFO_TABLE:
-    TableDefinition<AssetId, AssetInfo> =
+pub(in crate::database) static ASSET_INFO_TABLE: TableDefinition<AssetId, AssetInfo> =
     TableDefinition::new("asset_info_table");
 
 /// アセットID特定テーブル (ページID,ファイル名 => アセットID)
-pub(in crate::database) static ASSET_LOOKUP_TABLE:
-    TableDefinition<(PageId, String), AssetId> =
+pub(in crate::database) static ASSET_LOOKUP_TABLE: TableDefinition<(PageId, String), AssetId> =
     TableDefinition::new("asset_lookup_table");
 
 /// ページ所属アセット群取得テーブル (ページID => [アセットID])
-pub(in crate::database) static ASSET_GROUP_TABLE:
-    MultimapTableDefinition<PageId, AssetId> =
+pub(in crate::database) static ASSET_GROUP_TABLE: MultimapTableDefinition<PageId, AssetId> =
     MultimapTableDefinition::new("asset_group_table");
 
 /// ユーザIDテーブル (ユーザ名 => ユーザID)
-pub(in crate::database) static USER_ID_TABLE:
-    TableDefinition<String, UserId> =
+pub(in crate::database) static USER_ID_TABLE: TableDefinition<String, UserId> =
     TableDefinition::new("user_id_table");
 
 /// ユーザ情報テーブル (ユーザID => ユーザ情報)
-pub(in crate::database) static USER_INFO_TABLE:
-    TableDefinition<UserId, UserInfo> =
+pub(in crate::database) static USER_INFO_TABLE: TableDefinition<UserId, UserInfo> =
     TableDefinition::new("user_info_table");
 
 /// ルートページのパス
@@ -75,8 +65,10 @@ pub(in crate::database) static DEFAULT_ROOT_SOURCE: &str =
 pub(in crate::database) const SANDBOX_PAGE_PATH: &str = "/Sandbox";
 
 /// Sandboxページ雛形ソース
-pub(in crate::database) static DEFAULT_SANDBOX_SOURCE: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/default_sandbox.md"));
+pub(in crate::database) static DEFAULT_SANDBOX_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/default_sandbox.md"
+));
 
 /// Sandboxサンプルコードのファイル名
 pub(in crate::database) const SANDBOX_SAMPLE_CODE_FILE_NAME: &str = "sample.rs";
@@ -85,12 +77,16 @@ pub(in crate::database) const SANDBOX_SAMPLE_CODE_FILE_NAME: &str = "sample.rs";
 pub(in crate::database) const SANDBOX_SAMPLE_CSV_FILE_NAME: &str = "table.csv";
 
 /// Sandboxサンプルコードのソース
-pub(in crate::database) static SANDBOX_SAMPLE_CODE_SOURCE: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sandbox_sample.rs"));
+pub(in crate::database) static SANDBOX_SAMPLE_CODE_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/sandbox_sample.rs"
+));
 
 /// SandboxサンプルCSVのソース
-pub(in crate::database) static SANDBOX_SAMPLE_CSV_SOURCE: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sandbox_table.csv"));
+pub(in crate::database) static SANDBOX_SAMPLE_CSV_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/sandbox_table.csv"
+));
 
 ///
 /// データベース操作で使用するエラー種別

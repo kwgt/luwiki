@@ -56,10 +56,7 @@ pub(crate) async fn get(path: web::Path<String>) -> HttpResponse {
 
     let mime = guess_mime(&path);
     HttpResponse::Ok()
-        .insert_header((
-            header::CACHE_CONTROL,
-            "public, max-age=31536000, immutable",
-        ))
+        .insert_header((header::CACHE_CONTROL, "public, max-age=31536000, immutable"))
         .content_type(mime.as_ref())
         .body(data)
 }

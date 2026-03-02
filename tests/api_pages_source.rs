@@ -21,10 +21,7 @@ fn get_page_source_returns_latest_markdown() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/test", "source body");
@@ -53,17 +50,16 @@ fn get_page_source_returns_latest_markdown() {
             .expect("missing cache-control")
             .to_str()
             .expect("cache-control to_str failed"),
-        "public, max-age=31536000, immutable"
+        "private, max-age=3600, no-cache"
     );
-    assert_eq!(
-        response
-            .headers()
-            .get("ETag")
-            .expect("missing etag")
-            .to_str()
-            .expect("etag to_str failed"),
-        format!("\"{}:1\"", page_id)
-    );
+    let etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+    assert!(etag.starts_with('"') && etag.ends_with('"'));
     assert_eq!(response.text().expect("read body failed"), "source body");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -77,10 +73,7 @@ fn get_page_source_with_rev_validates_revision() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/test", "source body");
@@ -115,6 +108,64 @@ fn get_page_source_with_rev_validates_revision() {
 }
 
 #[test]
+/// GET: If-None-Match 一致時に304を返すことを確認する。
+fn get_page_source_returns_not_modified_when_etag_matches() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/etag-test", "source body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let response = client
+        .get(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get source failed");
+    let etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+
+    let response = client
+        .get(&url)
+        .header("If-None-Match", etag.clone())
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("conditional get source failed");
+
+    assert_eq!(response.status().as_u16(), 304);
+    assert_eq!(
+        response
+            .headers()
+            .get("Cache-Control")
+            .expect("missing cache-control")
+            .to_str()
+            .expect("cache-control to_str failed"),
+        "private, max-age=3600, no-cache"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("ETag")
+            .expect("missing etag")
+            .to_str()
+            .expect("etag to_str failed"),
+        etag
+    );
+    assert_eq!(response.text().expect("read body failed"), "");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 /// GET: 認証必須と不正ID時の挙動を確認する。
 fn get_page_source_requires_auth_and_valid_id() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
@@ -122,10 +173,7 @@ fn get_page_source_requires_auth_and_valid_id() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let url = format!("{}/pages/not-a-ulid/source", api_base_url);
 
@@ -153,18 +201,10 @@ fn put_page_source_creates_new_revision() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
-    let page_id = create_page(
-        &client,
-        &base_url,
-        "/put-test",
-        "original body",
-    );
+    let page_id = create_page(&client, &base_url, "/put-test", "original body");
 
     let url = format!("{}/{}/source", base_url, page_id);
 
@@ -183,16 +223,31 @@ fn put_page_source_creates_new_revision() {
         .send()
         .expect("get latest after put failed");
     assert_eq!(response.status().as_u16(), 200);
-    assert_eq!(
-        response
-            .headers()
-            .get("ETag")
-            .expect("missing etag")
-            .to_str()
-            .expect("etag to_str failed"),
-        format!("\"{}:2\"", page_id)
-    );
+    let latest_etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+    assert!(latest_etag.starts_with('"') && latest_etag.ends_with('"'));
     assert_eq!(response.text().expect("read body failed"), "updated body");
+
+    let response = client
+        .get(&url)
+        .query(&[("rev", "1")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get rev=1 etag after put failed");
+    let rev1_etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+    assert_ne!(latest_etag, rev1_etag);
+    assert_eq!(response.text().expect("read body failed"), "original body");
 
     let response = client
         .get(&url)
@@ -215,18 +270,10 @@ fn put_page_source_amend_updates_latest_without_revision() {
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
 
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
-    let page_id = create_page(
-        &client,
-        &base_url,
-        "/amend-test",
-        "before amend",
-    );
+    let page_id = create_page(&client, &base_url, "/amend-test", "before amend");
 
     let url = format!("{}/{}/source", base_url, page_id);
 
@@ -246,16 +293,30 @@ fn put_page_source_amend_updates_latest_without_revision() {
         .send()
         .expect("get latest after amend failed");
     assert_eq!(response.status().as_u16(), 200);
-    assert_eq!(
-        response
-            .headers()
-            .get("ETag")
-            .expect("missing etag")
-            .to_str()
-            .expect("etag to_str failed"),
-        format!("\"{}:1\"", page_id)
-    );
+    let latest_etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+    assert!(latest_etag.starts_with('"') && latest_etag.ends_with('"'));
     assert_eq!(response.text().expect("read body failed"), "after amend");
+
+    let response = client
+        .get(&url)
+        .query(&[("rev", "1")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get rev=1 after amend failed");
+    let rev1_etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+    assert_eq!(latest_etag, rev1_etag);
 
     let response = client
         .get(&url)
@@ -276,10 +337,7 @@ fn put_page_source_requires_lock_token_when_locked() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/lock-put", "initial");
@@ -293,8 +351,7 @@ fn put_page_source_requires_lock_token_when_locked() {
         .send()
         .expect("lock post failed");
     assert_eq!(response.status().as_u16(), 204);
-    let token = parse_lock_header(&response)
-        .expect("missing lock token");
+    let token = parse_lock_header(&response).expect("missing lock token");
 
     let response = client
         .put(&source_url)
@@ -333,10 +390,7 @@ fn put_page_source_rejects_invalid_query_and_headers() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/put-invalid", "body");
@@ -390,10 +444,7 @@ fn put_page_source_rejects_invalid_page_id() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let url = format!("{}/pages/not-a-ulid/source", api_base_url);
 
@@ -417,10 +468,7 @@ fn put_page_source_lock_errors_include_reason() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/lock-reason", "body");
@@ -471,12 +519,7 @@ fn put_page_source_lock_errors_include_reason() {
 /// # 戻り値
 /// 作成したページID
 ///
-fn create_page(
-    client: &Client,
-    base_url: &str,
-    path: &str,
-    body: &str,
-) -> String {
+fn create_page(client: &Client, base_url: &str, path: &str, body: &str) -> String {
     /*
      * ドラフト作成
      */
@@ -510,12 +553,9 @@ fn create_page(
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -564,8 +604,7 @@ fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
 ///
 fn read_error_reason(response: reqwest::blocking::Response) -> String {
     let body = response.text().expect("read error body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse error body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse error body failed");
     value["reason"]
         .as_str()
         .expect("missing reason")

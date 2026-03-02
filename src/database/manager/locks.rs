@@ -10,17 +10,15 @@
 
 use std::fs;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
 use redb::{ReadableDatabase, ReadableTable};
 
+use super::DatabaseManager;
 use crate::database::entries::LockListEntry;
-use crate::database::schema::{
-    LOCK_INFO_TABLE, PAGE_INDEX_TABLE, USER_ID_TABLE, USER_INFO_TABLE,
-};
+use crate::database::schema::{LOCK_INFO_TABLE, PAGE_INDEX_TABLE, USER_ID_TABLE, USER_INFO_TABLE};
 use crate::database::txn_helpers::{delete_draft_in_txn, find_lock_by_page};
 use crate::database::types::{AssetId, LockInfo, LockToken, PageId};
-use super::DatabaseManager;
 
 impl DatabaseManager {
     ///
@@ -33,10 +31,7 @@ impl DatabaseManager {
     /// ロック情報を取得できた場合は`Ok(Some(LockInfo))`を返す。
     /// ロックが存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_page_lock_info(
-        &self,
-        page_id: &PageId,
-    ) -> Result<Option<LockInfo>> {
+    pub(crate) fn get_page_lock_info(&self, page_id: &PageId) -> Result<Option<LockInfo>> {
         /*
          * 書き込みトランザクション開始
          */
@@ -132,11 +127,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 取得したロック情報を返す。
     ///
-    pub(crate) fn acquire_page_lock(
-        &self,
-        page_id: &PageId,
-        user_name: &str,
-    ) -> Result<LockInfo> {
+    pub(crate) fn acquire_page_lock(&self, page_id: &PageId, user_name: &str) -> Result<LockInfo> {
         /*
          * 書き込みトランザクション開始
          */
@@ -167,18 +158,14 @@ impl DatabaseManager {
              * 既存ロックの確認
              */
             if index.is_draft() {
-                if let Some((token, existing)) =
-                    find_lock_by_page(&lock_table, page_id)?
-                {
+                if let Some((token, existing)) = find_lock_by_page(&lock_table, page_id)? {
                     if existing.expire() > now {
                         return Err(anyhow!(crate::database::DbError::PageLocked));
                     }
                     lock_table.remove(token)?;
                 }
             } else if let Some(token) = index.lock_token() {
-                let existing = lock_table
-                    .get(token.clone())?
-                    .map(|entry| entry.value());
+                let existing = lock_table.get(token.clone())?.map(|entry| entry.value());
                 if let Some(lock_info) = existing {
                     if lock_info.expire() > now {
                         return Err(anyhow!(crate::database::DbError::PageLocked));
@@ -724,10 +711,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// ロック削除に成功した場合は`true`を返す。
     ///
-    pub(crate) fn delete_page_lock_by_id(
-        &self,
-        page_id: &PageId,
-    ) -> Result<bool> {
+    pub(crate) fn delete_page_lock_by_id(&self, page_id: &PageId) -> Result<bool> {
         /*
          * 書き込みトランザクション開始
          */

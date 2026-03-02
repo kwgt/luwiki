@@ -14,11 +14,11 @@ use actix_web::http::StatusCode;
 use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 
+use super::super::resp_error_json;
 use crate::database::DbError;
 use crate::database::types::PageId;
 use crate::fts;
 use crate::http_server::app_state::AppState;
-use super::super::resp_error_json;
 
 #[derive(Deserialize)]
 struct RevisionQuery {
@@ -44,15 +44,11 @@ pub async fn post(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<RevisionQuery>::from_query(
-        req.query_string()
-    ) {
+    let query = match web::Query::<RevisionQuery>::from_query(req.query_string()) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -107,10 +103,7 @@ pub async fn post(
     let page_id = match PageId::from_string(&page_id_raw) {
         Ok(page_id) => page_id,
         Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
     };
 
@@ -131,7 +124,9 @@ pub async fn post(
      * ロールバック／コンパクション実行
      */
     let result = if rollback_to.is_some() {
-        state.db().rollback_page_source_only(&page_id, target_revision)
+        state
+            .db()
+            .rollback_page_source_only(&page_id, target_revision)
     } else {
         state.db().compact_page_source(&page_id, target_revision)
     };
@@ -161,12 +156,7 @@ pub async fn post(
     /*
      * FTSの更新
      */
-    if let Err(err) = fts::reindex_page(
-        state.fts_config(),
-        state.db(),
-        &page_id,
-        false,
-    ) {
+    if let Err(err) = fts::reindex_page(state.fts_config(), state.db(), &page_id, false) {
         log::error!("fts update failed: {:?}", err);
         return Ok(resp_error_json(
             StatusCode::INTERNAL_SERVER_ERROR,

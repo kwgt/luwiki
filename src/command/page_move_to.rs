@@ -8,12 +8,12 @@
 //! サブコマンド"page move_to"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{Options, PageMoveToOpts};
 use crate::database::types::PageId;
 use crate::database::{DatabaseManager, DbError};
-use super::CommandContext;
 
 ///
 /// "page move_to"サブコマンドのコンテキスト情報をパックした構造体
@@ -49,7 +49,8 @@ impl CommandContext for PageMoveToCommandContext {
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?
         } else {
-            let page_id = self.manager
+            let page_id = self
+                .manager
                 .get_page_id_by_path(&self.src_path)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?;
             self.manager
@@ -66,10 +67,8 @@ impl CommandContext for PageMoveToCommandContext {
         }
 
         if self.recursive {
-            self.manager.rename_pages_recursive_by_id(
-                &index.id(),
-                &self.dst_path,
-            )?;
+            self.manager
+                .rename_pages_recursive_by_id(&index.id(), &self.dst_path)?;
         } else {
             self.manager.rename_page(&src_path, &self.dst_path)?;
         }

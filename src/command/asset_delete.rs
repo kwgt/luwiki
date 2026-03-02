@@ -8,13 +8,13 @@
 //! サブコマンド"asset delete"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{AssetDeleteOpts, Options};
 use crate::database::types::{AssetId, PageId};
 use crate::database::{DatabaseManager, DbError};
 use crate::rest_api::{validate_asset_file_name, validate_page_path};
-use super::CommandContext;
 
 ///
 /// "asset delete"サブコマンドのコンテキスト情報をパックした構造体
@@ -76,8 +76,9 @@ impl AssetDeleteCommandContext {
             }
 
             if let Some(page_id) = self.manager.get_page_id_by_path(&page_path)? {
-                if let Some(asset_id) =
-                    self.manager.get_asset_id_by_page_file(&page_id, &file_name)?
+                if let Some(asset_id) = self
+                    .manager
+                    .get_asset_id_by_page_file(&page_id, &file_name)?
                 {
                     return Ok(AssetDeleteTarget::Asset(asset_id));
                 }
@@ -121,7 +122,6 @@ impl AssetDeleteCommandContext {
 
         Ok(())
     }
-
 }
 
 // CommandContextの実装
@@ -160,7 +160,8 @@ enum AssetDeleteTarget {
 ///
 fn parse_asset_path(path: &str) -> Result<(String, String)> {
     let trimmed = path.trim_end_matches('/');
-    let pos = trimmed.rfind('/')
+    let pos = trimmed
+        .rfind('/')
         .ok_or_else(|| anyhow!("asset path must contain page path"))?;
     if pos == 0 {
         let file_name = &trimmed[1..];

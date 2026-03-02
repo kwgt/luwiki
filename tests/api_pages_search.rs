@@ -12,8 +12,8 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::{
-    prepare_test_dirs, reserve_port, run_add_user, unique_suffix,
-    wait_for_server_with_scheme, ServerGuard, TEST_PASSWORD, TEST_USERNAME,
+    ServerGuard, TEST_PASSWORD, TEST_USERNAME, prepare_test_dirs, reserve_port, run_add_user,
+    unique_suffix, wait_for_server_with_scheme,
 };
 
 #[test]
@@ -30,10 +30,7 @@ fn search_defaults_to_body_target() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成
@@ -45,14 +42,7 @@ fn search_defaults_to_body_target() {
     /*
      * 検索と検証
      */
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        None,
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &token, None, None, None);
     assert!(contains_page(&results, &page_id));
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -73,10 +63,7 @@ fn search_is_case_insensitive_for_ascii_token() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成
@@ -99,25 +86,11 @@ fn search_is_case_insensitive_for_ascii_token() {
     /*
      * 検索と検証
      */
-    let results = search_pages(
-        &client,
-        &api_url,
-        &upper_token,
-        None,
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &upper_token, None, None, None);
     assert!(contains_page(&results, &lower_page_id));
     assert!(contains_page(&results, &upper_page_id));
 
-    let results = search_pages(
-        &client,
-        &api_url,
-        &lower_token,
-        None,
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &lower_token, None, None, None);
     assert!(contains_page(&results, &lower_page_id));
     assert!(contains_page(&results, &upper_page_id));
 
@@ -139,10 +112,7 @@ fn search_target_code_and_combination() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成
@@ -154,34 +124,13 @@ fn search_target_code_and_combination() {
     /*
      * 検索と検証
      */
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        Some("code"),
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &token, Some("code"), None, None);
     assert!(contains_page(&results, &page_id));
 
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        Some("body"),
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &token, Some("body"), None, None);
     assert!(!contains_page(&results, &page_id));
 
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        Some("body,code"),
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &token, Some("body,code"), None, None);
     assert!(contains_page(&results, &page_id));
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -201,10 +150,7 @@ fn search_target_combination_deduplicates_results() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成
@@ -216,14 +162,7 @@ fn search_target_combination_deduplicates_results() {
     /*
      * 検索と検証
      */
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        Some("headings,body"),
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &token, Some("headings,body"), None, None);
     assert_eq!(results.len(), 1);
     assert!(contains_page(&results, &page_id));
 
@@ -244,10 +183,7 @@ fn search_rejects_invalid_expr() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * 検索と検証
@@ -288,10 +224,7 @@ fn search_rejects_invalid_target() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * 検索と検証
@@ -332,10 +265,7 @@ fn search_rejects_invalid_flags() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * 検索と検証
@@ -377,10 +307,7 @@ fn search_with_deleted_and_all_revision_behavior() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成とリビジョン更新
@@ -394,26 +321,11 @@ fn search_with_deleted_and_all_revision_behavior() {
     /*
      * all_revision の検証
      */
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        None,
-        None,
-        None,
-    );
+    let results = search_pages(&client, &api_url, &token, None, None, None);
     assert!(!contains_page(&results, &page_id));
 
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        None,
-        None,
-        Some(true),
-    );
-    let item = find_page(&results, &page_id)
-        .expect("missing search result");
+    let results = search_pages(&client, &api_url, &token, None, None, Some(true));
+    let item = find_page(&results, &page_id).expect("missing search result");
     assert_eq!(item["revision"].as_u64(), Some(1));
 
     /*
@@ -421,26 +333,11 @@ fn search_with_deleted_and_all_revision_behavior() {
      */
     delete_page(&client, &api_url, &page_id);
 
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        None,
-        Some(false),
-        Some(true),
-    );
+    let results = search_pages(&client, &api_url, &token, None, Some(false), Some(true));
     assert!(!contains_page(&results, &page_id));
 
-    let results = search_pages(
-        &client,
-        &api_url,
-        &token,
-        None,
-        Some(true),
-        Some(true),
-    );
-    let item = find_page(&results, &page_id)
-        .expect("missing deleted result");
+    let results = search_pages(&client, &api_url, &token, None, Some(true), Some(true));
+    let item = find_page(&results, &page_id).expect("missing deleted result");
     assert_eq!(item["deleted"].as_bool(), Some(true));
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -457,9 +354,9 @@ fn search_with_deleted_and_all_revision_behavior() {
 /// 含まれる場合は`true`
 ///
 fn contains_page(results: &[Value], page_id: &str) -> bool {
-    results.iter().any(|item| {
-        item["page_id"].as_str() == Some(page_id)
-    })
+    results
+        .iter()
+        .any(|item| item["page_id"].as_str() == Some(page_id))
 }
 
 ///
@@ -473,9 +370,9 @@ fn contains_page(results: &[Value], page_id: &str) -> bool {
 /// 検索結果を返す。見つからない場合は`None`
 ///
 fn find_page<'a>(results: &'a [Value], page_id: &str) -> Option<&'a Value> {
-    results.iter().find(|item| {
-        item["page_id"].as_str() == Some(page_id)
-    })
+    results
+        .iter()
+        .find(|item| item["page_id"].as_str() == Some(page_id))
 }
 
 ///
@@ -528,8 +425,7 @@ fn search_pages(
     assert_eq!(response.status().as_u16(), 200);
 
     let body = response.text().expect("read search body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse search response failed");
+    let value: Value = serde_json::from_str(&body).expect("parse search response failed");
     value
         .as_array()
         .expect("search response must be array")
@@ -602,8 +498,7 @@ fn assert_search_error(
 ///
 fn read_error_reason(response: reqwest::blocking::Response) -> String {
     let body = response.text().expect("read error body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse error body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse error body failed");
     value["reason"]
         .as_str()
         .expect("missing reason")
@@ -622,12 +517,7 @@ fn read_error_reason(response: reqwest::blocking::Response) -> String {
 /// # 戻り値
 /// なし
 ///
-fn update_page_source(
-    client: &Client,
-    api_url: &str,
-    page_id: &str,
-    body: &str,
-) {
+fn update_page_source(client: &Client, api_url: &str, page_id: &str, body: &str) {
     let response = client
         .put(&format!("{}/pages/{}/source", api_url, page_id))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -672,12 +562,7 @@ fn delete_page(client: &Client, api_url: &str, page_id: &str) {
 /// # 戻り値
 /// ページID
 ///
-fn create_page(
-    client: &Client,
-    api_url: &str,
-    path: &str,
-    body: &str,
-) -> String {
+fn create_page(client: &Client, api_url: &str, path: &str, body: &str) -> String {
     /*
      * ドラフト作成
      */
@@ -707,12 +592,9 @@ fn create_page(
         .expect("missing lock token");
 
     let response_body = response.text().expect("read body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録

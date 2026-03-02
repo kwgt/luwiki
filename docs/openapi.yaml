@@ -123,6 +123,11 @@ paths:
           content:
             text/markdown:
               schema: { type: string }
+        "304":
+          description: Not Modified
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
         "400":
           description: rev 不正
           content:
@@ -194,7 +199,6 @@ paths:
           description: メタ情報
           headers:
             Cache-Control: { schema: { type: string } }
-            ETag: { schema: { type: string } }
           content:
             application/json:
               schema:
@@ -225,7 +229,6 @@ paths:
           description: ページパス
           headers:
             Cache-Control: { schema: { type: string } }
-            ETag: { schema: { type: string } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PagePath" }
@@ -290,7 +293,6 @@ paths:
           description: アセット一覧
           headers:
             Cache-Control: { schema: { type: string } }
-            ETag: { schema: { type: string } }
           content:
             application/json:
               schema:
@@ -436,6 +438,8 @@ paths:
       responses:
         "200":
           description: ロック情報
+          headers:
+            Cache-Control: { schema: { type: string } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LockInfo" }
@@ -602,6 +606,11 @@ paths:
               schema:
                 type: string
                 format: binary
+        "304":
+          description: Not Modified
+          headers:
+            Cache-Control: { schema: { type: string } }
+            ETag: { schema: { type: string } }
         "404":
           description: アセット不存在
           content:
@@ -623,7 +632,6 @@ paths:
           description: メタ情報
           headers:
             Cache-Control: { schema: { type: string } }
-            ETag: { schema: { type: string } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AssetMeta" }

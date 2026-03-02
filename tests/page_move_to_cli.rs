@@ -14,7 +14,6 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 #[test]
 ///
 /// page move_to がページの移動を行えることを確認する。
@@ -31,20 +30,9 @@ fn page_move_to_cli_renames_page() {
     let md_path = base_dir.join("page.md");
     fs::write(&md_path, "# move\n").expect("write markdown failed");
 
-    let _ = run_page_add(
-        &db_path,
-        &assets_dir,
-        TEST_USERNAME,
-        &md_path,
-        "/before",
-    );
+    let _ = run_page_add(&db_path, &assets_dir, TEST_USERNAME, &md_path, "/before");
 
-    run_page_move_to(
-        &db_path,
-        &assets_dir,
-        "/before",
-        "/after",
-    );
+    run_page_move_to(&db_path, &assets_dir, "/before", "/after");
 
     let list_output = run_page_list(&db_path, &assets_dir);
     assert!(list_output.contains("/after"));
@@ -94,9 +82,7 @@ fn unique_suffix() -> String {
 /// * `assets_dir` - アセットディレクトリのパス
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -147,9 +133,7 @@ fn run_page_add(
     page_path: &str,
 ) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -185,16 +169,9 @@ fn run_page_add(
 /// * `assets_dir` - アセットディレクトリのパス
 /// * `src_path` - 移動元のページパスまたはページID
 /// * `dst_path` - 移動先のページパス
-fn run_page_move_to(
-    db_path: &Path,
-    assets_dir: &Path,
-    src_path: &str,
-    dst_path: &str,
-) {
+fn run_page_move_to(db_path: &Path, assets_dir: &Path, src_path: &str, dst_path: &str) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -230,9 +207,7 @@ fn run_page_move_to(
 /// 標準出力を返す。
 fn run_page_list(db_path: &Path, assets_dir: &Path) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)

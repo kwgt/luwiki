@@ -12,10 +12,10 @@ use std::cell::RefCell;
 
 use anyhow::Result;
 
-use crate::cmd_args::{UserAddOpts, Options};
-use crate::database::DatabaseManager;
 use super::CommandContext;
 use super::common::read_password_with_confirm;
+use crate::cmd_args::{Options, UserAddOpts};
+use crate::database::DatabaseManager;
 
 ///
 /// "user add"サブコマンドのコンテキスト情報をパックした構造体

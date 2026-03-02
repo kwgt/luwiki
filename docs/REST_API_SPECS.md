@@ -414,8 +414,8 @@ maxItems: 100
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | text/markdown
-  | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
-  | `ETag` | "{page_id}:{revision}"
+  | `Cache-Control` | `instance_id`が存在する場合は"private, max-age=3600, no-cache"、存在しない場合は"no-store"
+  | `ETag` | `instance_id`が存在する場合は"{instance_id}"、存在しない場合は設定しない
 
 ボディには対象ページのMarkdownソースが返される。
 
@@ -423,6 +423,7 @@ maxItems: 100
 
   | ステータス | 説明
   |:--|:--
+  | 304 Not Modified | リクエストヘッダ`If-None-Match`が現在の`instance_id`と一致した
   | 400 Bad Request | `rev`で指定されたリビジョン番号のフォーマットが不正
   | 404 Not Found | 指定されたページIDに対応するページが存在しない<br>`rev`で指定されたリビジョンのソースが存在しない<br>ドラフトページに対するリクエスト
 
@@ -430,6 +431,8 @@ maxItems: 100
   - クエリーパラメータ`rev`を省略した場合は最新リビジョンのソースを返す。
   - ドラフトページに対するリクエストの場合、`reason`にドラフトであることを示す文言を設定する
   - 削除済みページに対するリクエストでもソースを返す
+  - `instance_id`が存在する場合はリクエストヘッダ`If-None-Match`による条件付きGETをサポートする
+  - `Cache-Control`が"no-store"の場合は`ETag`を返さない
 
 <a id="update-page-source"></a>
 ### `PUT /api/pages/{page_id}/source[?amend={boolean}]`
@@ -493,8 +496,7 @@ maxItems: 100
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | application/json
-  | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
-  | `ETag` | "{page_id}:{revision}"
+  | `Cache-Control` | "no-store" (固定)
 
 ボディには以下の内容のJSONデータが返される。
 
@@ -620,8 +622,7 @@ properties:
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | application/json
-  | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
-  | `ETag` | "{page_id}:{revision}"
+  | `Cache-Control` | "no-store" (固定)
 
 また、ボディには以下の内容のJSONデータが返される。
 
@@ -764,8 +765,7 @@ properties:
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | application/json
-  | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
-  | `ETag` | "{page_id}"
+  | `Cache-Control` | "no-store" (固定)
 
 また、ボディには以下の内容のJSONデータが返される。
 
@@ -836,6 +836,7 @@ items:
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | application/json
+  | `Cache-Control` | "no-store" (固定)
   | `Location` | /api/assets/{asset_id}/data
   | `ETag` | 割り当てられたページID
 
@@ -1268,8 +1269,8 @@ properties:
   |:--|:--
   | `Content-Type` | (アセットのMIME種別)
   | `Content-Disposition` | attachment; filename="{file_name}"
-  | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
-  | `ETag` | {asset_id}
+  | `Cache-Control` | `instance_id`が存在する場合は"private, max-age=3600, no-cache"、存在しない場合は"no-store"
+  | `ETag` | `instance_id`が存在する場合は"{instance_id}"、存在しない場合は設定しない
 
 また、ボディにはアセットのデータ(バイナリデータ)が返される。
 
@@ -1277,8 +1278,13 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 304 Not Modified | リクエストヘッダ`If-None-Match`が現在の`instance_id`と一致した
   | 404 Not Found | `asset_id`で指定されたアセットが存在しない
   | 410 Gone | `asset_id`で削除済みアセットを指定した
+
+#### 注記
+  - `instance_id`が存在する場合はリクエストヘッダ`If-None-Match`による条件付きGETをサポートする
+  - `Cache-Control`が"no-store"の場合は`ETag`を返さない
 
 <a id="get-asset-metadata"></a>
 ### `GET /api/assets/{asset_id}/meta`
@@ -1294,8 +1300,7 @@ properties:
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | application/json
-  | `Cache-Control` | "public, max-age=31536000, immutable" (固定)
-  | `ETag` | {asset_id}
+  | `Cache-Control` | "no-store" (固定)
 
 また、ボディには以下の内容のJSONデータが返される。
 
@@ -1367,8 +1372,7 @@ properties:
   | ヘッダ名 | 内容
   |:--|:--
   | `Content-Type` | application/json
-  | `Cache-Control` | "private, no-cache" (固定)
-  | `ETag` | {user_id}:{unixtime_millis}
+  | `Cache-Control` | "no-store" (固定)
 
 また、ボディには以下の内容のJSONデータが返される。
 

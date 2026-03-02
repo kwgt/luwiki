@@ -22,7 +22,6 @@ use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde_json::Value;
 
-
 #[test]
 ///
 /// POST: /api/assets でアセットを作成できることを確認する。
@@ -53,13 +52,8 @@ fn post_assets_creates_asset() {
     let page_id = create_page(&api_url, "/assets-post", "body");
     let page_path = get_page_path(&api_url, &page_id);
 
-    let asset_id = upload_asset_by_path(
-        &api_url,
-        &page_path,
-        "logo.png",
-        "image/png",
-        b"asset-data",
-    );
+    let asset_id =
+        upload_asset_by_path(&api_url, &page_path, "logo.png", "image/png", b"asset-data");
 
     /*
      * レスポンスの検証
@@ -180,10 +174,7 @@ fn get_assets_returns_redirect_and_data() {
      * リダイレクトの検証
      */
     let client = build_no_redirect_client();
-    let redirect_url = format!(
-        "{}/assets?path=/assets-get&file=data.bin",
-        api_url
-    );
+    let redirect_url = format!("{}/assets?path=/assets-get&file=data.bin", api_url);
     let response = client
         .get(&redirect_url)
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -200,14 +191,20 @@ fn get_assets_returns_redirect_and_data() {
             .expect("location to_str failed"),
         format!("/api/assets/{}/data", asset_id)
     );
+    assert_eq!(
+        response
+            .headers()
+            .get("Cache-Control")
+            .expect("missing cache-control")
+            .to_str()
+            .expect("cache-control to_str failed"),
+        "no-store"
+    );
+    assert!(response.headers().get("ETag").is_none());
 
     let body = response.text().expect("read redirect body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse redirect body failed");
-    assert_eq!(
-        value["id"].as_str().expect("missing id"),
-        asset_id
-    );
+    let value: Value = serde_json::from_str(&body).expect("parse redirect body failed");
+    assert_eq!(value["id"].as_str().expect("missing id"), asset_id);
 
     /*
      * データ取得の検証
@@ -229,6 +226,23 @@ fn get_assets_returns_redirect_and_data() {
             .expect("content-type to_str failed"),
         "application/octet-stream"
     );
+    assert_eq!(
+        response
+            .headers()
+            .get("Cache-Control")
+            .expect("missing cache-control")
+            .to_str()
+            .expect("cache-control to_str failed"),
+        "private, max-age=3600, no-cache"
+    );
+    let etag = response
+        .headers()
+        .get("ETag")
+        .expect("missing etag")
+        .to_str()
+        .expect("etag to_str failed")
+        .to_string();
+    assert!(etag.starts_with('"') && etag.ends_with('"'));
     let content_disposition = response
         .headers()
         .get("Content-Disposition")
@@ -249,6 +263,32 @@ fn get_assets_returns_redirect_and_data() {
         b"data-contents"
     );
 
+    let response = client
+        .get(&format!("{}/assets/{}/data", api_url, asset_id))
+        .header("If-None-Match", etag.clone())
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("conditional get asset data failed");
+    assert_eq!(response.status().as_u16(), 304);
+    assert_eq!(
+        response
+            .headers()
+            .get("ETag")
+            .expect("missing etag")
+            .to_str()
+            .expect("etag to_str failed"),
+        etag
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("Cache-Control")
+            .expect("missing cache-control")
+            .to_str()
+            .expect("cache-control to_str failed"),
+        "private, max-age=3600, no-cache"
+    );
+
     /*
      * メタ情報取得の検証
      */
@@ -259,9 +299,18 @@ fn get_assets_returns_redirect_and_data() {
         .expect("get asset meta failed");
 
     assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("Cache-Control")
+            .expect("missing cache-control")
+            .to_str()
+            .expect("cache-control to_str failed"),
+        "no-store"
+    );
+    assert!(response.headers().get("ETag").is_none());
     let body = response.text().expect("read meta body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse meta body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse meta body failed");
     assert_eq!(
         value["file_name"].as_str().expect("missing file_name"),
         "data.bin"
@@ -310,11 +359,7 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     let config_path = base_dir.join("config.toml");
 
     fs::create_dir_all(&assets_dir).expect("create assets dir failed");
-    fs::write(
-        &config_path,
-        "[global]\nuse_tls = false\n",
-    )
-    .expect("write config failed");
+    fs::write(&config_path, "[global]\nuse_tls = false\n").expect("write config failed");
 
     (base_dir, db_path, assets_dir, config_path)
 }
@@ -326,12 +371,8 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
 /// 利用可能なポート番号を返す。
 ///
 fn reserve_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("bind failed");
-    listener
-        .local_addr()
-        .expect("local_addr failed")
-        .port()
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
+    listener.local_addr().expect("local_addr failed").port()
 }
 
 ///
@@ -352,9 +393,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path, config_path: &Path) {
      * ユーザ追加コマンドの実行
      */
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -406,20 +445,12 @@ impl ServerGuard {
     /// # 戻り値
     /// 起動したサーバガードを返す。
     ///
-    fn start(
-        port: u16,
-        db_path: &Path,
-        assets_dir: &Path,
-        config_path: &Path,
-    ) -> Self {
+    fn start(port: u16, db_path: &Path, assets_dir: &Path, config_path: &Path) -> Self {
         let exe = test_binary_path();
-        let base_dir = db_path
-            .parent()
-            .expect("db_path parent missing");
+        let base_dir = db_path.parent().expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
         let stderr_path = base_dir.join("server_stderr.log");
-        let stderr_file = File::create(&stderr_path)
-            .expect("create server stderr log failed");
+        let stderr_file = File::create(&stderr_path).expect("create server stderr log failed");
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
@@ -498,8 +529,8 @@ fn wait_for_server(url: &str, stderr_path: &Path) {
         thread::sleep(Duration::from_millis(100));
     }
 
-    let stderr_output = fs::read_to_string(stderr_path)
-        .unwrap_or_else(|_| "(stderr read failed)".to_string());
+    let stderr_output =
+        fs::read_to_string(stderr_path).unwrap_or_else(|_| "(stderr read failed)".to_string());
     panic!(
         "server did not start: {} (last error: {})",
         stderr_output,
@@ -579,12 +610,9 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -629,8 +657,7 @@ fn get_page_path(api_url: &str, page_id: &str) -> String {
 
     assert_eq!(response.status().as_u16(), 200);
     let body = response.text().expect("read page meta failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse page meta failed");
+    let value: Value = serde_json::from_str(&body).expect("parse page meta failed");
     value["page_info"]["path"]["value"]
         .as_str()
         .expect("missing page path")
@@ -679,8 +706,7 @@ fn upload_asset_by_path(
     if status != 201 {
         panic!(
             "create asset failed: status={} body={}",
-            status,
-            response_body
+            status, response_body
         );
     }
     let location = headers
@@ -695,12 +721,9 @@ fn upload_asset_by_path(
         .to_str()
         .expect("etag to_str failed")
         .to_string();
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create asset response failed");
-    let asset_id = value["id"]
-        .as_str()
-        .expect("missing asset id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create asset response failed");
+    let asset_id = value["id"].as_str().expect("missing asset id").to_string();
 
     assert_eq!(etag, asset_id);
     assert_eq!(location, format!("/api/assets/{}/data", asset_id));

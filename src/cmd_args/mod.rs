@@ -16,25 +16,23 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::BaseDirs;
 use pulldown_cmark::Parser as MarkdownParser;
 use serde::{Deserialize, Serialize};
 
 use crate::command::{
-    CommandContext, asset_add, asset_list, asset_delete, asset_move_to,
-    asset_purge, asset_undelete, commands, fts_merge, fts_rebuild, fts_search,
-    help_all, lock_delete, lock_list, page_add, page_delete, page_list,
-    page_move_to, page_undelete, page_unlock, run, user_add, user_delete,
-    user_edit, user_list,
+    CommandContext, asset_add, asset_delete, asset_list, asset_move_to, asset_purge,
+    asset_undelete, commands, fts_merge, fts_rebuild, fts_search, help_all, lock_delete, lock_list,
+    page_add, page_delete, page_list, page_move_to, page_undelete, page_unlock, run, user_add,
+    user_delete, user_edit, user_list,
 };
 use crate::database::DatabaseManager;
 use crate::database::types::{AssetId, PageId};
 use crate::rest_api::{validate_asset_file_name, validate_page_path};
 use config::Config;
 pub(crate) use config::FrontendConfig;
-
 
 /// デフォルトのコンフィギュレーションパス
 static DEFAULT_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -236,8 +234,12 @@ pub struct Options {
     config_path: Option<PathBuf>,
 
     /// 記録するログレベルの指定
-    #[arg(short = 'l', long = "log-level", value_name = "LEVEL",
-        ignore_case = true)]
+    #[arg(
+        short = 'l',
+        long = "log-level",
+        value_name = "LEVEL",
+        ignore_case = true
+    )]
     log_level: Option<LogLevel>,
 
     /// ログの出力先の指定
@@ -401,9 +403,7 @@ impl Options {
     pub(crate) fn open_database(&self) -> Result<DatabaseManager> {
         match DatabaseManager::open(self.db_path(), self.assets_path()) {
             Ok(mgr) => Ok(mgr),
-            Err(err) => Err(
-                anyhow!("open failed: {}", err).context("database open")
-            )
+            Err(err) => Err(anyhow!("open failed: {}", err).context("database open")),
         }
     }
 
@@ -466,7 +466,6 @@ impl Options {
 
             // 指定されたパスを返す
             path.clone()
-
         } else {
             default_config_path()
         };
@@ -536,14 +535,12 @@ impl Options {
 
                 // コマンド毎のオプション情報へもコンフィギュレーションの内容を
                 // 反映する。
-                let opts: Option<&mut dyn ApplyConfig> = match
-                    &mut self.command
-                {
+                let opts: Option<&mut dyn ApplyConfig> = match &mut self.command {
                     Some(Command::Run(opts)) => Some(opts),
                     Some(Command::User(user)) => match &mut user.subcommand {
                         UserSubCommand::List(opts) => Some(opts),
                         _ => None,
-                    }
+                    },
                     Some(Command::Page(page)) => match &mut page.subcommand {
                         PageSubCommand::Add(opts) => Some(opts),
                         PageSubCommand::Delete(_) => None,
@@ -551,11 +548,11 @@ impl Options {
                         PageSubCommand::MoveTo(_) => None,
                         PageSubCommand::Undelete(opts) => Some(opts),
                         PageSubCommand::Unlock(_) => None,
-                    }
+                    },
                     Some(Command::Lock(lock)) => match &mut lock.subcommand {
                         LockSubCommand::List(opts) => Some(opts),
                         _ => None,
-                    }
+                    },
                     Some(Command::Asset(asset)) => match &mut asset.subcommand {
                         AssetSubCommand::Add(opts) => Some(opts),
                         AssetSubCommand::List(opts) => Some(opts),
@@ -563,11 +560,11 @@ impl Options {
                         AssetSubCommand::Purge(_) => None,
                         AssetSubCommand::Undelete(_) => None,
                         AssetSubCommand::MoveTo(_) => None,
-                    }
+                    },
                     Some(Command::Fts(fts)) => match &mut fts.subcommand {
                         FtsSubCommand::Search(opts) => Some(opts),
                         _ => None,
-                    }
+                    },
                     _ => None,
                 };
 
@@ -579,7 +576,7 @@ impl Options {
             }
 
             // エラーが出たらそのままエラー
-            Err(err) => Err(anyhow!("{}", err))
+            Err(err) => Err(anyhow!("{}", err)),
         }
     }
 
@@ -607,8 +604,8 @@ impl Options {
                     UserSubCommand::Delete(opts) => Some(opts),
                     UserSubCommand::Edit(opts) => Some(opts),
                     UserSubCommand::List(opts) => Some(opts),
-                    _ => None
-                }
+                    _ => None,
+                },
                 Command::Page(page) => match &mut page.subcommand {
                     PageSubCommand::Add(opts) => Some(opts),
                     PageSubCommand::Delete(opts) => Some(opts),
@@ -616,11 +613,11 @@ impl Options {
                     PageSubCommand::MoveTo(opts) => Some(opts),
                     PageSubCommand::Undelete(opts) => Some(opts),
                     PageSubCommand::Unlock(opts) => Some(opts),
-                }
+                },
                 Command::Lock(lock) => match &mut lock.subcommand {
                     LockSubCommand::List(opts) => Some(opts),
-                    _ => None
-                }
+                    _ => None,
+                },
                 Command::Asset(asset) => match &mut asset.subcommand {
                     AssetSubCommand::Add(opts) => Some(opts),
                     AssetSubCommand::List(opts) => Some(opts),
@@ -628,11 +625,11 @@ impl Options {
                     AssetSubCommand::Purge(opts) => Some(opts),
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
-                }
+                },
                 Command::Fts(fts) => match &mut fts.subcommand {
                     FtsSubCommand::Search(opts) => Some(opts),
                     _ => None,
-                }
+                },
                 Command::Commands => None,
                 Command::HelpAll => None,
             };
@@ -671,9 +668,7 @@ impl Options {
         println!("   assets directory: {}", self.assets_path().display());
         println!(
             "   template root:    {}",
-            self.template_root
-                .as_deref()
-                .unwrap_or("(none)")
+            self.template_root.as_deref().unwrap_or("(none)")
         );
         println!("   wiki title:       {}", self.wiki_title());
         println!(
@@ -691,7 +686,7 @@ impl Options {
                     UserSubCommand::Delete(opts) => Some(opts),
                     UserSubCommand::Edit(opts) => Some(opts),
                     UserSubCommand::List(opts) => Some(opts),
-                }
+                },
                 Command::Page(page) => match &page.subcommand {
                     PageSubCommand::Add(opts) => Some(opts),
                     PageSubCommand::Delete(opts) => Some(opts),
@@ -699,11 +694,11 @@ impl Options {
                     PageSubCommand::MoveTo(opts) => Some(opts),
                     PageSubCommand::Undelete(opts) => Some(opts),
                     PageSubCommand::Unlock(opts) => Some(opts),
-                }
+                },
                 Command::Lock(lock) => match &lock.subcommand {
                     LockSubCommand::List(opts) => Some(opts),
                     LockSubCommand::Delete(opts) => Some(opts),
-                }
+                },
                 Command::Asset(asset) => match &asset.subcommand {
                     AssetSubCommand::Add(opts) => Some(opts),
                     AssetSubCommand::List(opts) => Some(opts),
@@ -711,11 +706,11 @@ impl Options {
                     AssetSubCommand::Purge(opts) => Some(opts),
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
-                }
+                },
                 Command::Fts(fts) => match &fts.subcommand {
                     FtsSubCommand::Search(opts) => Some(opts),
                     _ => None,
-                }
+                },
                 Command::Commands => None,
                 Command::HelpAll => None,
             };
@@ -738,48 +733,32 @@ impl Options {
                 UserSubCommand::Delete(opts) => user_delete::build_context(self, opts),
                 UserSubCommand::Edit(opts) => user_edit::build_context(self, opts),
                 UserSubCommand::List(opts) => user_list::build_context(self, opts),
-            }
+            },
             Some(Command::Page(page)) => match &page.subcommand {
                 PageSubCommand::Add(opts) => page_add::build_context(self, opts),
                 PageSubCommand::Delete(opts) => page_delete::build_context(self, opts),
-                PageSubCommand::List(opts) => {
-                    page_list::build_context(self, opts)
-                }
-                PageSubCommand::MoveTo(opts) => {
-                    page_move_to::build_context(self, opts)
-                }
-                PageSubCommand::Undelete(opts) => {
-                    page_undelete::build_context(self, opts)
-                }
-                PageSubCommand::Unlock(opts) => {
-                    page_unlock::build_context(self, opts)
-                }
-            }
+                PageSubCommand::List(opts) => page_list::build_context(self, opts),
+                PageSubCommand::MoveTo(opts) => page_move_to::build_context(self, opts),
+                PageSubCommand::Undelete(opts) => page_undelete::build_context(self, opts),
+                PageSubCommand::Unlock(opts) => page_unlock::build_context(self, opts),
+            },
             Some(Command::Lock(lock)) => match &lock.subcommand {
-                LockSubCommand::List(opts) => {
-                    lock_list::build_context(self, opts)
-                }
-                LockSubCommand::Delete(opts) => {
-                    lock_delete::build_context(self, opts)
-                }
-            }
+                LockSubCommand::List(opts) => lock_list::build_context(self, opts),
+                LockSubCommand::Delete(opts) => lock_delete::build_context(self, opts),
+            },
             Some(Command::Asset(asset)) => match &asset.subcommand {
                 AssetSubCommand::Add(opts) => asset_add::build_context(self, opts),
                 AssetSubCommand::List(opts) => asset_list::build_context(self, opts),
                 AssetSubCommand::Delete(opts) => asset_delete::build_context(self, opts),
                 AssetSubCommand::Purge(opts) => asset_purge::build_context(self, opts),
-                AssetSubCommand::Undelete(opts) => {
-                    asset_undelete::build_context(self, opts)
-                }
-                AssetSubCommand::MoveTo(opts) => {
-                    asset_move_to::build_context(self, opts)
-                }
-            }
+                AssetSubCommand::Undelete(opts) => asset_undelete::build_context(self, opts),
+                AssetSubCommand::MoveTo(opts) => asset_move_to::build_context(self, opts),
+            },
             Some(Command::Fts(fts)) => match &fts.subcommand {
                 FtsSubCommand::Rebuild => fts_rebuild::build_context(self),
                 FtsSubCommand::Merge => fts_merge::build_context(self),
                 FtsSubCommand::Search(opts) => fts_search::build_context(self, opts),
-            }
+            },
             Some(Command::Commands) => commands::build_context(self),
             Some(Command::HelpAll) => help_all::build_context(self),
             None => Err(anyhow!("command not specified")),
@@ -847,7 +826,7 @@ enum UserSubCommand {
 
     /// ユーザ情報の一覧表示
     #[command(name = "list", alias = "l", alias = "ls")]
-    List(UserListOpts)
+    List(UserListOpts),
 }
 
 #[derive(Clone, Args, Debug)]
@@ -1276,8 +1255,7 @@ impl Validate for PageAddOpts {
 
         let source = fs::read_to_string(path)?;
         let parser = MarkdownParser::new(&source);
-        for _ in parser {
-        }
+        for _ in parser {}
 
         Ok(())
     }
@@ -1507,7 +1485,8 @@ fn parse_bind_value(value: &str) -> Result<(String, Option<u16>)> {
      * IPv6角括弧形式の解析
      */
     if let Some(rest) = value.strip_prefix('[') {
-        let close_pos = rest.find(']')
+        let close_pos = rest
+            .find(']')
             .ok_or_else(|| anyhow!("invalid bind address: {}", value))?;
         let addr = &rest[..close_pos];
         if addr.is_empty() {
@@ -1671,9 +1650,7 @@ impl PageAddOpts {
     /// 登録ユーザ名を返す
     ///
     pub(crate) fn user_name(&self) -> String {
-        self.user_name
-            .clone()
-            .expect("user_name must be resolved")
+        self.user_name.clone().expect("user_name must be resolved")
     }
 
     ///
@@ -1992,9 +1969,7 @@ impl AssetAddOpts {
     /// 登録ユーザ名を返す
     ///
     pub(crate) fn user_name(&self) -> String {
-        self.user_name
-            .clone()
-            .expect("user_name must be resolved")
+        self.user_name.clone().expect("user_name must be resolved")
     }
 
     ///
@@ -2863,7 +2838,7 @@ fn save_config(opts: &Options) -> Result<()> {
             }
 
             _ => {}
-        }
+        },
 
         Some(Command::Page(page)) => match &page.subcommand {
             PageSubCommand::Add(opts) => {
@@ -2882,7 +2857,7 @@ fn save_config(opts: &Options) -> Result<()> {
                 config.set_page_undelete_with_assets(!opts.is_without_assets());
             }
             PageSubCommand::Unlock(_) => {}
-        }
+        },
 
         Some(Command::Lock(lock)) => match &lock.subcommand {
             LockSubCommand::List(opts) => {
@@ -2891,7 +2866,7 @@ fn save_config(opts: &Options) -> Result<()> {
                 config.set_lock_list_long_info(opts.is_long_info());
             }
             _ => {}
-        }
+        },
 
         Some(Command::Asset(asset)) => match &asset.subcommand {
             AssetSubCommand::Add(opts) => {
@@ -2908,7 +2883,7 @@ fn save_config(opts: &Options) -> Result<()> {
             AssetSubCommand::Purge(_) => {}
             AssetSubCommand::Undelete(_) => {}
             AssetSubCommand::MoveTo(_) => {}
-        }
+        },
 
         Some(Command::Fts(fts)) => match &fts.subcommand {
             FtsSubCommand::Search(opts) => {
@@ -2917,7 +2892,7 @@ fn save_config(opts: &Options) -> Result<()> {
                 config.set_fts_search_all_revision(opts.all_revision());
             }
             _ => {}
-        }
+        },
 
         _ => {}
     }
@@ -2960,8 +2935,7 @@ fn confirm_overwrite(path: &Path) -> Result<bool> {
 /// # 戻り値
 /// 上書きを許可する場合は`true`、拒否された場合は`false`を返す。
 ///
-fn confirm_overwrite_with_io<R, W>(path: &Path, input: &mut R, output: &mut W,)
-    -> Result<bool>
+fn confirm_overwrite_with_io<R, W>(path: &Path, input: &mut R, output: &mut W) -> Result<bool>
 where
     R: BufRead,
     W: Write,

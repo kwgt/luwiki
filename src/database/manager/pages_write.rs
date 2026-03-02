@@ -11,27 +11,25 @@
 use std::collections::HashSet;
 use std::fs;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
 use redb::{ReadableMultimapTable, ReadableTable};
 
+use super::DatabaseManager;
 use crate::database::link_refs::{build_link_refs, build_link_refs_with_table};
 use crate::database::schema::{
-    is_root_path, ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE,
-    DELETED_PAGE_PATH_TABLE, DbError, LOCK_INFO_TABLE, PAGE_INDEX_TABLE,
-    PAGE_PATH_TABLE, PAGE_SOURCE_TABLE, USER_ID_TABLE,
+    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, DELETED_PAGE_PATH_TABLE, DbError,
+    LOCK_INFO_TABLE, PAGE_INDEX_TABLE, PAGE_PATH_TABLE, PAGE_SOURCE_TABLE, USER_ID_TABLE,
+    is_root_path,
 };
 use crate::database::txn_helpers::{
-    collect_recursive_deleted_page_targets_in_txn,
-    collect_recursive_page_ids_in_txn, collect_recursive_page_targets_in_txn,
-    delete_draft_in_txn, delete_page_hard_in_txn, delete_page_soft_in_txn,
-    find_lock_by_page, verify_page_lock_in_txn,
+    collect_recursive_deleted_page_targets_in_txn, collect_recursive_page_ids_in_txn,
+    collect_recursive_page_targets_in_txn, delete_draft_in_txn, delete_page_hard_in_txn,
+    delete_page_soft_in_txn, find_lock_by_page, verify_page_lock_in_txn,
 };
 use crate::database::types::{
-    AssetId, LockInfo, LockToken, PageId, PageIndex, PageSource, RenameInfo,
-    UserId,
+    AssetId, LockInfo, LockToken, PageId, PageIndex, PageSource, RenameInfo, UserId,
 };
-use super::DatabaseManager;
 
 impl DatabaseManager {
     ///
@@ -45,12 +43,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 作成したページIDを返す。
     ///
-    pub(crate) fn create_page<P, U>(
-        &self,
-        path: P,
-        user_name: U,
-        source: String,
-    ) -> Result<PageId>
+    pub(crate) fn create_page<P, U>(&self, path: P, user_name: U, source: String) -> Result<PageId>
     where
         P: AsRef<str>,
         U: AsRef<str>,
@@ -89,11 +82,7 @@ impl DatabaseManager {
              * 初期リネーム情報の生成
              */
             let link_refs = build_link_refs_with_table(&path_table, &path, &source)?;
-            let rename_info = RenameInfo::new(
-                None,
-                path.clone(),
-                link_refs,
-            );
+            let rename_info = RenameInfo::new(None, path.clone(), link_refs);
             let page_index = PageIndex::new_page(page_id.clone(), path.clone());
             let page_source = PageSource::new(source, user_id, rename_info);
 
@@ -239,18 +228,9 @@ impl DatabaseManager {
 
                 let path = index.path();
                 let link_refs = build_link_refs(&txn, &path, &source)?;
-                let rename_info = RenameInfo::new(
-                    None,
-                    path.clone(),
-                    link_refs,
-                );
-                let mut page_index = PageIndex::new_page(
-                    page_id.clone(),
-                    path,
-                );
-                if let Some((token, _)) =
-                    find_lock_by_page(&lock_table, page_id)?
-                {
+                let rename_info = RenameInfo::new(None, path.clone(), link_refs);
+                let mut page_index = PageIndex::new_page(page_id.clone(), path);
+                if let Some((token, _)) = find_lock_by_page(&lock_table, page_id)? {
                     page_index.set_lock_token(Some(token));
                 }
                 let page_source = PageSource::new(source, user_id, rename_info);
@@ -262,14 +242,10 @@ impl DatabaseManager {
                  * 最新リビジョンの更新
                  */
                 let revision = index.latest();
-                let mut page_source = match source_table.get(
-                    (page_id.clone(), revision)
-                )? {
+                let mut page_source = match source_table.get((page_id.clone(), revision))? {
                     Some(entry) => entry.value(),
                     None => {
-                        return Err(anyhow!(
-                            "page source not found"
-                        ));
+                        return Err(anyhow!("page source not found"));
                     }
                 };
 
@@ -284,12 +260,7 @@ impl DatabaseManager {
                  * 新規リビジョンの追加
                  */
                 let revision = index.latest() + 1;
-                let page_source = PageSource::new_revision(
-                    revision,
-                    source,
-                    user_id,
-                    None,
-                );
+                let page_source = PageSource::new_revision(revision, source, user_id, None);
 
                 index.set_latest(revision);
                 index_table.insert(page_id.clone(), index)?;
@@ -332,8 +303,7 @@ impl DatabaseManager {
 
         let target_ids = {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
-            let mut deleted_path_table =
-                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut deleted_path_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
@@ -509,13 +479,7 @@ impl DatabaseManager {
              * ロック検証
              */
             let now = Local::now();
-            verify_page_lock_in_txn(
-                page_id,
-                &mut index,
-                &mut index_table,
-                &mut lock_table,
-                &now,
-            )?;
+            verify_page_lock_in_txn(page_id, &mut index, &mut index_table, &mut lock_table, &now)?;
 
             /*
              * ソース削除
@@ -552,11 +516,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 成功時は`Ok(())`を返す。
     ///
-    pub(crate) fn compact_page_source(
-        &self,
-        page_id: &PageId,
-        keep_from: u64,
-    ) -> Result<()> {
+    pub(crate) fn compact_page_source(&self, page_id: &PageId, keep_from: u64) -> Result<()> {
         /*
          * 書き込みトランザクション開始
          */
@@ -593,13 +553,7 @@ impl DatabaseManager {
              * ロック検証
              */
             let now = Local::now();
-            verify_page_lock_in_txn(
-                page_id,
-                &mut index,
-                &mut index_table,
-                &mut lock_table,
-                &now,
-            )?;
+            verify_page_lock_in_txn(page_id, &mut index, &mut index_table, &mut lock_table, &now)?;
 
             /*
              * ソース削除
@@ -666,9 +620,7 @@ impl DatabaseManager {
                 return Err(anyhow!(DbError::PageLocked));
             }
 
-            let rename_to = if
-                let Some(suffix) = Self::get_suffix(base_index.path())
-            {
+            let rename_to = if let Some(suffix) = Self::get_suffix(base_index.path()) {
                 if rename_to.ends_with('/') {
                     format!("{}{}", rename_to, suffix)
                 } else {
@@ -718,10 +670,7 @@ impl DatabaseManager {
                 let new_path = if target.path == base_path {
                     rename_to.clone()
                 } else {
-                    let suffix = target
-                        .path
-                        .strip_prefix(&base_prefix)
-                        .unwrap_or("");
+                    let suffix = target.path.strip_prefix(&base_prefix).unwrap_or("");
 
                     format!("{}/{}", rename_to, suffix)
                 };
@@ -737,11 +686,7 @@ impl DatabaseManager {
                     }
                 }
 
-                mappings.push((
-                    target.page_id.clone(),
-                    target.path.clone(),
-                    new_path,
-                ));
+                mappings.push((target.page_id.clone(), target.path.clone(), new_path));
             }
 
             /*
@@ -758,26 +703,17 @@ impl DatabaseManager {
                 }
 
                 let latest = index.latest();
-                let latest_source = match source_table.get(
-                    (target_id.clone(), latest)
-                )? {
+                let latest_source = match source_table.get((target_id.clone(), latest))? {
                     Some(entry) => entry.value(),
                     None => return Err(anyhow!("page source not found")),
                 };
 
                 let link_refs = {
                     let path_table = &path_table;
-                    build_link_refs_with_table(
-                        path_table,
-                        &src_path,
-                        &latest_source.source(),
-                    )?
+                    build_link_refs_with_table(path_table, &src_path, &latest_source.source())?
                 };
-                let rename_info = RenameInfo::new(
-                    Some(src_path.clone()),
-                    new_path.clone(),
-                    link_refs,
-                );
+                let rename_info =
+                    RenameInfo::new(Some(src_path.clone()), new_path.clone(), link_refs);
                 let revision = latest + 1;
                 let page_source = PageSource::new_revision(
                     revision,
@@ -818,8 +754,7 @@ impl DatabaseManager {
     /// 処理が成功した場合は`Ok(())`を返す。失敗した場合はエラー情報を`Err()`で
     /// ラップして返す。
     ///
-    pub(crate) fn delete_page_by_id(&self, page_id: &PageId) -> Result<()>
-    {
+    pub(crate) fn delete_page_by_id(&self, page_id: &PageId) -> Result<()> {
         if let Some(index) = self.get_page_index_by_id(page_id)? {
             if index.is_draft() {
                 return self.delete_draft_by_id(page_id);
@@ -833,8 +768,7 @@ impl DatabaseManager {
 
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
-            let mut deleted_path_table =
-                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut deleted_path_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
@@ -889,8 +823,7 @@ impl DatabaseManager {
 
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
-            let mut deleted_path_table =
-                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut deleted_path_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
@@ -910,9 +843,7 @@ impl DatabaseManager {
              * ロック検証
              */
             if index.is_draft() {
-                if let Some((lock_token, lock_info)) =
-                    find_lock_by_page(&lock_table, page_id)?
-                {
+                if let Some((lock_token, lock_info)) = find_lock_by_page(&lock_table, page_id)? {
                     if lock_info.expire() > now {
                         let provided = match token {
                             Some(token) => token,
@@ -1069,8 +1000,7 @@ impl DatabaseManager {
 
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
-            let mut deleted_path_table =
-                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut deleted_path_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
             let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
@@ -1092,9 +1022,7 @@ impl DatabaseManager {
                 return Err(anyhow!(DbError::PageAlreadyExists));
             }
 
-            let restore_to = if
-                let Some(suffix) = Self::get_suffix(index.path())
-            {
+            let restore_to = if let Some(suffix) = Self::get_suffix(index.path()) {
                 if restore_to.ends_with('/') {
                     format!("{}{}", restore_to, suffix)
                 } else {
@@ -1135,10 +1063,7 @@ impl DatabaseManager {
                     asset_info.set_deleted(false);
                     asset_info.set_page_id(page_id.clone());
                     asset_table.insert(asset_id.clone(), asset_info)?;
-                    let _ = lookup_table.insert(
-                        (page_id.clone(), file_name),
-                        asset_id.clone(),
-                    )?;
+                    let _ = lookup_table.insert((page_id.clone(), file_name), asset_id.clone())?;
                 }
             }
         }
@@ -1178,8 +1103,7 @@ impl DatabaseManager {
 
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
-            let mut deleted_path_table =
-                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut deleted_path_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
@@ -1202,9 +1126,7 @@ impl DatabaseManager {
                 return Err(anyhow!("page not deleted"));
             }
 
-            let restore_to = if
-                let Some(suffix) = Self::get_suffix(base_index.path())
-            {
+            let restore_to = if let Some(suffix) = Self::get_suffix(base_index.path()) {
                 if restore_to.ends_with('/') {
                     format!("{}{}", restore_to, suffix)
                 } else {
@@ -1244,10 +1166,7 @@ impl DatabaseManager {
                 let new_path = if target.path == base_deleted_path {
                     restore_to.clone()
                 } else {
-                    let suffix = target
-                        .path
-                        .strip_prefix(&base_prefix)
-                        .unwrap_or("");
+                    let suffix = target.path.strip_prefix(&base_prefix).unwrap_or("");
 
                     format!("{}/{}", restore_to, suffix)
                 };
@@ -1260,11 +1179,7 @@ impl DatabaseManager {
                     return Err(anyhow!(DbError::PageAlreadyExists));
                 }
 
-                mappings.push((
-                    target.page_id.clone(),
-                    target.path.clone(),
-                    new_path,
-                ));
+                mappings.push((target.page_id.clone(), target.path.clone(), new_path));
             }
 
             /*
@@ -1304,10 +1219,8 @@ impl DatabaseManager {
                         asset_info.set_deleted(false);
                         asset_info.set_page_id(target_id.clone());
                         asset_table.insert(asset_id.clone(), asset_info)?;
-                        let _ = lookup_table.insert(
-                            (target_id.clone(), file_name),
-                            asset_id.clone(),
-                        )?;
+                        let _ = lookup_table
+                            .insert((target_id.clone(), file_name), asset_id.clone())?;
                     }
                 }
             }
@@ -1334,10 +1247,7 @@ impl DatabaseManager {
     /// 処理が成功した場合は`Ok(())`を返す。失敗した場合はエラー情報を`Err()`で
     /// ラップして返す。
     ///
-    pub(crate) fn delete_page_by_id_hard(
-        &self,
-        page_id: &PageId,
-    ) -> Result<()> {
+    pub(crate) fn delete_page_by_id_hard(&self, page_id: &PageId) -> Result<()> {
         if let Some(index) = self.get_page_index_by_id(page_id)? {
             if index.is_draft() {
                 return self.delete_draft_by_id(page_id);
@@ -1352,8 +1262,7 @@ impl DatabaseManager {
 
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
-            let mut deleted_path_table =
-                txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
+            let mut deleted_path_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
@@ -1481,9 +1390,7 @@ impl DatabaseManager {
             }
 
             let latest = index.latest();
-            let latest_source = match source_table.get(
-                (page_id.clone(), latest)
-            )? {
+            let latest_source = match source_table.get((page_id.clone(), latest))? {
                 Some(entry) => entry.value(),
                 None => return Err(anyhow!("page source not found")),
             };
@@ -1491,16 +1398,9 @@ impl DatabaseManager {
             /*
              * リネーム情報と新リビジョン生成
              */
-            let link_refs = build_link_refs_with_table(
-                &path_table,
-                &path,
-                &latest_source.source(),
-            )?;
-            let rename_info = RenameInfo::new(
-                Some(path.clone()),
-                dst_path.clone(),
-                link_refs,
-            );
+            let link_refs =
+                build_link_refs_with_table(&path_table, &path, &latest_source.source())?;
+            let rename_info = RenameInfo::new(Some(path.clone()), dst_path.clone(), link_refs);
 
             let revision = latest + 1;
             let page_source = PageSource::new_revision(
@@ -1559,6 +1459,9 @@ impl DatabaseManager {
     where
         S: AsRef<str>,
     {
-        path.as_ref().rsplit('/').find(|s| !s.is_empty()).map(|s| s.to_string())
+        path.as_ref()
+            .rsplit('/')
+            .find(|s| !s.is_empty())
+            .map(|s| s.to_string())
     }
 }

@@ -68,11 +68,9 @@ pub(in crate::database) fn build_link_refs_with_table<'txn>(
     base_path: &str,
     source: &str,
 ) -> Result<BTreeMap<String, Option<PageId>>> {
-    build_link_refs_with_resolver(
-        base_path,
-        source,
-        |path| resolve_page_id_with_table(path_table, path),
-    )
+    build_link_refs_with_resolver(base_path, source, |path| {
+        resolve_page_id_with_table(path_table, path)
+    })
 }
 
 ///
@@ -374,10 +372,7 @@ fn cleanup_path(path: &str) -> String {
 /// 解決できたページIDを返す。存在しない場合は`None`を返す。
 ///
 #[allow(dead_code)]
-fn resolve_page_id(
-    txn: &redb::WriteTransaction,
-    path: &str,
-) -> Result<Option<PageId>> {
+fn resolve_page_id(txn: &redb::WriteTransaction, path: &str) -> Result<Option<PageId>> {
     let table = txn.open_table(PAGE_PATH_TABLE)?;
     resolve_page_id_with_table(&table, path)
 }

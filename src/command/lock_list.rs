@@ -13,9 +13,9 @@ use std::fmt::Write;
 use anyhow::Result;
 use chrono::SecondsFormat;
 
+use super::CommandContext;
 use crate::cmd_args::{LockListOpts, LockListSortMode, Options};
 use crate::database::{DatabaseManager, LockListEntry};
-use super::CommandContext;
 
 ///
 /// "lock list"サブコマンドのコンテキスト情報をパックした構造体
@@ -59,28 +59,16 @@ impl CommandContext for LockListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_locks(
-    locks: &mut [LockListEntry],
-    sort_mode: LockListSortMode,
-    reverse_sort: bool,
-) {
+fn sort_locks(locks: &mut [LockListEntry], sort_mode: LockListSortMode, reverse_sort: bool) {
     locks.sort_by(|left, right| {
         let ord = match sort_mode {
             LockListSortMode::Default => left.token().cmp(&right.token()),
             LockListSortMode::Expire => left.expire().cmp(&right.expire()),
-            LockListSortMode::UserName => {
-                left.user_name().cmp(&right.user_name())
-            }
-            LockListSortMode::PagePath => {
-                left.page_path().cmp(&right.page_path())
-            }
+            LockListSortMode::UserName => left.user_name().cmp(&right.user_name()),
+            LockListSortMode::PagePath => left.page_path().cmp(&right.page_path()),
         };
 
-        if reverse_sort {
-            ord.reverse()
-        } else {
-            ord
-        }
+        if reverse_sort { ord.reverse() } else { ord }
     });
 }
 
@@ -115,10 +103,7 @@ fn format_lock_table(locks: &[LockListEntry], long_info: bool) -> String {
         let header = ["LOCK_ID", "PATH"];
         lines.push(header.iter().map(|value| value.to_string()).collect());
         for lock in locks {
-            lines.push(vec![
-                lock.token().to_string(),
-                lock.page_path(),
-            ]);
+            lines.push(vec![lock.token().to_string(), lock.page_path()]);
         }
     }
 

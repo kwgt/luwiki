@@ -10,9 +10,7 @@
 
 use chrono::{DateTime, Local};
 
-use crate::database::types::{
-    AssetId, LockToken, PageId, PageIndex, PageSource,
-};
+use crate::database::types::{AssetId, LockToken, PageId, PageIndex, PageSource};
 
 ///
 /// page list 用のページ情報
@@ -520,10 +518,7 @@ impl PageIndexEntry {
     /// # 戻り値
     /// PageIndexEntryを返す。
     ///
-    pub(in crate::database) fn new(
-        id: PageId,
-        index: PageIndex,
-    ) -> Self {
+    pub(in crate::database) fn new(id: PageId, index: PageIndex) -> Self {
         Self { id, index }
     }
     ///
@@ -559,11 +554,7 @@ impl PageSourceEntry {
     /// # 戻り値
     /// PageSourceEntryを返す。
     ///
-    pub(in crate::database) fn new(
-        page_id: PageId,
-        revision: u64,
-        source: PageSource,
-    ) -> Self {
+    pub(in crate::database) fn new(page_id: PageId, revision: u64, source: PageSource) -> Self {
         Self {
             page_id,
             revision,

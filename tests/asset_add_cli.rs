@@ -30,10 +30,7 @@ fn asset_add_cli_creates_asset() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let page_id = create_page(&client, &api_url, "/asset-add", "body");
 
     drop(server);
@@ -51,10 +48,7 @@ fn asset_add_cli_creates_asset() {
     );
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let assets = list_page_assets(&client, &api_url, &page_id);
     assert_eq!(assets.len(), 1);
     assert_eq!(
@@ -84,23 +78,13 @@ fn asset_add_cli_uses_default_user_from_config() {
     let config_path = base_dir.join("config.toml");
     fs::write(
         &config_path,
-        format!(
-            "[asset.add]\ndefault_user = \"{}\"\n",
-            TEST_USERNAME
-        ),
-    ).expect("write config failed");
+        format!("[asset.add]\ndefault_user = \"{}\"\n", TEST_USERNAME),
+    )
+    .expect("write config failed");
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
-    let page_id = create_page(
-        &client,
-        &api_url,
-        "/asset-add-config",
-        "body",
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+    let page_id = create_page(&client, &api_url, "/asset-add-config", "body");
 
     drop(server);
 
@@ -117,10 +101,7 @@ fn asset_add_cli_uses_default_user_from_config() {
     );
 
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let assets = list_page_assets(&client, &api_url, &page_id);
     assert_eq!(assets.len(), 1);
 
@@ -140,12 +121,7 @@ fn asset_add_cli_uses_default_user_from_config() {
 /// # 戻り値
 /// 作成したページID
 ///
-fn create_page(
-    client: &Client,
-    api_url: &str,
-    path: &str,
-    body: &str,
-) -> String {
+fn create_page(client: &Client, api_url: &str, path: &str, body: &str) -> String {
     /*
      * ドラフト作成
      */
@@ -179,12 +155,9 @@ fn create_page(
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -214,11 +187,7 @@ fn create_page(
 /// # 戻り値
 /// アセット一覧
 ///
-fn list_page_assets(
-    client: &Client,
-    api_url: &str,
-    page_id: &str,
-) -> Vec<Value> {
+fn list_page_assets(client: &Client, api_url: &str, page_id: &str) -> Vec<Value> {
     let response = client
         .get(&format!("{}/pages/{}/assets", api_url, page_id))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
@@ -227,8 +196,7 @@ fn list_page_assets(
 
     assert_eq!(response.status().as_u16(), 200);
     let body = response.text().expect("read page assets failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse page assets failed");
+    let value: Value = serde_json::from_str(&body).expect("parse page assets failed");
     value.as_array().expect("assets is not array").clone()
 }
 
@@ -256,9 +224,7 @@ fn run_asset_add(
 ) {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)

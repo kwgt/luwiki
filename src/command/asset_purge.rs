@@ -8,13 +8,13 @@
 //! サブコマンド"asset purge"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{AssetPurgeOpts, Options};
 use crate::database::types::PageId;
 use crate::database::{DatabaseManager, DbError};
 use crate::rest_api::validate_page_path;
-use super::CommandContext;
 
 ///
 /// "asset purge"サブコマンドのコンテキスト情報をパックした構造体

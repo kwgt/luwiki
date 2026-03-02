@@ -14,13 +14,13 @@ use std::fmt::{Display, Formatter};
 use std::ops::{Deref, RangeInclusive};
 
 use anyhow::{Error, Result};
-use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{PasswordHash, SaltString};
+use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use chrono::{DateTime, Duration, Local};
 use rand_core::{OsRng, RngCore};
 use redb::{Key, TypeName, Value};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ulid::{DecodeError, Ulid};
 
 ///
@@ -64,8 +64,7 @@ impl Id {
     ///
     #[allow(dead_code)]
     pub(crate) fn min() -> Self {
-        Self::from_string("00000000000000000000000000")
-            .expect("invalid ULID string")
+        Self::from_string("00000000000000000000000000").expect("invalid ULID string")
     }
 
     ///
@@ -73,8 +72,7 @@ impl Id {
     ///
     #[allow(dead_code)]
     pub(crate) fn max() -> Self {
-        Self::from_string("7ZZZZZZZZZZZZZZZZZZZZZZZZZ")
-            .expect("invalid ULID string")
+        Self::from_string("7ZZZZZZZZZZZZZZZZZZZZZZZZZ").expect("invalid ULID string")
     }
 }
 
@@ -135,14 +133,14 @@ impl Value for Id {
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
-        Self: 'b
+        Self: 'b,
     {
         value.to_bytes()
     }
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a
+        Self: 'a,
     {
         let mut bytes = [0u8; 16];
         bytes.copy_from_slice(data);
@@ -184,9 +182,7 @@ impl<'de> Deserialize<'de> for Id {
                 .map(Id)
                 .map_err(de::Error::custom)
         } else {
-            Ok(Id(Ulid::from_bytes(
-               <[u8; 16]>::deserialize(deserializer)?
-            )))
+            Ok(Id(Ulid::from_bytes(<[u8; 16]>::deserialize(deserializer)?)))
         }
     }
 }
@@ -528,7 +524,11 @@ impl PageIndex {
                 if let Some(path) = info.path_state.current().map(|value| value.to_string()) {
                     info.path_state = PagePathState::LastDeleted(path);
                 }
-            } else if let Some(path) = info.path_state.last_deleted().map(|value| value.to_string()) {
+            } else if let Some(path) = info
+                .path_state
+                .last_deleted()
+                .map(|value| value.to_string())
+            {
                 info.path_state = PagePathState::Current(path);
             }
         }
@@ -593,18 +593,16 @@ impl Value for PageIndex {
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a
+        Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data)
-            .expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
-        Self: 'b
+        Self: 'b,
     {
-        rmp_serde::to_vec_named(value)
-            .expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -698,6 +696,10 @@ pub(crate) struct PageSource {
     /// リビジョン番号
     revision: u64,
 
+    /// 実体識別用のインスタンスID
+    #[serde(default)]
+    instance_id: Option<Id>,
+
     /// 作成した日時
     timestamp: DateTime<Local>,
 
@@ -726,15 +728,12 @@ impl PageSource {
     /// # 注記
     /// ページ作成時の生成専用として、リビジョン番号は1で固定する。
     ///
-    pub(crate) fn new(
-        source: String,
-        user: UserId,
-        rename: RenameInfo,
-    ) -> Self {
+    pub(crate) fn new(source: String, user: UserId, rename: RenameInfo) -> Self {
         let revision = 1u64;
 
         Self {
             revision,
+            instance_id: Some(Id::new()),
             timestamp: Local::now(),
             user,
             rename: Some(rename),
@@ -762,6 +761,7 @@ impl PageSource {
     ) -> Self {
         Self {
             revision,
+            instance_id: Some(Id::new()),
             timestamp: Local::now(),
             user,
             rename,
@@ -791,6 +791,16 @@ impl PageSource {
     }
 
     ///
+    /// インスタンスIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// インスタンスIDを返す。
+    ///
+    pub(crate) fn instance_id(&self) -> Option<Id> {
+        self.instance_id.clone()
+    }
+
+    ///
     /// ページソースの更新
     ///
     /// # 引数
@@ -798,6 +808,7 @@ impl PageSource {
     ///
     pub(crate) fn update_source(&mut self, source: String) {
         self.source = source;
+        self.instance_id = Some(Id::new());
         self.timestamp = Local::now();
     }
 
@@ -847,18 +858,16 @@ impl Value for PageSource {
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a
+        Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data)
-            .expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
-        Self: 'b
+        Self: 'b,
     {
-        rmp_serde::to_vec_named(value)
-            .expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -896,7 +905,11 @@ impl RenameInfo {
         to: String,
         link_refs: BTreeMap<String, Option<Id>>,
     ) -> Self {
-        Self { from, to, link_refs }
+        Self {
+            from,
+            to,
+            link_refs,
+        }
     }
 
     ///
@@ -936,7 +949,11 @@ impl RenameInfo {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AssetInfo {
     /// アセットID
-    id: AssetId, 
+    id: AssetId,
+
+    /// 実体識別用のインスタンスID
+    #[serde(default)]
+    instance_id: Option<Id>,
 
     /// 所属ページID(Noneの場合はゾンビ状態)
     #[serde(default)]
@@ -986,6 +1003,7 @@ impl AssetInfo {
     ) -> Self {
         Self {
             id,
+            instance_id: Some(Id::new()),
             page_id: Some(page_id),
             file_name,
             mime,
@@ -1005,6 +1023,16 @@ impl AssetInfo {
     #[allow(dead_code)]
     pub(crate) fn id(&self) -> AssetId {
         self.id.clone()
+    }
+
+    ///
+    /// インスタンスIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// インスタンスIDを返す。
+    ///
+    pub(crate) fn instance_id(&self) -> Option<Id> {
+        self.instance_id.clone()
     }
 
     ///
@@ -1146,18 +1174,16 @@ impl Value for AssetInfo {
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a
+        Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data)
-            .expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
-        Self: 'b
+        Self: 'b,
     {
-        rmp_serde::to_vec_named(value)
-            .expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -1203,8 +1229,8 @@ impl UserInfo {
     /// 存せず、ランダムに生成されたソルトデータと掛け合わせたデータでハッシュ化
     /// し、その結果を文字列化した物を格納する。
     ///
-    pub(crate) fn new<S>(name: S, password: S, display_name: Option<S>,) -> Self
-    where 
+    pub(crate) fn new<S>(name: S, password: S, display_name: Option<S>) -> Self
+    where
         S: AsRef<str>,
     {
         /*
@@ -1216,8 +1242,7 @@ impl UserInfo {
         /*
          * パスワードのハッシュ化
          */
-        let salt_string = SaltString::encode_b64(&salt)
-            .expect("salt encode failed");
+        let salt_string = SaltString::encode_b64(&salt).expect("salt encode failed");
         let argon2 = Argon2::default();
         let hashed = argon2
             .hash_password(password.as_ref().as_bytes(), &salt_string)
@@ -1229,10 +1254,7 @@ impl UserInfo {
             username: name.as_ref().to_string(),
             password: hashed,
             salt,
-            display_name: display_name
-                .unwrap_or(name)
-                .as_ref()
-                .to_string(),
+            display_name: display_name.unwrap_or(name).as_ref().to_string(),
             timestamp: Local::now(),
         }
     }
@@ -1243,7 +1265,7 @@ impl UserInfo {
     /// # 戻り値
     /// ユーザIDオブジェクトを返す
     ///
-    pub (crate) fn id(&self) -> UserId {
+    pub(crate) fn id(&self) -> UserId {
         self.id.clone()
     }
 
@@ -1253,7 +1275,7 @@ impl UserInfo {
     /// # 戻り値
     /// ユーザ名を返す
     ///
-    pub (crate) fn username(&self) -> String {
+    pub(crate) fn username(&self) -> String {
         self.username.clone()
     }
 
@@ -1263,7 +1285,7 @@ impl UserInfo {
     /// # 戻り値
     /// 表示名を返す
     ///
-    pub (crate) fn display_name(&self) -> String {
+    pub(crate) fn display_name(&self) -> String {
         self.display_name.clone()
     }
 
@@ -1273,7 +1295,7 @@ impl UserInfo {
     /// # 戻り値
     /// 更新日時表を返す
     ///
-    pub (crate) fn timestamp(&self) -> DateTime<Local> {
+    pub(crate) fn timestamp(&self) -> DateTime<Local> {
         self.timestamp.clone()
     }
 
@@ -1304,8 +1326,7 @@ impl UserInfo {
         /*
          * パスワードのハッシュ化
          */
-        let salt_string = SaltString::encode_b64(&salt)
-            .expect("salt encode failed");
+        let salt_string = SaltString::encode_b64(&salt).expect("salt encode failed");
         let argon2 = Argon2::default();
         let hashed = argon2
             .hash_password(password.as_bytes(), &salt_string)
@@ -1384,18 +1405,16 @@ impl Value for UserInfo {
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a
+        Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data)
-            .expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
-        Self: 'b
+        Self: 'b,
     {
-        rmp_serde::to_vec_named(value)
-            .expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -1433,7 +1452,7 @@ impl LockInfo {
     /// # 注記
     /// 本関数を呼び出すとロック情報を生成する。
     ///
-    pub(crate) fn new(page: &PageId, user: &UserId,) -> Self {
+    pub(crate) fn new(page: &PageId, user: &UserId) -> Self {
         Self {
             token: LockToken::new(),
             page: page.clone(),
@@ -1518,17 +1537,15 @@ impl Value for LockInfo {
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a
+        Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data)
-            .expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
-        Self: 'b
+        Self: 'b,
     {
-        rmp_serde::to_vec_named(value)
-            .expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
     }
 }

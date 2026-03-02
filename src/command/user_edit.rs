@@ -8,12 +8,12 @@
 //! サブコマンド"user edit"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
-use crate::cmd_args::{Options, UserEditOpts};
-use crate::database::DatabaseManager;
 use super::CommandContext;
 use super::common::read_password_with_confirm;
+use crate::cmd_args::{Options, UserEditOpts};
+use crate::database::DatabaseManager;
 
 ///
 /// "user edit"サブコマンドのコンテキスト情報をパックした構造体
@@ -83,12 +83,13 @@ mod tests {
     #[test]
     fn update_display_name_succeeds() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir)
-            .expect("open failed");
-        manager.add_user(TEST_USERNAME, TEST_PASSWORD, None)
+        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        manager
+            .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
 
-        manager.update_user(TEST_USERNAME, Some("new"), None)
+        manager
+            .update_user(TEST_USERNAME, Some("new"), None)
             .expect("update failed");
         let users = manager.list_users().expect("list failed");
         let user = users
@@ -103,9 +104,9 @@ mod tests {
     #[test]
     fn update_password_succeeds() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir)
-            .expect("open failed");
-        manager.add_user(TEST_USERNAME, TEST_PASSWORD, None)
+        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        manager
+            .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
 
         manager
@@ -126,8 +127,7 @@ mod tests {
     #[test]
     fn update_user_fails_when_missing() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir)
-            .expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
 
         let result = manager.update_user("missing", Some("x"), None);
         assert!(result.is_err());
@@ -138,9 +138,9 @@ mod tests {
     #[test]
     fn update_user_fails_when_no_changes() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir)
-            .expect("open failed");
-        manager.add_user(TEST_USERNAME, TEST_PASSWORD, None)
+        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        manager
+            .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
 
         let result = manager.update_user(TEST_USERNAME, None, None);
@@ -150,9 +150,7 @@ mod tests {
     }
 
     fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
-        let base = PathBuf::from("tests")
-            .join("tmp")
-            .join(unique_suffix());
+        let base = PathBuf::from("tests").join("tmp").join(unique_suffix());
         let db_dir = base.join("db");
         let assets_dir = base.join("assets");
         fs::create_dir_all(&db_dir).expect("create db dir failed");

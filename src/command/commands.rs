@@ -11,8 +11,8 @@
 use anyhow::Result;
 use clap::CommandFactory;
 
-use crate::cmd_args::Options;
 use super::CommandContext;
+use crate::cmd_args::Options;
 
 ///
 /// "commands"サブコマンドのコンテキスト情報をパックした構造体
@@ -41,11 +41,7 @@ impl CommandContext for CommandsCommandContext {
     }
 }
 
-fn collect_commands(
-    cmd: &clap::Command,
-    prefix: &str,
-    entries: &mut Vec<(String, String)>,
-) {
+fn collect_commands(cmd: &clap::Command, prefix: &str, entries: &mut Vec<(String, String)>) {
     for sub in cmd.get_subcommands() {
         let name = sub.get_name();
 
@@ -69,8 +65,6 @@ fn collect_commands(
 ///
 /// コマンドコンテキストの生成
 ///
-pub(crate) fn build_context(
-    _opts: &Options,
-) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(_opts: &Options) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(CommandsCommandContext))
 }

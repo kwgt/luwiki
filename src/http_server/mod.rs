@@ -18,19 +18,19 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use anyhow::Result;
-use actix_web::{web, App, HttpResponse, HttpServer};
-use actix_web::dev::ServiceResponse;
-#[cfg(target_os="windows")]
+use actix_web::dev::Server;
+#[cfg(target_os = "windows")]
 use actix_web::dev::ServerHandle;
+use actix_web::dev::ServiceResponse;
 use actix_web::http::StatusCode;
 use actix_web::middleware::{ErrorHandlerResponse, ErrorHandlers};
-use actix_web::dev::Server;
+use actix_web::{App, HttpResponse, HttpServer, web};
+use anyhow::Result;
 use log::{info, warn};
 use tokio::runtime::Builder;
-use tokio::time;
-#[cfg(target_os="windows")]
+#[cfg(target_os = "windows")]
 use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+use tokio::time;
 
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
@@ -51,9 +51,9 @@ fn payload_too_large_handler<B>(
         .content_type("application/json")
         .body(body.to_string())
         .map_into_right_body();
-    Ok(ErrorHandlerResponse::Response(
-        ServiceResponse::new(req, resp),
-    ))
+    Ok(ErrorHandlerResponse::Response(ServiceResponse::new(
+        req, resp,
+    )))
 }
 
 pub(crate) fn run(
@@ -69,8 +69,11 @@ pub(crate) fn run(
     cert_path: PathBuf,
     cert_is_explicit: bool,
 ) -> Result<()> {
-
-    info!("{} {} start", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"),);
+    info!(
+        "{} {} start",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    );
 
     /*
      * Tokioランタイムの構築
@@ -152,15 +155,13 @@ fn create_server(
         App::new()
             // ロガーの設定
             .wrap(AccessLogger::new())
-            .wrap(ErrorHandlers::new().handler(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                payload_too_large_handler,
-            ))
-
+            .wrap(
+                ErrorHandlers::new()
+                    .handler(StatusCode::PAYLOAD_TOO_LARGE, payload_too_large_handler),
+            )
             // REST APIエンドポイント設定
             .app_data(state.clone())
             .service(rest_api::create_api_scope(payload_limit))
-
             // Wiki閲覧用エンドポイント設定
             .route("/", web::get().to(page_view::get_root_redirect))
             .route("/wiki", web::get().to(page_view::get_root))
@@ -172,12 +173,11 @@ fn create_server(
             .route("/pages/{page_path:.*}", web::get().to(page_view::get_pages))
             .route("/rev", web::get().to(page_view::get_rev_root))
             .route("/rev/{page_path:.*}", web::get().to(page_view::get_rev))
-
             // 静的ファイル配信
             .route("/static/{file:.*}", web::get().to(static_files::get))
 
-            // root空間に展開されるその他のエンドポイント設定
-            //.servcie(...)
+        // root空間に展開されるその他のエンドポイント設定
+        //.servcie(...)
     });
 
     let bind_addr = format!("{}:{}", addr, port);

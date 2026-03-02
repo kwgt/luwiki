@@ -15,10 +15,10 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::super::resp_error_json;
 use crate::database::DbError;
 use crate::database::types::PageId;
 use crate::http_server::app_state::AppState;
-use super::super::resp_error_json;
 
 #[derive(Deserialize)]
 struct ParentQuery {
@@ -43,9 +43,7 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * ページID解析
      */
@@ -53,19 +51,14 @@ pub async fn get(
     let page_id = match PageId::from_string(&page_id_raw) {
         Ok(page_id) => page_id,
         Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
     };
 
     /*
      * クエリ取得
      */
-    let query = match web::Query::<ParentQuery>::from_query(
-        req.query_string()
-    ) {
+    let query = match web::Query::<ParentQuery>::from_query(req.query_string()) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -95,10 +88,7 @@ pub async fn get(
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -109,17 +99,11 @@ pub async fn get(
     };
 
     if page_index.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "page deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
     }
 
     if page_index.is_draft() {
-        return Ok(resp_error_json(
-            StatusCode::NOT_FOUND,
-            "page not found",
-        ));
+        return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
     }
 
     let current_path = match page_index.current_path() {
@@ -132,20 +116,11 @@ pub async fn get(
         }
     };
 
-    let (parent_id, parent_path) = match resolve_parent(
-        state.db(),
-        current_path,
-        recursive,
-    ) {
+    let (parent_id, parent_path) = match resolve_parent(state.db(), current_path, recursive) {
         Ok(result) => result,
         Err(err) => {
-            if let Some(DbError::PageNotFound) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::NOT_FOUND,
-                    "parent not found",
-                ));
+            if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
+                return Ok(resp_error_json(StatusCode::NOT_FOUND, "parent not found"));
             }
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,

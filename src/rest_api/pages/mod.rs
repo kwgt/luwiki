@@ -8,30 +8,30 @@
 //! ページ関連のREST APIを実装するモジュール
 //!
 
-pub(crate) mod source;
-pub(crate) mod meta;
-pub(crate) mod lock;
-pub(crate) mod path;
 pub(crate) mod assets;
 pub(crate) mod delete;
 pub(crate) mod deleted;
 pub(crate) mod list;
+pub(crate) mod lock;
+pub(crate) mod meta;
 pub(crate) mod parent;
-pub(crate) mod search;
-pub(crate) mod template;
+pub(crate) mod path;
 pub(crate) mod revision;
+pub(crate) mod search;
+pub(crate) mod source;
+pub(crate) mod template;
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{header, StatusCode};
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::resp_error_json;
 use crate::database::DbError;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthUser;
-use super::resp_error_json;
 
 /// ページパスで禁止する文字(追加しやすいように集約する)
 const FORBIDDEN_PATH_CHARS: &[char] = &['\\'];
@@ -64,15 +64,11 @@ pub async fn post(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     body: web::Bytes,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<CreatePageQuery>::from_query(
-        req.query_string()
-    ) {
+    let query = match web::Query::<CreatePageQuery>::from_query(req.query_string()) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -125,19 +121,11 @@ pub async fn post(
     /*
      * ドラフト作成
      */
-    let (page_id, lock_info) = match state.db().create_draft_page(
-        &query.path,
-        auth_user,
-    ) {
+    let (page_id, lock_info) = match state.db().create_draft_page(&query.path, auth_user) {
         Ok(result) => result,
         Err(err) => {
-            if let Some(DbError::PageAlreadyExists) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::CONFLICT,
-                    "page already exists",
-                ));
+            if let Some(DbError::PageAlreadyExists) = err.downcast_ref::<DbError>() {
+                return Ok(resp_error_json(StatusCode::CONFLICT, "page already exists"));
             }
 
             return Ok(resp_error_json(

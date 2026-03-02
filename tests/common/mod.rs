@@ -126,8 +126,7 @@ pub fn reserve_port() -> u16 {
     /*
      * 最終手段としてOSに割り当てを委ねる
      */
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("bind failed");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
     listener.local_addr().expect("addr failed").port()
 }
 
@@ -147,9 +146,7 @@ pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
      * CLI起動
      */
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -174,10 +171,8 @@ pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
      */
     {
         let stdin = child.stdin.as_mut().expect("stdin missing");
-        writeln!(stdin, "{}", TEST_PASSWORD)
-            .expect("write password failed");
-        writeln!(stdin, "{}", TEST_PASSWORD)
-            .expect("write confirm failed");
+        writeln!(stdin, "{}", TEST_PASSWORD).expect("write password failed");
+        writeln!(stdin, "{}", TEST_PASSWORD).expect("write confirm failed");
     }
 
     /*
@@ -214,27 +209,19 @@ impl ServerGuard {
          * サーバ起動
          */
         let exe = test_binary_path();
-        let base_dir = db_path
-            .parent()
-            .expect("db_path parent missing");
+        let base_dir = db_path.parent().expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
         /*
          * テスト用設定の準備
          */
         let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
-        fs::create_dir_all(&config_dir)
-            .expect("create config dir failed");
+        fs::create_dir_all(&config_dir).expect("create config dir failed");
         let config_path = config_dir.join("config.toml");
-        fs::write(
-            &config_path,
-            "[run]\nuse_tls = false\n",
-        ).expect("write test config failed");
+        fs::write(&config_path, "[run]\nuse_tls = false\n").expect("write test config failed");
         let stdout_path = base_dir.join("server.stdout.log");
-        let stdout = File::create(&stdout_path)
-            .expect("create server stdout failed");
+        let stdout = File::create(&stdout_path).expect("create server stdout failed");
         let stderr_path = base_dir.join("server.stderr.log");
-        let stderr = File::create(&stderr_path)
-            .expect("create server stderr failed");
+        let stderr = File::create(&stderr_path).expect("create server stderr failed");
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
@@ -308,9 +295,7 @@ pub fn wait_for_server(url: &str, stderr_path: &Path) {
             last_error = Some(format!("request error: {}", err));
         }
 
-        thread::sleep(Duration::from_millis(
-            SERVER_START_RETRY_INTERVAL_MS
-        ));
+        thread::sleep(Duration::from_millis(SERVER_START_RETRY_INTERVAL_MS));
     }
 
     /*
@@ -318,16 +303,13 @@ pub fn wait_for_server(url: &str, stderr_path: &Path) {
      */
     let stderr_log = fs::read_to_string(stderr_path)
         .unwrap_or_else(|_| "<stderr log not available>".to_string());
-    let stdout_path = stderr_path
-        .with_file_name("server.stdout.log");
+    let stdout_path = stderr_path.with_file_name("server.stdout.log");
     let stdout_log = fs::read_to_string(&stdout_path)
         .unwrap_or_else(|_| "<stdout log not available>".to_string());
     let last_error = last_error.unwrap_or_else(|| "unknown".to_string());
     panic!(
         "server did not start\nstdout:\n{}\nstderr:\n{}\nlast error: {}",
-        stdout_log,
-        stderr_log,
-        last_error
+        stdout_log, stderr_log, last_error
     );
 }
 
@@ -344,10 +326,7 @@ pub fn wait_for_server(url: &str, stderr_path: &Path) {
 /// # 戻り値
 /// (APIベースURL, HTTPクライアント)のタプルを返す。
 ///
-pub fn wait_for_server_with_scheme(
-    port: u16,
-    stderr_path: &Path,
-) -> (String, Client) {
+pub fn wait_for_server_with_scheme(port: u16, stderr_path: &Path) -> (String, Client) {
     /*
      * 事前情報の準備
      */
@@ -399,9 +378,7 @@ pub fn wait_for_server_with_scheme(
             }
         }
 
-        thread::sleep(Duration::from_millis(
-            SERVER_START_RETRY_INTERVAL_MS
-        ));
+        thread::sleep(Duration::from_millis(SERVER_START_RETRY_INTERVAL_MS));
     }
 
     /*
@@ -409,16 +386,13 @@ pub fn wait_for_server_with_scheme(
      */
     let stderr_log = fs::read_to_string(stderr_path)
         .unwrap_or_else(|_| "<stderr log not available>".to_string());
-    let stdout_path = stderr_path
-        .with_file_name("server.stdout.log");
+    let stdout_path = stderr_path.with_file_name("server.stdout.log");
     let stdout_log = fs::read_to_string(&stdout_path)
         .unwrap_or_else(|_| "<stdout log not available>".to_string());
     let last_error = last_error.unwrap_or_else(|| "unknown".to_string());
     panic!(
         "server did not start\nstdout:\n{}\nstderr:\n{}\nlast error: {}",
-        stdout_log,
-        stderr_log,
-        last_error
+        stdout_log, stderr_log, last_error
     );
 }
 

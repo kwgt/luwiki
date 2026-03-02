@@ -6,11 +6,11 @@
 
 mod common;
 
-use std::fs;
 use common::{
-    prepare_test_dirs, reserve_port, run_add_user,
-    wait_for_server_with_scheme, ServerGuard, TEST_PASSWORD, TEST_USERNAME,
+    ServerGuard, TEST_PASSWORD, TEST_USERNAME, prepare_test_dirs, reserve_port, run_add_user,
+    wait_for_server_with_scheme,
 };
+use std::fs;
 
 #[test]
 fn api_hello_requires_basic_auth() {
@@ -19,10 +19,7 @@ fn api_hello_requires_basic_auth() {
 
     run_add_user(&db_path, &assets_dir);
     let _server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        _server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, _server.stderr_path());
     let base_url = format!("{}/hello", api_base_url);
 
     let response = client.get(&base_url).send().expect("request failed");

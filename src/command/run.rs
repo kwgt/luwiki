@@ -10,14 +10,14 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{FrontendConfig, Options, RunOpts};
 use crate::database::DatabaseManager;
 use crate::fts::FtsIndexConfig;
 use crate::http_server;
 use crate::rest_api::validate_page_path;
-use super::CommandContext;
 
 ///
 /// addサブコマンドのコンテキスト情報をパックした構造体
@@ -145,9 +145,7 @@ impl CommandContext for RunCommandContext {
 ///
 /// コマンドコンテキストの生成
 ///
-pub(crate) fn build_context(opts: &Options, sub_opts: &RunOpts)
-    -> Result<Box<dyn CommandContext>>
-{
+pub(crate) fn build_context(opts: &Options, sub_opts: &RunOpts) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(RunCommandContext::new(opts, sub_opts)?))
 }
 

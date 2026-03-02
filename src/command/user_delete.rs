@@ -10,9 +10,9 @@
 
 use anyhow::Result;
 
-use crate::cmd_args::{UserDeleteOpts, Options};
-use crate::database::DatabaseManager;
 use super::CommandContext;
+use crate::cmd_args::{Options, UserDeleteOpts};
+use crate::database::DatabaseManager;
 
 ///
 /// "user delete"サブコマンドのコンテキスト情報をパックした構造体
@@ -64,13 +64,14 @@ mod tests {
     #[test]
     fn delete_user_succeeds() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir)
-            .expect("open failed");
-        manager.add_user(TEST_USERNAME, TEST_PASSWORD, None)
+        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        manager
+            .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
 
         manager.delete_user(TEST_USERNAME).expect("delete failed");
-        let deleted = manager.verify_user(TEST_USERNAME, TEST_PASSWORD)
+        let deleted = manager
+            .verify_user(TEST_USERNAME, TEST_PASSWORD)
             .expect("verify failed");
         assert!(!deleted);
 
@@ -80,8 +81,7 @@ mod tests {
     #[test]
     fn delete_user_fails_when_missing() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir)
-            .expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
 
         let result = manager.delete_user("missing_user");
         assert!(result.is_err());
@@ -90,9 +90,7 @@ mod tests {
     }
 
     fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
-        let base = PathBuf::from("tests")
-            .join("tmp")
-            .join(unique_suffix());
+        let base = PathBuf::from("tests").join("tmp").join(unique_suffix());
         let db_dir = base.join("db");
         let assets_dir = base.join("assets");
         fs::create_dir_all(&db_dir).expect("create db dir failed");

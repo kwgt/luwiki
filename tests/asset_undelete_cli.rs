@@ -19,7 +19,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-
 #[test]
 ///
 /// asset undelete がアセットの削除を取り消せることを確認する。
@@ -104,12 +103,8 @@ fn unique_suffix() -> String {
 /// # 戻り値
 /// 利用可能なポート番号を返す。
 fn reserve_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("bind failed");
-    listener
-        .local_addr()
-        .expect("local_addr failed")
-        .port()
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
+    listener.local_addr().expect("local_addr failed").port()
 }
 
 ///
@@ -120,9 +115,7 @@ fn reserve_port() -> u16 {
 /// * `assets_dir` - アセットディレクトリのパス
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -164,9 +157,7 @@ impl ServerGuard {
     /// サーバ起動
     fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         let exe = test_binary_path();
-        let base_dir = db_path
-            .parent()
-            .expect("db_path parent missing");
+        let base_dir = db_path.parent().expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
@@ -265,12 +256,8 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value = serde_json::from_str(&response_body).expect("parse response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -302,9 +289,7 @@ fn upload_asset_by_page_id(
     let response = client
         .post(&format!(
             "{}/pages/{}/assets/{}",
-            api_url,
-            page_id,
-            file_name
+            api_url, page_id, file_name
         ))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
         .header("Content-Type", mime)
@@ -314,12 +299,8 @@ fn upload_asset_by_page_id(
 
     assert_eq!(response.status().as_u16(), 201);
     let body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse response failed");
-    value["id"]
-        .as_str()
-        .expect("missing asset id")
-        .to_string()
+    let value: Value = serde_json::from_str(&body).expect("parse response failed");
+    value["id"].as_str().expect("missing asset id").to_string()
 }
 
 ///
@@ -331,9 +312,7 @@ fn upload_asset_by_page_id(
 /// * `target` - 対象アセットID
 fn run_asset_delete(db_path: &Path, assets_dir: &Path, target: &str) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -366,9 +345,7 @@ fn run_asset_delete(db_path: &Path, assets_dir: &Path, target: &str) {
 /// * `target` - 対象アセットID
 fn run_asset_undelete(db_path: &Path, assets_dir: &Path, target: &str) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -403,9 +380,7 @@ fn run_asset_undelete(db_path: &Path, assets_dir: &Path, target: &str) {
 /// 標準出力を返す。
 fn run_asset_list(db_path: &Path, assets_dir: &Path) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)

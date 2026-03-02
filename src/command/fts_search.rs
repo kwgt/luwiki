@@ -12,10 +12,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use super::CommandContext;
 use crate::cmd_args::{FtsSearchOpts, Options};
 use crate::database::DatabaseManager;
 use crate::fts::{FtsIndexConfig, FtsSearchResult};
-use super::CommandContext;
 
 ///
 /// "fts search"コマンド実行コンテキスト

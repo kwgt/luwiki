@@ -10,7 +10,7 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 #[cfg(not(target_family = "windows"))]
 use rpassword::prompt_password;
 
@@ -18,8 +18,7 @@ use rpassword::prompt_password;
 use windows_sys::Win32::Foundation::HANDLE;
 #[cfg(target_family = "windows")]
 use windows_sys::Win32::System::Console::{
-    GetConsoleMode, SetConsoleMode, CONSOLE_MODE, ENABLE_LINE_INPUT,
-    ENABLE_PROCESSED_INPUT,
+    CONSOLE_MODE, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, GetConsoleMode, SetConsoleMode,
 };
 
 /// パスワードの最小長
@@ -38,11 +37,7 @@ pub(crate) fn read_password_with_confirm() -> Result<String> {
     let mut output = stdout.lock();
 
     let use_terminal_input = stdin.is_terminal();
-    read_password_with_confirm_from(
-        &mut input,
-        &mut output,
-        use_terminal_input,
-    )
+    read_password_with_confirm_from(&mut input, &mut output, use_terminal_input)
 }
 
 ///
@@ -67,19 +62,9 @@ where
     R: BufRead,
     W: Write,
 {
-    let password = read_password_prompt(
-        input,
-        output,
-        "password: ",
-        use_terminal_input,
-    )?;
+    let password = read_password_prompt(input, output, "password: ", use_terminal_input)?;
 
-    let confirm = read_password_prompt(
-        input,
-        output,
-        "confirm: ",
-        use_terminal_input,
-    )?;
+    let confirm = read_password_prompt(input, output, "confirm: ", use_terminal_input)?;
 
     if password != confirm {
         return Err(anyhow!("password mismatch"));
@@ -134,13 +119,11 @@ fn read_password_from_terminal(prompt: &str) -> Result<String> {
     use std::io::{BufRead, BufReader};
     use std::os::windows::io::FromRawHandle;
 
-    use windows_sys::core::PCSTR;
-    use windows_sys::Win32::Foundation::{
-        GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
-    };
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileA, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
+    use windows_sys::core::PCSTR;
     /*
      * プロンプト出力
      */
@@ -167,9 +150,7 @@ fn read_password_from_terminal(prompt: &str) -> Result<String> {
         return Err(io::Error::last_os_error().into());
     }
 
-    let mut reader = BufReader::new(unsafe {
-        std::fs::File::from_raw_handle(handle as _)
-    });
+    let mut reader = BufReader::new(unsafe { std::fs::File::from_raw_handle(handle as _) });
 
     /*
      * エコー無効化
@@ -233,11 +214,7 @@ mod tests {
         let mut input = Cursor::new(input_data.as_bytes());
         let mut output = Vec::new();
 
-        let result = read_password_with_confirm_from(
-            &mut input,
-            &mut output,
-            false,
-        );
+        let result = read_password_with_confirm_from(&mut input, &mut output, false);
         assert!(result.is_err());
     }
 
@@ -247,11 +224,7 @@ mod tests {
         let mut input = Cursor::new(input_data.as_bytes());
         let mut output = Vec::new();
 
-        let result = read_password_with_confirm_from(
-            &mut input,
-            &mut output,
-            false,
-        );
+        let result = read_password_with_confirm_from(&mut input, &mut output, false);
         assert!(result.is_err());
     }
 
@@ -261,11 +234,7 @@ mod tests {
         let mut input = Cursor::new(input_data.as_bytes());
         let mut output = Vec::new();
 
-        let result = read_password_with_confirm_from(
-            &mut input,
-            &mut output,
-            false,
-        );
+        let result = read_password_with_confirm_from(&mut input, &mut output, false);
         assert_eq!(result.expect("password read failed"), "password123");
     }
 }

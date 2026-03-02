@@ -18,13 +18,11 @@ mod schema;
 mod txn_helpers;
 
 #[allow(unused_imports)]
-pub(crate) use entries::{
-    AssetListEntry, AssetMoveResult, LockListEntry, PageListEntry,
-};
+pub(crate) use entries::{AssetListEntry, AssetMoveResult, LockListEntry, PageListEntry};
 pub(crate) use manager::DatabaseManager;
 pub(crate) use schema::DbError;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::Path;
 
 use crate::database::types::PageId;
@@ -41,8 +39,7 @@ where
     P: AsRef<Path>,
 {
     let manager = DatabaseManager::open(db_path, asset_path)?;
-    let page_id = PageId::from_string(page_id)
-        .map_err(|_| anyhow!(DbError::PageNotFound))?;
+    let page_id = PageId::from_string(page_id).map_err(|_| anyhow!(DbError::PageNotFound))?;
     manager.has_page_source_for_test(&page_id, revision)
 }
 

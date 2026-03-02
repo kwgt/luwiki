@@ -13,10 +13,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use super::CommandContext;
 use crate::cmd_args::Options;
 use crate::database::DatabaseManager;
-use crate::fts::{extract_markdown_sections, FtsDocument, FtsIndexConfig};
-use super::CommandContext;
+use crate::fts::{FtsDocument, FtsIndexConfig, extract_markdown_sections};
 
 ///
 /// "fts rebuild"コマンド実行コンテキスト
@@ -109,8 +109,6 @@ impl CommandContext for FtsRebuildCommandContext {
 /// # 戻り値
 /// 生成したコマンドコンテキスト
 ///
-pub(crate) fn build_context(
-    opts: &Options,
-) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(opts: &Options) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(FtsRebuildCommandContext::new(opts)?))
 }

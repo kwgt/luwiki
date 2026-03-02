@@ -8,12 +8,12 @@
 //! サブコマンド"lock delete"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
-use crate::cmd_args::{LockDeleteOpts, Options};
-use crate::database::types::LockToken;
-use crate::database::DatabaseManager;
 use super::CommandContext;
+use crate::cmd_args::{LockDeleteOpts, Options};
+use crate::database::DatabaseManager;
+use crate::database::types::LockToken;
 
 ///
 /// "lock delete"サブコマンドのコンテキスト情報をパックした構造体

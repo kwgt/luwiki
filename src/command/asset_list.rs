@@ -13,9 +13,9 @@ use std::fmt::Write;
 use anyhow::Result;
 use chrono::{DateTime, Local};
 
+use super::CommandContext;
 use crate::cmd_args::{AssetListOpts, AssetListSortMode, Options};
 use crate::database::{AssetListEntry, DatabaseManager};
-use super::CommandContext;
 
 ///
 /// "asset list"サブコマンドのコンテキスト情報をパックした構造体
@@ -59,20 +59,12 @@ impl CommandContext for AssetListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_assets(
-    assets: &mut [AssetListEntry],
-    sort_mode: AssetListSortMode,
-    reverse_sort: bool,
-) {
+fn sort_assets(assets: &mut [AssetListEntry], sort_mode: AssetListSortMode, reverse_sort: bool) {
     assets.sort_by(|left, right| {
         let ord = match sort_mode {
             AssetListSortMode::Default => left.id().cmp(&right.id()),
-            AssetListSortMode::Upload => {
-                left.timestamp().cmp(&right.timestamp())
-            }
-            AssetListSortMode::UserName => {
-                left.user_name().cmp(&right.user_name())
-            }
+            AssetListSortMode::Upload => left.timestamp().cmp(&right.timestamp()),
+            AssetListSortMode::UserName => left.user_name().cmp(&right.user_name()),
             AssetListSortMode::MimeType => left.mime().cmp(&right.mime()),
             AssetListSortMode::Size => left.size().cmp(&right.size()),
             AssetListSortMode::Path => {
@@ -84,18 +76,12 @@ fn sort_assets(
             }
         };
 
-        if reverse_sort {
-            ord.reverse()
-        } else {
-            ord
-        }
+        if reverse_sort { ord.reverse() } else { ord }
     });
 }
 
 fn path_sort_key(asset: &AssetListEntry) -> String {
-    asset
-        .page_path()
-        .unwrap_or_else(|| "?????".to_string())
+    asset.page_path().unwrap_or_else(|| "?????".to_string())
 }
 
 ///
@@ -277,8 +263,8 @@ pub(crate) fn build_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Local, TimeZone};
     use crate::database::types::AssetId;
+    use chrono::{Local, TimeZone};
 
     fn build_asset(
         id: &str,

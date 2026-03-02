@@ -10,15 +10,15 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::StatusCode;
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde_json::json;
 
-use crate::database::types::{LockToken, PageId};
-use crate::database::DbError;
-use crate::http_server::app_state::AppState;
-use crate::rest_api::AuthUser;
 use super::super::resp_error_json;
+use crate::database::DbError;
+use crate::database::types::{LockToken, PageId};
+use crate::http_server::app_state::AppState;
+use crate::rest_api::{AuthUser, CACHE_CONTROL_NO_STORE};
 
 /// ロック情報ヘッダの名称
 const PAGE_LOCK_HEADER: &str = "X-Page-Lock";
@@ -43,9 +43,7 @@ pub async fn post(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * ページID解析
      */
@@ -86,10 +84,7 @@ pub async fn post(
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -100,10 +95,7 @@ pub async fn post(
     };
 
     if page_index.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "page deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
     }
 
     /*
@@ -113,10 +105,7 @@ pub async fn post(
         Ok(lock_info) => lock_info,
         Err(err) => {
             if let Some(DbError::PageLocked) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(
-                    StatusCode::CONFLICT,
-                    "page already locked",
-                ));
+                return Ok(resp_error_json(StatusCode::CONFLICT, "page already locked"));
             }
 
             return Ok(resp_error_json(
@@ -152,9 +141,7 @@ pub async fn put(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * ページID解析
      */
@@ -203,10 +190,7 @@ pub async fn put(
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -217,10 +201,7 @@ pub async fn put(
     };
 
     if page_index.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "page deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
     }
 
     /*
@@ -230,16 +211,10 @@ pub async fn put(
         Ok(lock_info) => lock_info,
         Err(err) => {
             if let Some(DbError::LockNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(
-                    StatusCode::NOT_FOUND,
-                    "lock not found",
-                ));
+                return Ok(resp_error_json(StatusCode::NOT_FOUND, "lock not found"));
             }
             if let Some(DbError::LockForbidden) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(
-                    StatusCode::FORBIDDEN,
-                    "lock forbidden",
-                ));
+                return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
             }
 
             return Ok(resp_error_json(
@@ -273,9 +248,7 @@ pub async fn put(
 pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * ページID解析
      */
@@ -303,10 +276,7 @@ pub async fn get(
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -317,10 +287,7 @@ pub async fn get(
     };
 
     if page_index.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "page deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
     }
 
     /*
@@ -329,10 +296,7 @@ pub async fn get(
     let lock_info = match state.db().get_page_lock_info(&page_id) {
         Ok(Some(lock_info)) => lock_info,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "lock not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "lock not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -368,6 +332,7 @@ pub async fn get(
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")
+        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
         .body(body.to_string()))
 }
 
@@ -389,9 +354,7 @@ pub async fn delete(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * ページID解析
      */
@@ -440,10 +403,7 @@ pub async fn delete(
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -454,10 +414,7 @@ pub async fn delete(
     };
 
     if page_index.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "page deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
     }
 
     /*
@@ -467,16 +424,10 @@ pub async fn delete(
         Ok(()) => {}
         Err(err) => {
             if let Some(DbError::LockNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(
-                    StatusCode::NOT_FOUND,
-                    "lock not found",
-                ));
+                return Ok(resp_error_json(StatusCode::NOT_FOUND, "lock not found"));
             }
             if let Some(DbError::LockForbidden) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(
-                    StatusCode::FORBIDDEN,
-                    "lock forbidden",
-                ));
+                return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
             }
 
             return Ok(resp_error_json(
@@ -498,10 +449,7 @@ pub async fn delete(
 fn parse_page_id(raw: String) -> Result<PageId, HttpResponse> {
     match PageId::from_string(&raw) {
         Ok(page_id) => Ok(page_id),
-        Err(_) => Err(resp_error_json(
-            StatusCode::NOT_FOUND,
-            "page not found",
-        )),
+        Err(_) => Err(resp_error_json(StatusCode::NOT_FOUND, "page not found")),
     }
 }
 
@@ -522,10 +470,7 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
         }
     };
 
@@ -540,28 +485,20 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
         }
     };
 
     match LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(
-            StatusCode::FORBIDDEN,
-            "lock token invalid",
-        )),
+        Err(_) => Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid")),
     }
 }
 
 ///
 /// ロック情報ヘッダの生成
 ///
-pub(crate) fn build_lock_header(
-    lock_info: &crate::database::types::LockInfo,
-) -> String {
+pub(crate) fn build_lock_header(lock_info: &crate::database::types::LockInfo) -> String {
     format!(
         "expire={} token={}",
         lock_info.expire().to_rfc3339(),

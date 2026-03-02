@@ -7,13 +7,13 @@
 mod common;
 
 use std::fs;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use std::sync::Mutex;
 
+use luwiki::page_source_exists_for_test;
 use reqwest::blocking::Client;
 use serde_json::Value;
-use luwiki::page_source_exists_for_test;
 
 use common::*;
 
@@ -114,8 +114,7 @@ fn post_revision_rollbacks_source_only() {
         .expect("get meta after rollback failed");
     assert_eq!(response.status().as_u16(), 200);
     let body = response.text().expect("read meta body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse meta body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse meta body failed");
     assert_eq!(value["page_info"]["revision_scope"]["latest"], 2);
     assert_eq!(value["page_info"]["revision_scope"]["oldest"], 1);
 
@@ -171,8 +170,7 @@ fn post_revision_compacts_and_removes_sources() {
         .expect("get meta after compaction failed");
     assert_eq!(response.status().as_u16(), 200);
     let body = response.text().expect("read meta body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse meta body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse meta body failed");
     assert_eq!(value["page_info"]["revision_scope"]["latest"], 3);
     assert_eq!(value["page_info"]["revision_scope"]["oldest"], 2);
 
@@ -187,8 +185,10 @@ fn post_revision_compacts_and_removes_sources() {
 
     drop(server);
     thread::sleep(Duration::from_millis(200));
-    assert!(!page_source_exists_for_test(&db_path, &assets_dir, &page_id, 1)
-        .expect("page_source_exists_for_test failed"));
+    assert!(
+        !page_source_exists_for_test(&db_path, &assets_dir, &page_id, 1)
+            .expect("page_source_exists_for_test failed")
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -323,12 +323,9 @@ fn create_page(client: &Client, base_url: &str, path: &str, body: &str) -> Strin
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -365,8 +362,7 @@ fn update_page_source(client: &Client, base_url: &str, page_id: &str, body: &str
 
 fn read_error_reason(response: reqwest::blocking::Response) -> String {
     let body = response.text().expect("read error body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse error body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse error body failed");
     value["reason"]
         .as_str()
         .expect("missing reason")

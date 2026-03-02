@@ -135,6 +135,9 @@ struct PageSource {
     /// リビジョン番号
     revision: u64,
 
+    /// 実体識別用のインスタンスID
+    instance_id: Option<Id>,
+
     /// 作成日時
     created_at: Timestamp,
 
@@ -152,6 +155,10 @@ struct PageSource {
 
 - PageRevision は「そのリビジョンで起きた事実」のみを保持する
 - rename 情報は説明・注記用途であり、通常の内容 diff とは独立して扱う
+- `instance_id` はキャッシュ再検証用の実体識別子とする
+- 新規作成時および新規リビジョン作成時は `instance_id` を新規採番する
+- `amend=true` による同一リビジョン上書き時も `instance_id` を更新する
+- 既存データとの後方互換のため `Option<Id>` とし、未設定データはキャッシュさせない
 
 ---
 
@@ -331,12 +338,17 @@ Table<AssetId, AssetInfo>
 
 ```rust
 struct AssetInfo {
+    instance_id: Option<Id>,
     original_name: String,
     mime: String,
     size: u64,
     created_at: Timestamp,
 }
 ```
+
+- `instance_id` はアセット実体のキャッシュ再検証用識別子とする
+- 新規アップロード時は `instance_id` を新規採番する
+- 既存データとの後方互換のため `Option<Id>` とし、未設定データはキャッシュさせない
 
 #### アセットID特定テーブル
 ```rust
@@ -444,8 +456,11 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
   2. インターバルタイマーを設定し、タイマーハンドラでREST API `PUT /api/pages/{page_id}/lock`を発行させてページロックのTTL延長とトークンの更新を継続的に行うようにする。
   3. 保存またはキャンセル前のタブクローズに備え、タブクローズをフックしてREST API `DELETE /api/pages/{page_id}/lock` を発行するように設定 (ただしこのフックでのREST API実行の確実性は低いので、保険としてロックのTTLによるロック解除でフォールバックする)
   4. REST API `GET /api/pages/{page_id}/source[?rev={revision}]`でページソースを取得
+      - `PageSource.instance_id` が存在する場合は `ETag` と `If-None-Match` による条件付きGETを利用可能とする
+      - `PageSource.instance_id` が存在しない場合は `Cache-Control: no-store` とする
   5. ユーザにソースを編集させる
       - 保存操作が行われたら REST API `/api/pages/{page_id}/source[?amend={boolean}]`でページソースを保存(このAPIでロックは解除される)
+          - `amend=true` の場合も保存後は `instance_id` を更新し、既存キャッシュを再検証させる
       - キャンセル操作が行われたら REST API `DELETE /api/pages/{page_id}/lock`でロックを解除
   6. セッションストレージのトークンを削除する
   7. 閲覧ページに遷移する
@@ -468,6 +483,15 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
 
 ### 17.2.2 編集ページから閲覧ページへの遷移
 ブラウザバックによって編集ページから閲覧ページに戻る場合、イベントフックによるロックの解除が難しいため、このフォールバックとして以下の処理をタブ固有ID取得直後に行う。
+
+### 17.2.3 REST API キャッシュ制御
+
+- GET系エンドポイントは原則として `Cache-Control: no-store` を返す
+- `Cache-Control: no-store` を返すレスポンスには `ETag` を付与しない
+- `GET /api/pages/{page_id}/source[?rev={revision}]` は `PageSource.instance_id` が存在する場合のみ `Cache-Control: private, max-age=3600, no-cache` と `ETag: "{instance_id}"` を返す
+- `GET /api/assets/{asset_id}/data` は `AssetInfo.instance_id` が存在する場合のみ `Cache-Control: private, max-age=3600, no-cache` と `ETag: "{instance_id}"` を返す
+- 上記2エンドポイントは `If-None-Match` による条件付きGETを受け付け、一致時は `304 Not Modified` を返す
+- `instance_id` が存在しない既存データは `no-store` 扱いとする
 
   1. タブ固有IDを用いてセッションストレージを参照し、ロック解除トークンを所持ているか確認を行う
   2. ロック解除トークンを保持している場合は以下の手順で処理する

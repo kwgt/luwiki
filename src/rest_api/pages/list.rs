@@ -16,9 +16,9 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::super::resp_error_json;
 use crate::database::PageListEntry;
 use crate::http_server::app_state::AppState;
-use super::super::resp_error_json;
 
 #[derive(Deserialize)]
 struct ListQuery {
@@ -46,15 +46,11 @@ struct ListQuery {
 pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<ListQuery>::from_query(
-        req.query_string()
-    ) {
+    let query = match web::Query::<ListQuery>::from_query(req.query_string()) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -87,10 +83,7 @@ pub async fn get(
         ));
     }
 
-    let with_deleted = match parse_bool_param(
-        "with_deleted",
-        query.with_deleted.as_deref(),
-    ) {
+    let with_deleted = match parse_bool_param("with_deleted", query.with_deleted.as_deref()) {
         Ok(value) => value,
         Err(resp) => return Ok(resp),
     };
@@ -148,9 +141,7 @@ pub async fn get(
     let items = filtered
         .into_iter()
         .map(|entry| {
-            let timestamp = entry.timestamp()
-                .format("%Y-%m-%dT%H:%M:%S")
-                .to_string();
+            let timestamp = entry.timestamp().format("%Y-%m-%dT%H:%M:%S").to_string();
             json!({
                 "page_id": entry.id().to_string(),
                 "path": entry.path(),
@@ -220,18 +211,11 @@ fn sort_entries(entries: &mut [PageListEntry], forward: bool) {
             Ordering::Equal => left.id().cmp(&right.id()),
             other => other,
         };
-        if forward {
-            ord
-        } else {
-            ord.reverse()
-        }
+        if forward { ord } else { ord.reverse() }
     });
 }
 
-fn parse_bool_param(
-    name: &str,
-    raw: Option<&str>,
-) -> Result<bool, HttpResponse> {
+fn parse_bool_param(name: &str, raw: Option<&str>) -> Result<bool, HttpResponse> {
     match raw {
         None => Ok(false),
         Some(value) => match value {

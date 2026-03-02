@@ -13,9 +13,9 @@ use std::fmt::Write;
 use anyhow::Result;
 use chrono::SecondsFormat;
 
-use crate::cmd_args::{PageListOpts, Options, PageListSortMode};
-use crate::database::{DatabaseManager, PageListEntry};
 use super::CommandContext;
+use crate::cmd_args::{Options, PageListOpts, PageListSortMode};
+use crate::database::{DatabaseManager, PageListEntry};
 
 ///
 /// "page list"サブコマンドのコンテキスト情報をパックした構造体
@@ -59,28 +59,16 @@ impl CommandContext for PageListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_pages(
-    pages: &mut [PageListEntry],
-    sort_mode: PageListSortMode,
-    reverse_sort: bool,
-) {
+fn sort_pages(pages: &mut [PageListEntry], sort_mode: PageListSortMode, reverse_sort: bool) {
     pages.sort_by(|left, right| {
         let ord = match sort_mode {
             PageListSortMode::Default => left.id().cmp(&right.id()),
-            PageListSortMode::UserName => {
-                left.user_name().cmp(&right.user_name())
-            }
+            PageListSortMode::UserName => left.user_name().cmp(&right.user_name()),
             PageListSortMode::PagePath => left.path().cmp(&right.path()),
-            PageListSortMode::LastUpdate => {
-                left.timestamp().cmp(&right.timestamp())
-            }
+            PageListSortMode::LastUpdate => left.timestamp().cmp(&right.timestamp()),
         };
 
-        if reverse_sort {
-            ord.reverse()
-        } else {
-            ord
-        }
+        if reverse_sort { ord.reverse() } else { ord }
     });
 }
 
@@ -108,8 +96,7 @@ fn format_page_table(pages: &[PageListEntry], long_info: bool) -> String {
                 ("***".to_string(), "***".to_string(), "***".to_string())
             } else {
                 (
-                    page.timestamp()
-                        .to_rfc3339_opts(SecondsFormat::Secs, true),
+                    page.timestamp().to_rfc3339_opts(SecondsFormat::Secs, true),
                     page.user_name(),
                     page.latest_revision().to_string(),
                 )
@@ -205,8 +192,8 @@ pub(crate) fn build_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Local, TimeZone};
     use crate::database::types::PageId;
+    use chrono::{Local, TimeZone};
 
     fn build_page(
         id: &str,

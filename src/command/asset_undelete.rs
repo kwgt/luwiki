@@ -8,12 +8,12 @@
 //! サブコマンド"asset undelete"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{AssetUndeleteOpts, Options};
 use crate::database::types::AssetId;
 use crate::database::{DatabaseManager, DbError};
-use super::CommandContext;
 
 ///
 /// "asset undelete"サブコマンドのコンテキスト情報をパックした構造体
@@ -41,17 +41,16 @@ impl AssetUndeleteCommandContext {
 // CommandContextの実装
 impl CommandContext for AssetUndeleteCommandContext {
     fn exec(&self) -> Result<()> {
-        let asset_info = self.manager
+        let asset_info = self
+            .manager
             .get_asset_info_by_id(&self.asset_id)?
             .ok_or_else(|| anyhow!(DbError::AssetNotFound))?;
         if !asset_info.deleted() {
             return Err(anyhow!("asset not deleted"));
         }
 
-        self.manager.undelete_asset(
-            &self.asset_id,
-            self.rename_to.as_deref(),
-        )?;
+        self.manager
+            .undelete_asset(&self.asset_id, self.rename_to.as_deref())?;
         Ok(())
     }
 }

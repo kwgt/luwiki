@@ -10,14 +10,14 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{Options, PageDeleteOpts};
-use crate::database::{DatabaseManager, DbError};
 use crate::database::types::PageId;
+use crate::database::{DatabaseManager, DbError};
 use crate::fts::{self, FtsIndexConfig};
 use crate::rest_api::validate_page_path;
-use super::CommandContext;
 
 ///
 /// "page delete"サブコマンドのコンテキスト情報をパックした構造体
@@ -67,12 +67,7 @@ impl PageDeleteCommandContext {
         if self.hard_delete {
             fts::delete_pages_index(&config, page_ids)?;
         } else {
-            fts::update_pages_index(
-                &config,
-                &self.manager,
-                page_ids,
-                true,
-            )?;
+            fts::update_pages_index(&config, &self.manager, page_ids, true)?;
         }
 
         Ok(())
@@ -85,9 +80,7 @@ impl CommandContext for PageDeleteCommandContext {
         /*
          * 削除対象の解決
          */
-        let (page_id, index) = if let Ok(page_id) =
-            PageId::from_string(&self.target)
-        {
+        let (page_id, index) = if let Ok(page_id) = PageId::from_string(&self.target) {
             self.manager
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))
@@ -96,10 +89,12 @@ impl CommandContext for PageDeleteCommandContext {
             if let Err(message) = validate_page_path(&self.target) {
                 return Err(anyhow!("invalid page path: {}", message));
             }
-            let page_id = self.manager
+            let page_id = self
+                .manager
                 .get_page_id_by_path(&self.target)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?;
-            let (_, index) = self.manager
+            let (_, index) = self
+                .manager
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?;
             (page_id, index)
@@ -120,10 +115,9 @@ impl CommandContext for PageDeleteCommandContext {
          * 再帰削除
          */
         if self.recursive {
-            let deleted_ids = self.manager.delete_pages_recursive_by_id(
-                &page_id,
-                self.hard_delete,
-            )?;
+            let deleted_ids = self
+                .manager
+                .delete_pages_recursive_by_id(&page_id, self.hard_delete)?;
 
             /*
              * インデックスの更新

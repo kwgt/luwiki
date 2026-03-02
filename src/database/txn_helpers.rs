@@ -8,19 +8,17 @@
 //! トランザクション内の共通処理を集約するモジュール
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Local};
-use redb::{
-    MultimapTable, ReadableMultimapTable, ReadableTable, Table,
-};
+use redb::{MultimapTable, ReadableMultimapTable, ReadableTable, Table};
 
 use crate::database::types::{
     AssetId, AssetInfo, LockInfo, LockToken, PageId, PageIndex, PageSource,
 };
 
 use super::schema::{
-    is_root_path, ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE,
-    DbError, PAGE_INDEX_TABLE, PAGE_PATH_TABLE,
+    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, DbError, PAGE_INDEX_TABLE,
+    PAGE_PATH_TABLE, is_root_path,
 };
 
 ///
@@ -225,13 +223,7 @@ pub(in crate::database) fn collect_recursive_page_ids_in_txn<'txn>(
             return Err(anyhow!("page already deleted"));
         }
 
-        verify_page_lock_in_txn(
-            &page_id,
-            &mut index,
-            index_table,
-            lock_table,
-            &now,
-        )?;
+        verify_page_lock_in_txn(&page_id, &mut index, index_table, lock_table, &now)?;
 
         targets.push(page_id);
     }
@@ -293,13 +285,7 @@ pub(in crate::database) fn collect_recursive_page_targets_in_txn<'txn>(
             return Err(anyhow!("page already deleted"));
         }
 
-        verify_page_lock_in_txn(
-            &page_id,
-            &mut index,
-            index_table,
-            lock_table,
-            &now,
-        )?;
+        verify_page_lock_in_txn(&page_id, &mut index, index_table, lock_table, &now)?;
 
         targets.push(RecursivePageTarget {
             page_id,
@@ -365,13 +351,7 @@ pub(in crate::database) fn collect_recursive_deleted_page_targets_in_txn<'txn>(
                 return Err(anyhow!("page not deleted"));
             }
 
-            verify_page_lock_in_txn(
-                &page_id,
-                &mut index,
-                index_table,
-                lock_table,
-                &now,
-            )?;
+            verify_page_lock_in_txn(&page_id, &mut index, index_table, lock_table, &now)?;
 
             targets.push(RecursivePageTarget {
                 page_id,

@@ -12,9 +12,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use super::CommandContext;
 use crate::cmd_args::Options;
 use crate::fts::FtsIndexConfig;
-use super::CommandContext;
 
 ///
 /// "fts merge"コマンド実行コンテキスト
@@ -64,8 +64,6 @@ impl CommandContext for FtsMergeCommandContext {
 /// # 戻り値
 /// 生成したコマンドコンテキスト
 ///
-pub(crate) fn build_context(
-    opts: &Options,
-) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(opts: &Options) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(FtsMergeCommandContext::new(opts)))
 }

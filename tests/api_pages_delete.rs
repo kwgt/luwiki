@@ -93,11 +93,7 @@ fn delete_page_recursive_rejects_locked_children() {
 
     let base_url = resolve_pages_base_url(port);
     let parent_id = create_page(&base_url, "/delete-recursive", "body");
-    let child_id = create_page(
-        &base_url,
-        "/delete-recursive/child",
-        "body",
-    );
+    let child_id = create_page(&base_url, "/delete-recursive/child", "body");
     let _ = lock_page(&base_url, &child_id);
 
     let delete_url = format!("{}/{}", base_url, parent_id);
@@ -116,9 +112,8 @@ fn delete_page_recursive_rejects_locked_children() {
         .send()
         .expect("get meta parent failed");
     assert_eq!(response.status().as_u16(), 200);
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta parent failed")
-    ).expect("parse meta parent failed");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta parent failed"))
+        .expect("parse meta parent failed");
     assert_eq!(value["page_info"]["deleted"], false);
 
     let response = client
@@ -127,9 +122,8 @@ fn delete_page_recursive_rejects_locked_children() {
         .send()
         .expect("get meta child failed");
     assert_eq!(response.status().as_u16(), 200);
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta child failed")
-    ).expect("parse meta child failed");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta child failed"))
+        .expect("parse meta child failed");
     assert_eq!(value["page_info"]["deleted"], false);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -184,10 +178,12 @@ fn restore_page_recursive_restores_children() {
         .send()
         .expect("get meta parent failed");
     assert_eq!(response.status().as_u16(), 200);
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta parent failed")
-    ).expect("parse meta parent failed");
-    assert_eq!(value["page_info"]["path"]["value"], "/restore-recursive-new");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta parent failed"))
+        .expect("parse meta parent failed");
+    assert_eq!(
+        value["page_info"]["path"]["value"],
+        "/restore-recursive-new"
+    );
 
     let response = client
         .get(&format!("{}/{}/meta", base_url, child_id))
@@ -195,10 +191,12 @@ fn restore_page_recursive_restores_children() {
         .send()
         .expect("get meta child failed");
     assert_eq!(response.status().as_u16(), 200);
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta child failed")
-    ).expect("parse meta child failed");
-    assert_eq!(value["page_info"]["path"]["value"], "/restore-recursive-new/child");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta child failed"))
+        .expect("parse meta child failed");
+    assert_eq!(
+        value["page_info"]["path"]["value"],
+        "/restore-recursive-new/child"
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -210,9 +208,7 @@ struct ServerGuard {
 impl ServerGuard {
     fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         let exe = test_binary_path();
-        let base_dir = db_path
-            .parent()
-            .expect("db_path parent missing");
+        let base_dir = db_path.parent().expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
@@ -324,12 +320,9 @@ fn create_page(base_url: &str, path: &str, body: &str) -> String {
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録

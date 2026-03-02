@@ -8,13 +8,13 @@
 //! サブコマンド"page unlock"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{Options, PageUnlockOpts};
 use crate::database::types::PageId;
 use crate::database::{DatabaseManager, DbError};
 use crate::rest_api::validate_page_path;
-use super::CommandContext;
 
 ///
 /// "page unlock"サブコマンドのコンテキスト情報をパックした構造体
@@ -48,10 +48,12 @@ impl CommandContext for PageUnlockCommandContext {
             if let Err(message) = validate_page_path(&self.target) {
                 return Err(anyhow!("invalid page path: {}", message));
             }
-            let page_id = self.manager
+            let page_id = self
+                .manager
                 .get_page_id_by_path(&self.target)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?;
-            let (_, index) = self.manager
+            let (_, index) = self
+                .manager
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?;
             (page_id, index)

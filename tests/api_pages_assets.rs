@@ -22,7 +22,6 @@ use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde_json::Value;
 
-
 #[test]
 ///
 /// POST: /api/pages/{page_id}/assets/{file_name} を
@@ -199,8 +198,7 @@ fn get_page_assets_list_excludes_deleted() {
     assert_eq!(response.status().as_u16(), 200);
 
     let body = response.text().expect("read page assets body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse page assets body failed");
+    let value: Value = serde_json::from_str(&body).expect("parse page assets body failed");
     let assets = value.as_array().expect("assets is not array");
     assert!(assets.is_empty());
 
@@ -247,11 +245,7 @@ fn get_page_asset_redirects() {
     /*
      * リダイレクトの検証
      */
-    let redirect_url = format!(
-        "{}/pages/{}/assets/get.bin",
-        api_url,
-        page_id
-    );
+    let redirect_url = format!("{}/pages/{}/assets/get.bin", api_url, page_id);
     let client = build_no_redirect_client();
     let response = client
         .get(&redirect_url)
@@ -271,12 +265,8 @@ fn get_page_asset_redirects() {
     );
 
     let body = response.text().expect("read redirect body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse redirect body failed");
-    assert_eq!(
-        value["id"].as_str().expect("missing id"),
-        asset_id
-    );
+    let value: Value = serde_json::from_str(&body).expect("parse redirect body failed");
+    assert_eq!(value["id"].as_str().expect("missing id"), asset_id);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -321,12 +311,8 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
 /// 利用可能なポート番号を返す。
 ///
 fn reserve_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("bind failed");
-    listener
-        .local_addr()
-        .expect("local_addr failed")
-        .port()
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
+    listener.local_addr().expect("local_addr failed").port()
 }
 
 ///
@@ -347,9 +333,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
      * ユーザ追加コマンドの実行
      */
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -401,27 +385,19 @@ impl ServerGuard {
     ///
     fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         let exe = test_binary_path();
-        let base_dir = db_path
-            .parent()
-            .expect("db_path parent missing");
+        let base_dir = db_path.parent().expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
         /*
          * テスト用設定の準備
          */
         let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
-        fs::create_dir_all(&config_dir)
-            .expect("create config dir failed");
+        fs::create_dir_all(&config_dir).expect("create config dir failed");
         let config_path = config_dir.join("config.toml");
-        fs::write(
-            &config_path,
-            "[run]\nuse_tls = false\n",
-        ).expect("write test config failed");
+        fs::write(&config_path, "[run]\nuse_tls = false\n").expect("write test config failed");
         let stdout_path = base_dir.join("server.stdout.log");
-        let stdout = File::create(&stdout_path)
-            .expect("create server stdout failed");
+        let stdout = File::create(&stdout_path).expect("create server stdout failed");
         let stderr_path = base_dir.join("server.stderr.log");
-        let stderr = File::create(&stderr_path)
-            .expect("create server stderr failed");
+        let stderr = File::create(&stderr_path).expect("create server stderr failed");
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
@@ -497,14 +473,12 @@ fn wait_for_server(url: &str, stderr_path: &Path) {
 
     let stderr_log = fs::read_to_string(stderr_path)
         .unwrap_or_else(|_| "<stderr log not available>".to_string());
-    let stdout_path = stderr_path
-        .with_file_name("server.stdout.log");
+    let stdout_path = stderr_path.with_file_name("server.stdout.log");
     let stdout_log = fs::read_to_string(&stdout_path)
         .unwrap_or_else(|_| "<stdout log not available>".to_string());
     panic!(
         "server did not start\nstdout:\n{}\nstderr:\n{}",
-        stdout_log,
-        stderr_log
+        stdout_log, stderr_log
     );
 }
 
@@ -584,12 +558,9 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -638,9 +609,7 @@ fn upload_asset_by_page_id(
     let response = client
         .post(&format!(
             "{}/pages/{}/assets/{}",
-            api_url,
-            page_id,
-            file_name
+            api_url, page_id, file_name
         ))
         .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
         .header("Content-Type", content_type)
@@ -664,12 +633,8 @@ fn upload_asset_by_page_id(
         .expect("etag to_str failed")
         .to_string();
     let body = response.text().expect("read create body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse create asset response failed");
-    let asset_id = value["id"]
-        .as_str()
-        .expect("missing asset id")
-        .to_string();
+    let value: Value = serde_json::from_str(&body).expect("parse create asset response failed");
+    let asset_id = value["id"].as_str().expect("missing asset id").to_string();
 
     assert_eq!(etag, asset_id);
     assert_eq!(location, format!("/api/assets/{}/data", asset_id));

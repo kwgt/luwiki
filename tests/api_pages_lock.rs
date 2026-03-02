@@ -28,10 +28,7 @@ fn page_lock_lifecycle_works() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/lock", "lock source");
 
@@ -43,8 +40,7 @@ fn page_lock_lifecycle_works() {
         .send()
         .expect("lock post failed");
     assert_eq!(response.status().as_u16(), 204);
-    let token = parse_lock_header(&response)
-        .expect("missing lock token");
+    let token = parse_lock_header(&response).expect("missing lock token");
 
     let response = client
         .get(&lock_url)
@@ -53,8 +49,7 @@ fn page_lock_lifecycle_works() {
         .expect("lock get failed");
     assert_eq!(response.status().as_u16(), 200);
     let body = response.text().expect("lock get body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("lock get parse failed");
+    let value: Value = serde_json::from_str(&body).expect("lock get parse failed");
     assert_eq!(value["username"], TEST_USERNAME);
     assert!(value["expire"].as_str().is_some());
 
@@ -65,8 +60,7 @@ fn page_lock_lifecycle_works() {
         .send()
         .expect("lock put failed");
     assert_eq!(response.status().as_u16(), 204);
-    let new_token = parse_lock_header(&response)
-        .expect("missing lock token");
+    let new_token = parse_lock_header(&response).expect("missing lock token");
     assert_ne!(token, new_token);
 
     let response = client
@@ -95,10 +89,7 @@ fn page_lock_conflict_and_auth_checks() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/lock2", "lock source");
 
@@ -135,17 +126,9 @@ fn page_lock_rejects_invalid_token_on_update_and_delete() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
-    let page_id = create_page(
-        &client,
-        &base_url,
-        "/lock-invalid",
-        "lock source",
-    );
+    let page_id = create_page(&client, &base_url, "/lock-invalid", "lock source");
 
     let lock_url = format!("{}/{}/lock", base_url, page_id);
 
@@ -183,17 +166,9 @@ fn page_lock_requires_token_on_update_and_delete() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
-    let page_id = create_page(
-        &client,
-        &base_url,
-        "/lock-missing",
-        "lock source",
-    );
+    let page_id = create_page(&client, &base_url, "/lock-missing", "lock source");
 
     let lock_url = format!("{}/{}/lock", base_url, page_id);
 
@@ -252,12 +227,7 @@ fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
 /// # 戻り値
 /// 作成したページID
 ///
-fn create_page(
-    client: &Client,
-    base_url: &str,
-    path: &str,
-    body: &str,
-) -> String {
+fn create_page(client: &Client, base_url: &str, path: &str, body: &str) -> String {
     /*
      * ドラフト作成
      */
@@ -291,12 +261,9 @@ fn create_page(
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録

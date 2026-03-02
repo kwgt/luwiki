@@ -13,10 +13,10 @@ use std::fmt::Write;
 use anyhow::Result;
 use chrono::SecondsFormat;
 
-use crate::cmd_args::{UserListOpts, Options, UserListSortMode};
-use crate::database::types::UserInfo;
-use crate::database::DatabaseManager;
 use super::CommandContext;
+use crate::cmd_args::{Options, UserListOpts, UserListSortMode};
+use crate::database::DatabaseManager;
+use crate::database::types::UserInfo;
 
 ///
 /// "user list"サブコマンドのコンテキスト情報をパックした構造体
@@ -58,30 +58,16 @@ impl CommandContext for UserListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_users(
-    users: &mut [UserInfo],
-    sort_mode: UserListSortMode,
-    reverse_sort: bool,
-) {
+fn sort_users(users: &mut [UserInfo], sort_mode: UserListSortMode, reverse_sort: bool) {
     users.sort_by(|left, right| {
         let ord = match sort_mode {
             UserListSortMode::Default => left.id().cmp(&right.id()),
-            UserListSortMode::UserName => {
-                left.username().cmp(&right.username())
-            }
-            UserListSortMode::DisplayName => {
-                left.display_name().cmp(&right.display_name())
-            }
-            UserListSortMode::LastUpdate => {
-                left.timestamp().cmp(&right.timestamp())
-            }
+            UserListSortMode::UserName => left.username().cmp(&right.username()),
+            UserListSortMode::DisplayName => left.display_name().cmp(&right.display_name()),
+            UserListSortMode::LastUpdate => left.timestamp().cmp(&right.timestamp()),
         };
 
-        if reverse_sort {
-            ord.reverse()
-        } else {
-            ord
-        }
+        if reverse_sort { ord.reverse() } else { ord }
     });
 }
 
@@ -106,8 +92,7 @@ fn format_user_table(users: &[UserInfo]) -> String {
     for user in users {
         lines.push([
             user.id().to_string(),
-            user.timestamp()
-                .to_rfc3339_opts(SecondsFormat::Secs, true),
+            user.timestamp().to_rfc3339_opts(SecondsFormat::Secs, true),
             user.username(),
             user.display_name(),
         ]);
@@ -160,8 +145,8 @@ pub(crate) fn build_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Local, TimeZone};
     use crate::database::types::{UserId, UserInfo};
+    use chrono::{Local, TimeZone};
 
     fn build_user(id: &str, ts: i64, name: &str, display: &str) -> UserInfo {
         UserInfo::new_for_test(

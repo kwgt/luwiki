@@ -10,14 +10,14 @@
 
 use std::fs;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use mime_guess::MimeGuess;
 
+use super::CommandContext;
 use crate::cmd_args::{AssetAddOpts, Options};
 use crate::database::types::PageId;
 use crate::database::{DatabaseManager, DbError};
 use crate::rest_api::{validate_asset_file_name, validate_page_path};
-use super::CommandContext;
 
 ///
 /// "asset add"サブコマンドのコンテキスト情報をパックした構造体
@@ -55,7 +55,8 @@ impl CommandContext for AssetAddCommandContext {
             return Err(anyhow!("asset size exceeds limit"));
         }
 
-        let file_name = self.file_path
+        let file_name = self
+            .file_path
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or_else(|| anyhow!("file name is invalid"))?;
@@ -84,13 +85,9 @@ impl CommandContext for AssetAddCommandContext {
         };
 
         let data = fs::read(&self.file_path)?;
-        let asset_id = self.manager.create_asset(
-            &page_id,
-            file_name,
-            &mime,
-            &self.user_name,
-            &data,
-        )?;
+        let asset_id =
+            self.manager
+                .create_asset(&page_id, file_name, &mime, &self.user_name, &data)?;
 
         println!("{}", asset_id.to_string());
         Ok(())

@@ -10,21 +10,17 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
 use redb::{ReadableDatabase, ReadableMultimapTable, ReadableTable};
 
-use crate::database::entries::{
-    PageIndexEntry, PageListEntry, PageSourceEntry,
-};
-use crate::database::schema::{
-    DELETED_PAGE_PATH_TABLE, LOCK_INFO_TABLE, PAGE_INDEX_TABLE, PAGE_PATH_TABLE,
-    PAGE_SOURCE_TABLE, USER_INFO_TABLE,
-};
-use crate::database::types::{
-    PageId, PageIndex, PageSource, UserId, UserInfo,
-};
 use super::DatabaseManager;
+use crate::database::entries::{PageIndexEntry, PageListEntry, PageSourceEntry};
+use crate::database::schema::{
+    DELETED_PAGE_PATH_TABLE, LOCK_INFO_TABLE, PAGE_INDEX_TABLE, PAGE_PATH_TABLE, PAGE_SOURCE_TABLE,
+    USER_INFO_TABLE,
+};
+use crate::database::types::{PageId, PageIndex, PageSource, UserId, UserInfo};
 
 impl DatabaseManager {
     ///
@@ -66,10 +62,7 @@ impl DatabaseManager {
     /// 取得に成功した場合は`Ok(Some(PageIndex))`を返す。
     /// 存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_page_index_by_id(
-        &self,
-        page_id: &PageId,
-    ) -> Result<Option<PageIndex>> {
+    pub(crate) fn get_page_index_by_id(&self, page_id: &PageId) -> Result<Option<PageIndex>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -96,7 +89,9 @@ impl DatabaseManager {
     ) -> Result<Option<PageSource>> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(PAGE_SOURCE_TABLE)?;
-        Ok(table.get((page_id.clone(), revision))?.map(|entry| entry.value()))
+        Ok(table
+            .get((page_id.clone(), revision))?
+            .map(|entry| entry.value()))
     }
 
     ///
@@ -110,11 +105,7 @@ impl DatabaseManager {
     /// 存在する場合はtrueを返す。
     ///
     #[allow(dead_code)]
-    pub(crate) fn has_page_source_for_test(
-        &self,
-        page_id: &PageId,
-        revision: u64,
-    ) -> Result<bool> {
+    pub(crate) fn has_page_source_for_test(&self, page_id: &PageId, revision: u64) -> Result<bool> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(PAGE_SOURCE_TABLE)?;
         Ok(table.get((page_id.clone(), revision))?.is_some())
@@ -257,9 +248,7 @@ impl DatabaseManager {
          * 削除済みページの収集
          */
         if with_deleted {
-            let deleted_table = txn.open_multimap_table(
-                DELETED_PAGE_PATH_TABLE,
-            )?;
+            let deleted_table = txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             collect_deleted_page_list_entries(
                 &deleted_table,
                 &index_table,
@@ -276,19 +265,14 @@ impl DatabaseManager {
     ///
     /// FTS用にページインデックスの一覧を取得する
     ///
-    pub(crate) fn list_page_index_entries(
-        &self,
-    ) -> Result<Vec<PageIndexEntry>> {
+    pub(crate) fn list_page_index_entries(&self) -> Result<Vec<PageIndexEntry>> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(PAGE_INDEX_TABLE)?;
         let mut entries = Vec::new();
 
         for entry in table.iter()? {
             let (page_id, index) = entry?;
-            entries.push(PageIndexEntry::new(
-                page_id.value().clone(),
-                index.value(),
-            ));
+            entries.push(PageIndexEntry::new(page_id.value().clone(), index.value()));
         }
 
         Ok(entries)
@@ -297,9 +281,7 @@ impl DatabaseManager {
     ///
     /// FTS用にページソースの一覧を取得する
     ///
-    pub(crate) fn list_page_source_entries(
-        &self,
-    ) -> Result<Vec<PageSourceEntry>> {
+    pub(crate) fn list_page_source_entries(&self) -> Result<Vec<PageSourceEntry>> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(PAGE_SOURCE_TABLE)?;
         let mut entries = Vec::new();
@@ -307,11 +289,7 @@ impl DatabaseManager {
         for entry in table.iter()? {
             let (key, source) = entry?;
             let (page_id, revision) = key.value();
-            entries.push(PageSourceEntry::new(
-                page_id,
-                revision,
-                source.value(),
-            ));
+            entries.push(PageSourceEntry::new(page_id, revision, source.value()));
         }
 
         Ok(entries)
@@ -345,11 +323,7 @@ impl DatabaseManager {
         for entry in table.range(start..=end)? {
             let (key, source) = entry?;
             let (page_id, revision) = key.value();
-            entries.push(PageSourceEntry::new(
-                page_id,
-                revision,
-                source.value(),
-            ));
+            entries.push(PageSourceEntry::new(page_id, revision, source.value()));
         }
 
         Ok(entries)
@@ -364,10 +338,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 解決できたページIDを返す。存在しない場合は`None`を返す。
     ///
-    pub(crate) fn get_page_id_by_path(
-        &self,
-        path: &str,
-    ) -> Result<Option<PageId>> {
+    pub(crate) fn get_page_id_by_path(&self, path: &str) -> Result<Option<PageId>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -386,10 +357,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 対象となるページIDの一覧を返す。
     ///
-    pub(crate) fn get_deleted_page_ids_by_path(
-        &self,
-        path: &str,
-    ) -> Result<Vec<PageId>> {
+    pub(crate) fn get_deleted_page_ids_by_path(&self, path: &str) -> Result<Vec<PageId>> {
         /*
          * 読み取りトランザクション開始
          */

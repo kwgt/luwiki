@@ -10,18 +10,16 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{header, StatusCode};
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::SecondsFormat;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use super::super::resp_error_json;
 use crate::database::types::{PageId, PageIndex};
 use crate::http_server::app_state::AppState;
-use super::super::resp_error_json;
-
-/// キャッシュ指示ヘッダの固定値
-const CACHE_CONTROL_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+use crate::rest_api::CACHE_CONTROL_NO_STORE;
 
 #[derive(Deserialize)]
 struct GetMetaQuery {
@@ -51,15 +49,11 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<GetMetaQuery>::from_query(
-        req.query_string()
-    ) {
+    let query = match web::Query::<GetMetaQuery>::from_query(req.query_string()) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -89,10 +83,7 @@ pub async fn get(
     let page_id = match PageId::from_string(&page_id_raw) {
         Ok(page_id) => page_id,
         Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
     };
 
@@ -115,10 +106,7 @@ pub async fn get(
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -156,12 +144,9 @@ pub async fn get(
         let mut body = Map::new();
         body.insert("page_info".to_string(), page_info);
 
-        let etag = format!("\"{}:draft\"", page_id);
-
         return Ok(HttpResponse::Ok()
             .content_type("application/json")
-            .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_IMMUTABLE))
-            .insert_header((header::ETAG, etag))
+            .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
             .body(Value::Object(body).to_string()));
     }
 
@@ -218,7 +203,8 @@ pub async fn get(
     /*
      * レスポンス生成
      */
-    let timestamp = page_source.timestamp()
+    let timestamp = page_source
+        .timestamp()
         .to_rfc3339_opts(SecondsFormat::Secs, true);
 
     let mut revision_info = Map::new();
@@ -262,17 +248,11 @@ pub async fn get(
 
     let mut body = Map::new();
     body.insert("page_info".to_string(), page_info);
-    body.insert(
-        "revision_info".to_string(),
-        Value::Object(revision_info),
-    );
-
-    let etag = format!("\"{}:{}\"", page_id, revision);
+    body.insert("revision_info".to_string(), Value::Object(revision_info));
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")
-        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_IMMUTABLE))
-        .insert_header((header::ETAG, etag))
+        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
         .body(Value::Object(body).to_string()))
 }
 

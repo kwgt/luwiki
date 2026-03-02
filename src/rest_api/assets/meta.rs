@@ -10,17 +10,15 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{header, StatusCode};
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpResponse, web};
 use chrono::SecondsFormat;
 use serde_json::json;
 
+use super::super::resp_error_json;
 use crate::database::types::AssetId;
 use crate::http_server::app_state::AppState;
-use super::super::resp_error_json;
-
-/// キャッシュ指示ヘッダの固定値
-const CACHE_CONTROL_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+use crate::rest_api::CACHE_CONTROL_NO_STORE;
 
 ///
 /// GET /api/assets/{asset_id}/meta の実体
@@ -38,9 +36,7 @@ const CACHE_CONTROL_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * アセットID解析
      */
@@ -68,10 +64,7 @@ pub async fn get(
     let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
         Ok(Some(info)) => info,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "asset not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -82,10 +75,7 @@ pub async fn get(
     };
 
     if asset_info.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "asset deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
     }
 
     /*
@@ -123,8 +113,7 @@ pub async fn get(
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")
-        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_IMMUTABLE))
-        .insert_header((header::ETAG, asset_id.to_string()))
+        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
         .body(body.to_string()))
 }
 
@@ -140,9 +129,6 @@ pub async fn get(
 fn parse_asset_id(raw: String) -> Result<AssetId, HttpResponse> {
     match AssetId::from_string(&raw) {
         Ok(asset_id) => Ok(asset_id),
-        Err(_) => Err(resp_error_json(
-            StatusCode::NOT_FOUND,
-            "asset not found",
-        )),
+        Err(_) => Err(resp_error_json(StatusCode::NOT_FOUND, "asset not found")),
     }
 }

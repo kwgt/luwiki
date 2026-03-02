@@ -12,8 +12,8 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use common::{
-    prepare_test_dirs, reserve_port, run_add_user, unique_suffix,
-    wait_for_server_with_scheme, TEST_PASSWORD, TEST_USERNAME, ServerGuard,
+    ServerGuard, TEST_PASSWORD, TEST_USERNAME, prepare_test_dirs, reserve_port, run_add_user,
+    unique_suffix, wait_for_server_with_scheme,
 };
 
 #[test]
@@ -27,10 +27,7 @@ fn list_pages_excludes_base_path() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成
@@ -50,15 +47,7 @@ fn list_pages_excludes_base_path() {
     /*
      * 一覧取得と検証
      */
-    let (items, _, _) = list_pages(
-        &client,
-        &api_url,
-        &base_path,
-        None,
-        None,
-        Some(100),
-        None,
-    );
+    let (items, _, _) = list_pages(&client, &api_url, &base_path, None, None, Some(100), None);
     let paths = extract_paths(&items);
     assert!(!paths.contains(&base_path));
     assert!(paths.contains(&format!("{}/child", base_path)));
@@ -78,10 +67,7 @@ fn list_pages_with_deleted_behavior() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成と削除
@@ -118,9 +104,11 @@ fn list_pages_with_deleted_behavior() {
         item["page_id"].as_str() == Some(active_id.as_str())
             && item["deleted"].as_bool() == Some(false)
     }));
-    assert!(!items.iter().any(|item| {
-        item["page_id"].as_str() == Some(deleted_id.as_str())
-    }));
+    assert!(
+        !items
+            .iter()
+            .any(|item| { item["page_id"].as_str() == Some(deleted_id.as_str()) })
+    );
 
     /*
      * with_deletedあり
@@ -153,10 +141,7 @@ fn list_pages_pagination_forward() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
 
     /*
      * ページ作成
@@ -170,15 +155,8 @@ fn list_pages_pagination_forward() {
     /*
      * 1ページ目
      */
-    let (items, has_more, anchor) = list_pages(
-        &client,
-        &api_url,
-        &base_path,
-        None,
-        None,
-        Some(2),
-        None,
-    );
+    let (items, has_more, anchor) =
+        list_pages(&client, &api_url, &base_path, None, None, Some(2), None);
     assert_eq!(items.len(), 2);
     assert!(has_more);
     let anchor = anchor.expect("anchor missing");
@@ -242,12 +220,8 @@ fn list_pages(
     assert_eq!(response.status().as_u16(), 200);
 
     let body = response.text().expect("read list body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse list response failed");
-    let items = value["items"]
-        .as_array()
-        .expect("items missing")
-        .clone();
+    let value: Value = serde_json::from_str(&body).expect("parse list response failed");
+    let items = value["items"].as_array().expect("items missing").clone();
     let has_more = value["has_more"].as_bool().unwrap_or(false);
     let anchor = value["anchor"].as_str().map(str::to_string);
     (items, has_more, anchor)
@@ -260,12 +234,7 @@ fn extract_paths(items: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn create_page(
-    client: &Client,
-    api_url: &str,
-    path: &str,
-    body: &str,
-) -> String {
+fn create_page(client: &Client, api_url: &str, path: &str, body: &str) -> String {
     /*
      * ドラフト作成
      */
@@ -295,12 +264,9 @@ fn create_page(
         .expect("missing lock token");
 
     let response_body = response.text().expect("read body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録

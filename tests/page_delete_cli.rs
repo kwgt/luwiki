@@ -20,7 +20,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use serde_json;
 
-
 #[test]
 ///
 /// page delete がソフトデリートを行うことを確認する。
@@ -45,23 +44,9 @@ fn page_delete_cli_soft_delete_fails_on_second_try() {
         "/soft-delete",
     );
 
-    run_page_delete(
-        &db_path,
-        &assets_dir,
-        false,
-        false,
-        false,
-        "/soft-delete",
-    );
+    run_page_delete(&db_path, &assets_dir, false, false, false, "/soft-delete");
 
-    run_page_delete_expect_fail(
-        &db_path,
-        &assets_dir,
-        false,
-        false,
-        false,
-        "/soft-delete",
-    );
+    run_page_delete_expect_fail(&db_path, &assets_dir, false, false, false, "/soft-delete");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -91,26 +76,12 @@ fn page_delete_cli_hard_delete_removes_page() {
         "/hard-delete",
     );
 
-    run_page_delete(
-        &db_path,
-        &assets_dir,
-        true,
-        false,
-        false,
-        "/hard-delete",
-    );
+    run_page_delete(&db_path, &assets_dir, true, false, false, "/hard-delete");
 
     let list_output = run_page_list(&db_path, &assets_dir);
     assert!(!list_output.contains("/hard-delete"));
 
-    run_page_delete_expect_fail(
-        &db_path,
-        &assets_dir,
-        false,
-        false,
-        false,
-        "/hard-delete",
-    );
+    run_page_delete_expect_fail(&db_path, &assets_dir, false, false, false, "/hard-delete");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -149,14 +120,7 @@ fn page_delete_cli_hard_delete_after_soft_delete_removes_page() {
         "/soft-hard-delete",
     );
 
-    run_page_delete(
-        &db_path,
-        &assets_dir,
-        true,
-        false,
-        false,
-        &page_id,
-    );
+    run_page_delete(&db_path, &assets_dir, true, false, false, &page_id);
 
     let list_output = run_page_list(&db_path, &assets_dir);
     assert!(!list_output.contains("/soft-hard-delete"));
@@ -189,14 +153,7 @@ fn page_delete_cli_force_releases_lock() {
 
     drop(server);
 
-    run_page_delete(
-        &db_path,
-        &assets_dir,
-        false,
-        false,
-        true,
-        "/force-delete",
-    );
+    run_page_delete(&db_path, &assets_dir, false, false, true, "/force-delete");
 
     let lock_output = run_lock_list(&db_path, &assets_dir);
     assert!(!lock_output.contains("/force-delete"));
@@ -272,11 +229,7 @@ fn page_delete_cli_recursive_fails_when_child_locked() {
 
     let api_url = format!("http://127.0.0.1:{}/api", port);
     let _parent_id = create_page(&api_url, "/recursive-locked", "body");
-    let child_id = create_page(
-        &api_url,
-        "/recursive-locked/child",
-        "body",
-    );
+    let child_id = create_page(&api_url, "/recursive-locked/child", "body");
     lock_page(&api_url, &child_id);
 
     drop(server);
@@ -338,9 +291,7 @@ fn unique_suffix() -> String {
 /// * `assets_dir` - アセットディレクトリのパス
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
     let mut child = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
@@ -391,9 +342,7 @@ fn run_page_add(
     page_path: &str,
 ) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -444,9 +393,7 @@ fn run_page_delete(
 ) {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -471,10 +418,7 @@ fn run_page_delete(
         command.arg("--force");
     }
 
-    let output = command
-        .arg(target)
-        .output()
-        .expect("page delete failed");
+    let output = command.arg(target).output().expect("page delete failed");
 
     if !output.status.success() {
         panic!(
@@ -504,9 +448,7 @@ fn run_page_delete_expect_fail(
 ) {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -531,10 +473,7 @@ fn run_page_delete_expect_fail(
         command.arg("--force");
     }
 
-    let output = command
-        .arg(target)
-        .output()
-        .expect("page delete failed");
+    let output = command.arg(target).output().expect("page delete failed");
 
     assert!(!output.status.success());
 }
@@ -550,9 +489,7 @@ fn run_page_delete_expect_fail(
 /// 標準出力を返す。
 fn run_page_list(db_path: &Path, assets_dir: &Path) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -581,9 +518,7 @@ fn run_page_list(db_path: &Path, assets_dir: &Path) -> String {
 /// 標準出力を返す。
 fn run_lock_list(db_path: &Path, assets_dir: &Path) -> String {
     let exe = test_binary_path();
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     let output = Command::new(exe)
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -607,12 +542,8 @@ fn run_lock_list(db_path: &Path, assets_dir: &Path) -> String {
 /// # 戻り値
 /// 利用可能なポート番号を返す。
 fn reserve_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("bind failed");
-    listener
-        .local_addr()
-        .expect("local_addr failed")
-        .port()
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failed");
+    listener.local_addr().expect("local_addr failed").port()
 }
 
 ///
@@ -626,9 +557,7 @@ impl ServerGuard {
     /// サーバ起動
     fn start(port: u16, db_path: &Path, assets_dir: &Path) -> Self {
         let exe = test_binary_path();
-        let base_dir = db_path
-            .parent()
-            .expect("db_path parent missing");
+        let base_dir = db_path.parent().expect("db_path parent missing");
         let fts_index = fts_index_path(db_path);
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
@@ -727,12 +656,9 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: serde_json::Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: serde_json::Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -764,7 +690,7 @@ fn lock_page(api_url: &str, page_id: &str) {
     assert_eq!(response.status().as_u16(), 204);
 }
 
-/// 
+///
 /// テスト対象バイナリのパスを解決する。
 ///
 /// # 戻り値

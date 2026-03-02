@@ -6,10 +6,10 @@
 
 mod common;
 
-use std::fs;
 use chrono::DateTime;
 use reqwest::blocking::Client;
 use serde_json::Value;
+use std::fs;
 
 use common::*;
 
@@ -21,10 +21,7 @@ fn get_page_meta_returns_latest_info() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/meta", "meta body");
 
@@ -52,21 +49,12 @@ fn get_page_meta_returns_latest_info() {
             .expect("missing cache-control")
             .to_str()
             .expect("cache-control to_str failed"),
-        "public, max-age=31536000, immutable"
+        "no-store"
     );
-    assert_eq!(
-        response
-            .headers()
-            .get("ETag")
-            .expect("missing etag")
-            .to_str()
-            .expect("etag to_str failed"),
-        format!("\"{}:1\"", page_id)
-    );
+    assert!(response.headers().get("ETag").is_none());
 
     let body = response.text().expect("read body failed");
-    let value: Value = serde_json::from_str(&body)
-        .expect("parse meta response failed");
+    let value: Value = serde_json::from_str(&body).expect("parse meta response failed");
 
     assert_eq!(value["page_info"]["path"]["kind"], "current");
     assert_eq!(value["page_info"]["path"]["value"], "/meta");
@@ -86,8 +74,7 @@ fn get_page_meta_returns_latest_info() {
     let timestamp = value["revision_info"]["timestamp"]
         .as_str()
         .expect("timestamp missing");
-    DateTime::parse_from_rfc3339(timestamp)
-        .expect("timestamp parse failed");
+    DateTime::parse_from_rfc3339(timestamp).expect("timestamp parse failed");
 
     assert!(value["revision_info"].get("rename_info").is_none());
 
@@ -102,10 +89,7 @@ fn get_page_meta_respects_revision() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
     let page_id = create_page(&client, &base_url, "/meta-rev", "rev1");
 
@@ -128,9 +112,8 @@ fn get_page_meta_respects_revision() {
         .send()
         .expect("get meta rev=1 failed");
     assert_eq!(response.status().as_u16(), 200);
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta body failed")
-    ).expect("parse meta rev=1 failed");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta body failed"))
+        .expect("parse meta rev=1 failed");
     assert_eq!(value["revision_info"]["revision"], 1);
 
     let response = client
@@ -140,9 +123,8 @@ fn get_page_meta_respects_revision() {
         .send()
         .expect("get meta rev=2 failed");
     assert_eq!(response.status().as_u16(), 200);
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta body failed")
-    ).expect("parse meta rev=2 failed");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta body failed"))
+        .expect("parse meta rev=2 failed");
     assert_eq!(value["revision_info"]["revision"], 2);
 
     let response = client
@@ -172,10 +154,7 @@ fn get_page_meta_requires_auth_and_valid_id() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let url = format!("{}/pages/not-a-ulid/meta", api_base_url);
 
     let response = client
@@ -202,17 +181,9 @@ fn get_page_meta_reflects_lock_state() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_base_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_base_url);
-    let page_id = create_page(
-        &client,
-        &base_url,
-        "/meta-lock",
-        "meta body",
-    );
+    let page_id = create_page(&client, &base_url, "/meta-lock", "meta body");
 
     let lock_url = format!("{}/{}/lock", base_url, page_id);
     let meta_url = format!("{}/{}/meta", base_url, page_id);
@@ -231,9 +202,8 @@ fn get_page_meta_reflects_lock_state() {
         .expect("get meta failed");
     assert_eq!(response.status().as_u16(), 200);
 
-    let value: Value = serde_json::from_str(
-        &response.text().expect("read meta body failed")
-    ).expect("parse meta failed");
+    let value: Value = serde_json::from_str(&response.text().expect("read meta body failed"))
+        .expect("parse meta failed");
     assert_eq!(value["page_info"]["locked"], true);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -251,12 +221,7 @@ fn get_page_meta_reflects_lock_state() {
 /// # 戻り値
 /// 作成したページID
 ///
-fn create_page(
-    client: &Client,
-    base_url: &str,
-    path: &str,
-    body: &str,
-) -> String {
+fn create_page(client: &Client, base_url: &str, path: &str, body: &str) -> String {
     /*
      * ドラフト作成
      */
@@ -290,12 +255,9 @@ fn create_page(
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse create page response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value =
+        serde_json::from_str(&response_body).expect("parse create page response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録

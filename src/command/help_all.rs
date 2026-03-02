@@ -11,8 +11,8 @@
 use anyhow::Result;
 use clap::CommandFactory;
 
-use crate::cmd_args::Options;
 use super::CommandContext;
+use crate::cmd_args::Options;
 
 ///
 /// "help-all"サブコマンドのコンテキスト情報をパックした構造体
@@ -86,8 +86,6 @@ fn collect_commands(
 ///
 /// コマンドコンテキストの生成
 ///
-pub(crate) fn build_context(
-    _opts: &Options,
-) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(_opts: &Options) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(HelpAllCommandContext))
 }

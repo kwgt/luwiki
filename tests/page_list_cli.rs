@@ -29,10 +29,7 @@ fn page_list_cli_shows_created_pages() {
 
     run_add_user(&db_path, &assets_dir);
     let server = ServerGuard::start(port, &db_path, &assets_dir);
-    let (api_url, client) = wait_for_server_with_scheme(
-        port,
-        server.stderr_path(),
-    );
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
     let base_url = format!("{}/pages", api_url);
 
     create_page(&client, &base_url, "/a");
@@ -98,12 +95,8 @@ fn create_page(client: &Client, base_url: &str, path: &str) {
         .expect("missing lock token");
 
     let response_body = response.text().expect("read response body failed");
-    let value: Value = serde_json::from_str(&response_body)
-        .expect("parse response failed");
-    let page_id = value["id"]
-        .as_str()
-        .expect("missing page id")
-        .to_string();
+    let value: Value = serde_json::from_str(&response_body).expect("parse response failed");
+    let page_id = value["id"].as_str().expect("missing page id").to_string();
 
     /*
      * ページソースの登録
@@ -134,9 +127,7 @@ fn create_page(client: &Client, base_url: &str, path: &str) {
 fn run_page_list(db_path: &Path, assets_dir: &Path, long_info: bool) -> String {
     let exe = test_binary_path();
     let mut command = Command::new(exe);
-    let base_dir = db_path
-        .parent()
-        .expect("db_path parent missing");
+    let base_dir = db_path.parent().expect("db_path parent missing");
     command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
@@ -153,9 +144,7 @@ fn run_page_list(db_path: &Path, assets_dir: &Path, long_info: bool) -> String {
         command.arg("--long-info");
     }
 
-    let output = command
-        .output()
-        .expect("page list failed");
+    let output = command.output().expect("page list failed");
     assert!(output.status.success());
     String::from_utf8(output.stdout).expect("stdout decode failed")
 }

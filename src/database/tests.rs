@@ -37,28 +37,28 @@ fn build_link_refs_extracts_wiki_links() {
 
     let txn = db.begin_write().expect("begin write failed");
     {
-        let mut path_table = txn.open_table(PAGE_PATH_TABLE)
-            .expect("open table failed");
-        let mut index_table = txn.open_table(PAGE_INDEX_TABLE)
-            .expect("open table failed");
+        let mut path_table = txn.open_table(PAGE_PATH_TABLE).expect("open table failed");
+        let mut index_table = txn.open_table(PAGE_INDEX_TABLE).expect("open table failed");
         let id_root = PageId::new();
         let id_page = PageId::new();
-        path_table.insert(
-            "/a".to_string(),
-            id_root.clone(),
-        ).expect("insert /a failed");
-        path_table.insert(
-            "/a/b".to_string(),
-            id_page.clone(),
-        ).expect("insert /a/b failed");
-        index_table.insert(
-            id_root.clone(),
-            PageIndex::new_page(id_root.clone(), "/a".to_string()),
-        ).expect("insert /a index failed");
-        index_table.insert(
-            id_page.clone(),
-            PageIndex::new_page(id_page.clone(), "/a/b".to_string()),
-        ).expect("insert /a/b index failed");
+        path_table
+            .insert("/a".to_string(), id_root.clone())
+            .expect("insert /a failed");
+        path_table
+            .insert("/a/b".to_string(), id_page.clone())
+            .expect("insert /a/b failed");
+        index_table
+            .insert(
+                id_root.clone(),
+                PageIndex::new_page(id_root.clone(), "/a".to_string()),
+            )
+            .expect("insert /a index failed");
+        index_table
+            .insert(
+                id_page.clone(),
+                PageIndex::new_page(id_page.clone(), "/a/b".to_string()),
+            )
+            .expect("insert /a/b index failed");
     }
 
     let source = concat!(
@@ -71,8 +71,7 @@ fn build_link_refs_extracts_wiki_links() {
         "[mail](mailto:info@example.com)",
     );
 
-    let refs = build_link_refs(&txn, "/a/b", source)
-        .expect("build_link_refs failed");
+    let refs = build_link_refs(&txn, "/a/b", source).expect("build_link_refs failed");
 
     assert!(matches!(refs.get("/a/b"), Some(Some(_))));
     assert!(matches!(refs.get("/a"), Some(Some(_))));
@@ -108,31 +107,32 @@ fn ensure_default_root_creates_root_page() {
     let (base_dir, db_path) = prepare_test_dirs();
     let asset_path = base_dir.join("assets");
 
-    let manager = DatabaseManager::open(&db_path, &asset_path)
-        .expect("open manager failed");
-    manager.add_user("user", "pass", None)
+    let manager = DatabaseManager::open(&db_path, &asset_path).expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
         .expect("add user failed");
-    manager.ensure_default_root("user")
+    manager
+        .ensure_default_root("user")
         .expect("ensure root failed");
 
-    let exists = manager.get_page_id_by_path(ROOT_PAGE_PATH)
+    let exists = manager
+        .get_page_id_by_path(ROOT_PAGE_PATH)
         .expect("page exists failed")
         .is_some();
     assert!(exists);
 
-    let sandbox_page_id = manager.get_page_id_by_path(SANDBOX_PAGE_PATH)
+    let sandbox_page_id = manager
+        .get_page_id_by_path(SANDBOX_PAGE_PATH)
         .expect("sandbox page resolve failed")
         .expect("sandbox page not found");
-    let code_asset_exists = manager.get_asset_id_by_page_file(
-        &sandbox_page_id,
-        SANDBOX_SAMPLE_CODE_FILE_NAME,
-    ).expect("sandbox code asset lookup failed")
+    let code_asset_exists = manager
+        .get_asset_id_by_page_file(&sandbox_page_id, SANDBOX_SAMPLE_CODE_FILE_NAME)
+        .expect("sandbox code asset lookup failed")
         .is_some();
     assert!(code_asset_exists);
-    let csv_asset_exists = manager.get_asset_id_by_page_file(
-        &sandbox_page_id,
-        SANDBOX_SAMPLE_CSV_FILE_NAME,
-    ).expect("sandbox csv asset lookup failed")
+    let csv_asset_exists = manager
+        .get_asset_id_by_page_file(&sandbox_page_id, SANDBOX_SAMPLE_CSV_FILE_NAME)
+        .expect("sandbox csv asset lookup failed")
         .is_some();
     assert!(csv_asset_exists);
 

@@ -13,17 +13,11 @@ use std::io::{BufReader, Cursor};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use log::info;
-use rcgen::{
-    CertificateParams,
-    DistinguishedName,
-    DnType,
-    KeyPair,
-    SanType,
-};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use time::{Duration, OffsetDateTime};
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -38,19 +32,13 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 /// # 戻り値
 /// 設定に成功した場合はTLSサーバ設定を返す。
 ///
-pub(crate) fn load_server_config(
-    cert_path: &Path,
-    cert_is_explicit: bool,
-) -> Result<ServerConfig> {
+pub(crate) fn load_server_config(cert_path: &Path, cert_is_explicit: bool) -> Result<ServerConfig> {
     /*
      * 証明書ファイルの存在確認と生成
      */
     if !cert_path.exists() {
         if cert_is_explicit {
-            return Err(anyhow!(
-                "cert file not found: {}",
-                cert_path.display()
-            ));
+            return Err(anyhow!("cert file not found: {}", cert_path.display()));
         }
 
         generate_self_signed(cert_path)?;
@@ -93,9 +81,7 @@ fn build_server_config(
 /// # 戻り値
 /// 読み込みに成功した場合は証明書と秘密鍵を返す。
 ///
-fn load_pem(
-    cert_path: &Path,
-) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+fn load_pem(cert_path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     /*
      * PEMの読み込み
      */
@@ -109,10 +95,7 @@ fn load_pem(
         .collect::<Result<_, _>>()
         .map_err(|err| anyhow!("read cert error: {}", err))?;
     if certs.is_empty() {
-        return Err(anyhow!(
-            "no certificate found: {}",
-            cert_path.display()
-        ));
+        return Err(anyhow!("no certificate found: {}", cert_path.display()));
     }
 
     /*
@@ -172,10 +155,7 @@ fn generate_self_signed(cert_path: &Path) -> Result<()> {
      * 証明書の保存
      */
     fs::write(cert_path, pem)?;
-    info!(
-        "generated self-signed certificate: {}",
-        cert_path.display()
-    );
+    info!("generated self-signed certificate: {}", cert_path.display());
     Ok(())
 }
 
@@ -230,12 +210,11 @@ fn log_certificate_info(certs: &[CertificateDer<'static>]) {
                     GeneralName::IPAddress(bytes) => {
                         let ip_bytes: &[u8] = bytes.as_ref();
                         match ip_bytes {
-                            [a, b, c, d] => Some(
-                                IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d))
-                                    .to_string()
-                            ),
-                            [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] => {
-                                Some(IpAddr::V6(Ipv6Addr::new(
+                            [a, b, c, d] => {
+                                Some(IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d)).to_string())
+                            }
+                            [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] => Some(
+                                IpAddr::V6(Ipv6Addr::new(
                                     ((*a as u16) << 8) | (*b as u16),
                                     ((*c as u16) << 8) | (*d as u16),
                                     ((*e as u16) << 8) | (*f as u16),
@@ -245,8 +224,8 @@ fn log_certificate_info(certs: &[CertificateDer<'static>]) {
                                     ((*m as u16) << 8) | (*n as u16),
                                     ((*o as u16) << 8) | (*p as u16),
                                 ))
-                                .to_string())
-                            }
+                                .to_string(),
+                            ),
                             _ => None,
                         }
                     }
@@ -265,10 +244,7 @@ fn log_certificate_info(certs: &[CertificateDer<'static>]) {
 
     info!(
         "certificate info: subject_cn={}, san={:?}, not_before={}, not_after={}",
-        subject_cn,
-        san,
-        not_before,
-        not_after
+        subject_cn, san, not_before, not_after
     );
 }
 
@@ -347,8 +323,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let cert_path = temp_cert_path(&dir, "cert_only.pem");
 
-        let params = CertificateParams::new(vec!["localhost".to_string()])
-            .expect("params");
+        let params = CertificateParams::new(vec!["localhost".to_string()]).expect("params");
         let key_pair = KeyPair::generate().expect("key");
         let cert = params.self_signed(&key_pair).expect("cert");
         let cert_pem = cert.pem();

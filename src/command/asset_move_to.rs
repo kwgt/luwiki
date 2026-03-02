@@ -8,13 +8,13 @@
 //! サブコマンド"asset move_to"の実装
 //!
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
+use super::CommandContext;
 use crate::cmd_args::{AssetMoveToOpts, Options};
 use crate::database::types::{AssetId, PageId};
 use crate::database::{AssetMoveResult, DatabaseManager, DbError};
 use crate::rest_api::validate_page_path;
-use super::CommandContext;
 
 ///
 /// "asset move_to"サブコマンドのコンテキスト情報をパックした構造体
@@ -59,15 +59,18 @@ impl AssetMoveToCommandContext {
 impl CommandContext for AssetMoveToCommandContext {
     fn exec(&self) -> Result<()> {
         let dst_page_id = self.resolve_dst_page_id()?;
-        let dst_index = self.manager
+        let dst_index = self
+            .manager
             .get_page_index_by_id(&dst_page_id)?
             .ok_or_else(|| anyhow!("destination page not found"))?;
-        let asset_info = self.manager
+        let asset_info = self
+            .manager
             .get_asset_info_by_id(&self.asset_id)?
             .ok_or_else(|| anyhow!(DbError::AssetNotFound))?;
         let file_name = asset_info.file_name();
 
-        let conflict_asset = self.manager
+        let conflict_asset = self
+            .manager
             .get_asset_id_by_page_file(&dst_page_id, &file_name)?;
         let has_conflict = conflict_asset
             .as_ref()
@@ -88,17 +91,14 @@ impl CommandContext for AssetMoveToCommandContext {
             }
         }
 
-        match self.manager.move_asset(&self.asset_id, &dst_page_id, self.force)? {
+        match self
+            .manager
+            .move_asset(&self.asset_id, &dst_page_id, self.force)?
+        {
             AssetMoveResult::Moved => Ok(()),
-            AssetMoveResult::PageNotFound => {
-                Err(anyhow!("destination page not found"))
-            }
-            AssetMoveResult::PageDeleted => {
-                Err(anyhow!("destination page not found"))
-            }
-            AssetMoveResult::NameConflict => {
-                Err(anyhow!("destination asset already exists"))
-            }
+            AssetMoveResult::PageNotFound => Err(anyhow!("destination page not found")),
+            AssetMoveResult::PageDeleted => Err(anyhow!("destination page not found")),
+            AssetMoveResult::NameConflict => Err(anyhow!("destination asset already exists")),
         }
     }
 }

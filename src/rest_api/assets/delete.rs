@@ -13,11 +13,11 @@ use std::sync::{Arc, RwLock};
 use actix_web::http::StatusCode;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 
+use super::super::resp_error_json;
 use crate::database::DbError;
 use crate::database::types::AssetId;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthUser;
-use super::super::resp_error_json;
 
 /// ロック認証ヘッダの名称
 const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
@@ -39,9 +39,7 @@ pub async fn delete(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * アセットID解析
      */
@@ -69,10 +67,7 @@ pub async fn delete(
     let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
         Ok(Some(info)) => info,
         Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "asset not found",
-            ));
+            return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -83,10 +78,7 @@ pub async fn delete(
     };
 
     if asset_info.deleted() {
-        return Ok(resp_error_json(
-            StatusCode::GONE,
-            "asset deleted",
-        ));
+        return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
     }
 
     /*
@@ -106,10 +98,7 @@ pub async fn delete(
 
             if let Some(lock_info) = lock_info {
                 if !req.headers().contains_key(LOCK_AUTH_HEADER) {
-                    return Ok(resp_error_json(
-                        StatusCode::LOCKED,
-                        "page locked",
-                    ));
+                    return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
                 }
 
                 let token = match parse_lock_token(&req) {
@@ -118,10 +107,7 @@ pub async fn delete(
                 };
 
                 if lock_info.token() != token {
-                    return Ok(resp_error_json(
-                        StatusCode::FORBIDDEN,
-                        "lock token invalid",
-                    ));
+                    return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
                 }
 
                 let auth_user = match req.extensions().get::<AuthUser>() {
@@ -151,10 +137,7 @@ pub async fn delete(
                 };
 
                 if lock_info.user() != user_id {
-                    return Ok(resp_error_json(
-                        StatusCode::FORBIDDEN,
-                        "lock forbidden",
-                    ));
+                    return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
                 }
             }
         }
@@ -166,21 +149,11 @@ pub async fn delete(
     match state.db().delete_asset(&asset_id) {
         Ok(()) => {}
         Err(err) => {
-            if let Some(DbError::AssetNotFound) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::NOT_FOUND,
-                    "asset not found",
-                ));
+            if let Some(DbError::AssetNotFound) = err.downcast_ref::<DbError>() {
+                return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
             }
-            if let Some(DbError::AssetDeleted) =
-                err.downcast_ref::<DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::GONE,
-                    "asset deleted",
-                ));
+            if let Some(DbError::AssetDeleted) = err.downcast_ref::<DbError>() {
+                return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
             }
 
             return Ok(resp_error_json(
@@ -208,10 +181,7 @@ pub async fn delete(
 fn parse_asset_id(raw: String) -> Result<AssetId, HttpResponse> {
     match AssetId::from_string(&raw) {
         Ok(asset_id) => Ok(asset_id),
-        Err(_) => Err(resp_error_json(
-            StatusCode::NOT_FOUND,
-            "asset not found",
-        )),
+        Err(_) => Err(resp_error_json(StatusCode::NOT_FOUND, "asset not found")),
     }
 }
 
@@ -222,20 +192,14 @@ fn parse_lock_token(req: &HttpRequest) -> Result<crate::database::types::LockTok
     let raw = match req.headers().get(LOCK_AUTH_HEADER) {
         Some(raw) => raw,
         None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
         }
     };
 
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
         }
     };
 
@@ -250,18 +214,12 @@ fn parse_lock_token(req: &HttpRequest) -> Result<crate::database::types::LockTok
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
         }
     };
 
     match crate::database::types::LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(
-            StatusCode::FORBIDDEN,
-            "lock token invalid",
-        )),
+        Err(_) => Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid")),
     }
 }

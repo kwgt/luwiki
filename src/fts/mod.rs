@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use lindera_core::mode::Mode;
 use lindera_dictionary::{DictionaryConfig, DictionaryKind};
 use lindera_tokenizer::tokenizer::{Tokenizer as LinderaTokenizer, TokenizerConfig};
@@ -20,11 +20,11 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
-    Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions,
-    Value, STORED, STRING, INDEXED,
+    Field, INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions,
+    Value,
 };
-use tantivy::tokenizer::{LowerCaser, Token, TokenStream, Tokenizer, TextAnalyzer};
-use tantivy::{doc, Index, Score, TantivyDocument, Term};
+use tantivy::tokenizer::{LowerCaser, TextAnalyzer, Token, TokenStream, Tokenizer};
+use tantivy::{Index, Score, TantivyDocument, Term, doc};
 
 use crate::cmd_args::FtsSearchTarget;
 use crate::database::DatabaseManager;
@@ -294,7 +294,11 @@ pub(crate) fn extract_markdown_sections(source: &str) -> MarkdownSections {
     /*
      * 抽出結果の構築
      */
-    MarkdownSections { headings, body, code }
+    MarkdownSections {
+        headings,
+        body,
+        code,
+    }
 }
 
 ///
@@ -373,7 +377,9 @@ impl LinderaAdapter {
                  */
                 let tokenizer = LinderaTokenizer::from_config(config)
                     .context("initialize lindera tokenizer")?;
-                Ok(Self { tokenizer: Arc::new(tokenizer) })
+                Ok(Self {
+                    tokenizer: Arc::new(tokenizer),
+                })
             }
         }
     }
@@ -420,7 +426,10 @@ impl Tokenizer for LinderaAdapter {
         /*
          * ストリームの生成
          */
-        LinderaTokenStream { tokens: output, index: 0 }
+        LinderaTokenStream {
+            tokens: output,
+            index: 0,
+        }
     }
 }
 
@@ -557,19 +566,26 @@ impl FtsSchema {
          * スキーマの取得と検証
          */
         let schema = index.schema();
-        let page_id = schema.get_field("page_id")
+        let page_id = schema
+            .get_field("page_id")
             .with_context(|| "page_id field missing")?;
-        let revision = schema.get_field("revision")
+        let revision = schema
+            .get_field("revision")
             .with_context(|| "revision field missing")?;
-        let deleted = schema.get_field("deleted")
+        let deleted = schema
+            .get_field("deleted")
             .with_context(|| "deleted field missing")?;
-        let is_latest = schema.get_field("is_latest")
+        let is_latest = schema
+            .get_field("is_latest")
             .with_context(|| "is_latest field missing")?;
-        let headings = schema.get_field("headings")
+        let headings = schema
+            .get_field("headings")
             .with_context(|| "headings field missing")?;
-        let body = schema.get_field("body")
+        let body = schema
+            .get_field("body")
             .with_context(|| "body field missing")?;
-        let code = schema.get_field("code")
+        let code = schema
+            .get_field("code")
             .with_context(|| "code field missing")?;
 
         /*
@@ -753,20 +769,17 @@ impl FtsIndexManager {
             /*
              * フィルタ条件の組み立て
              */
-            let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
-                Vec::new();
+            let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
             clauses.push((Occur::Must, query));
 
             if !with_deleted {
-                let term =
-                    Term::from_field_bool(self.schema.deleted, false);
+                let term = Term::from_field_bool(self.schema.deleted, false);
                 let query = TermQuery::new(term, IndexRecordOption::Basic);
                 clauses.push((Occur::Must, Box::new(query)));
             }
 
             if !all_revision {
-                let term =
-                    Term::from_field_bool(self.schema.is_latest, true);
+                let term = Term::from_field_bool(self.schema.is_latest, true);
                 let query = TermQuery::new(term, IndexRecordOption::Basic);
                 clauses.push((Occur::Must, Box::new(query)));
             }
@@ -780,11 +793,7 @@ impl FtsIndexManager {
          * スニペット生成器の準備
          */
         let mut snippet_generator =
-            tantivy::snippet::SnippetGenerator::create(
-                &searcher,
-                &*query,
-                field,
-            )?;
+            tantivy::snippet::SnippetGenerator::create(&searcher, &*query, field)?;
         snippet_generator.set_max_num_chars(200);
 
         /*
@@ -802,8 +811,8 @@ impl FtsIndexManager {
                 .get_first(self.schema.page_id)
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| anyhow!("page_id missing"))?;
-            let page_id = PageId::from_string(page_id)
-                .map_err(|err| anyhow!("invalid page_id: {}", err))?;
+            let page_id =
+                PageId::from_string(page_id).map_err(|err| anyhow!("invalid page_id: {}", err))?;
 
             let revision = doc
                 .get_first(self.schema.revision)
@@ -845,11 +854,7 @@ impl FtsIndexManager {
     /// # 戻り値
     /// 処理に成功した場合は`Ok(())`
     ///
-    fn replace_page_docs(
-        &self,
-        page_id: &PageId,
-        docs: &[FtsDocument],
-    ) -> Result<()> {
+    fn replace_page_docs(&self, page_id: &PageId, docs: &[FtsDocument]) -> Result<()> {
         /*
          * ライタの準備
          */
@@ -858,10 +863,7 @@ impl FtsIndexManager {
         /*
          * 既存文書の削除
          */
-        let term = Term::from_field_text(
-            self.schema.page_id,
-            &page_id.to_string(),
-        );
+        let term = Term::from_field_text(self.schema.page_id, &page_id.to_string());
         writer.delete_term(term);
 
         /*
@@ -905,10 +907,7 @@ impl FtsIndexManager {
         /*
          * 文書の削除
          */
-        let term = Term::from_field_text(
-            self.schema.page_id,
-            &page_id.to_string(),
-        );
+        let term = Term::from_field_text(self.schema.page_id, &page_id.to_string());
         writer.delete_term(term);
 
         /*
@@ -965,9 +964,7 @@ impl FtsIndexManager {
 ///
 fn register_tokenizer(index: &Index, kind: TokenizerKind) -> Result<()> {
     let tokenizer = LinderaAdapter::new(kind)?;
-    let analyzer = TextAnalyzer::builder(tokenizer)
-        .filter(LowerCaser)
-        .build();
+    let analyzer = TextAnalyzer::builder(tokenizer).filter(LowerCaser).build();
     index.tokenizers().register(kind.name(), analyzer);
     Ok(())
 }
@@ -982,10 +979,7 @@ fn register_tokenizer(index: &Index, kind: TokenizerKind) -> Result<()> {
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
-pub(crate) fn rebuild_index(
-    config: &FtsIndexConfig,
-    docs: &[FtsDocument],
-) -> Result<()> {
+pub(crate) fn rebuild_index(config: &FtsIndexConfig, docs: &[FtsDocument]) -> Result<()> {
     let manager = FtsIndexManager::create(config)?;
     manager.rebuild(docs)
 }
@@ -1058,10 +1052,7 @@ pub(crate) fn reindex_page(
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
-pub(crate) fn delete_page_index(
-    config: &FtsIndexConfig,
-    page_id: &PageId,
-) -> Result<()> {
+pub(crate) fn delete_page_index(config: &FtsIndexConfig, page_id: &PageId) -> Result<()> {
     let index_manager = FtsIndexManager::open(config)?;
     index_manager.delete_page_docs(page_id)
 }
@@ -1104,10 +1095,7 @@ pub(crate) fn update_pages_index(
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
-pub(crate) fn delete_pages_index(
-    config: &FtsIndexConfig,
-    page_ids: &[PageId],
-) -> Result<()> {
+pub(crate) fn delete_pages_index(config: &FtsIndexConfig, page_ids: &[PageId]) -> Result<()> {
     /*
      * インデックス削除の実行
      */

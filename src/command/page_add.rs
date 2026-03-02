@@ -14,10 +14,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use pulldown_cmark::Parser;
 
+use super::CommandContext;
 use crate::cmd_args::{Options, PageAddOpts};
 use crate::database::DatabaseManager;
 use crate::fts::{self, FtsIndexConfig};
-use super::CommandContext;
 
 ///
 /// "page add"サブコマンドのコンテキスト情報をパックした構造体
@@ -60,17 +60,14 @@ impl CommandContext for PageAddCommandContext {
          */
         let source = fs::read_to_string(&self.file_path)?;
         let parser = Parser::new(&source);
-        for _ in parser {
-        }
+        for _ in parser {}
 
         /*
          * ページの作成
          */
-        let page_id = self.manager.create_page(
-            &self.page_path,
-            &self.user_name,
-            source,
-        )?;
+        let page_id = self
+            .manager
+            .create_page(&self.page_path, &self.user_name, source)?;
 
         /*
          * インデックスの更新

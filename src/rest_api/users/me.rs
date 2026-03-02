@@ -10,12 +10,12 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{header, StatusCode};
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde_json::json;
 
 use crate::http_server::app_state::AppState;
-use crate::rest_api::{AuthUser, resp_error_json};
+use crate::rest_api::{AuthUser, CACHE_CONTROL_NO_STORE, resp_error_json};
 
 ///
 /// GET /api/users/me の実体
@@ -26,9 +26,7 @@ use crate::rest_api::{AuthUser, resp_error_json};
 pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * 認証済みユーザ名の取得
      */
@@ -77,7 +75,6 @@ pub async fn get(
     let user_id = user_info.id().to_string();
     let timestamp = user_info.timestamp();
     let timestamp_iso = timestamp.format("%Y-%m-%dT%H:%M:%S").to_string();
-    let etag = format!("{}:{}", user_id, timestamp.timestamp_millis());
     let body = json!({
         "id": user_id,
         "username": user_info.username(),
@@ -87,7 +84,6 @@ pub async fn get(
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")
-        .insert_header((header::CACHE_CONTROL, "private, no-cache"))
-        .insert_header((header::ETAG, etag))
+        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
         .body(body.to_string()))
 }

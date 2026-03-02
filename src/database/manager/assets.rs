@@ -10,16 +10,16 @@
 
 use std::fs;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use redb::{ReadableDatabase, ReadableTable};
 
+use super::DatabaseManager;
 use crate::database::entries::{AssetListEntry, AssetMoveResult};
 use crate::database::schema::{
-    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, PAGE_INDEX_TABLE,
-    USER_ID_TABLE, USER_INFO_TABLE,
+    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, PAGE_INDEX_TABLE, USER_ID_TABLE,
+    USER_INFO_TABLE,
 };
 use crate::database::types::{AssetId, AssetInfo, PageId};
-use super::DatabaseManager;
 
 impl DatabaseManager {
     ///
@@ -112,10 +112,7 @@ impl DatabaseManager {
     /// 取得に成功した場合は`Ok(Some(AssetInfo))`を返す。
     /// 存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_asset_info_by_id(
-        &self,
-        asset_id: &AssetId,
-    ) -> Result<Option<AssetInfo>> {
+    pub(crate) fn get_asset_info_by_id(&self, asset_id: &AssetId) -> Result<Option<AssetInfo>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -136,10 +133,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// アセット情報の一覧を返す。
     ///
-    pub(crate) fn list_page_assets(
-        &self,
-        page_id: &PageId,
-    ) -> Result<Vec<AssetInfo>> {
+    pub(crate) fn list_page_assets(&self, page_id: &PageId) -> Result<Vec<AssetInfo>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -213,10 +207,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// アセットデータを返す。
     ///
-    pub(crate) fn read_asset_data(
-        &self,
-        asset_id: &AssetId,
-    ) -> Result<Vec<u8>> {
+    pub(crate) fn read_asset_data(&self, asset_id: &AssetId) -> Result<Vec<u8>> {
         /*
          * アセットパスの生成
          */
@@ -518,11 +509,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 復帰に成功した場合は`Ok(())`を返す。
     ///
-    pub(crate) fn undelete_asset(
-        &self,
-        asset_id: &AssetId,
-        new_name: Option<&str>,
-    ) -> Result<()> {
+    pub(crate) fn undelete_asset(&self, asset_id: &AssetId, new_name: Option<&str>) -> Result<()> {
         /*
          * 書き込みトランザクション開始
          */
@@ -633,9 +620,7 @@ impl DatabaseManager {
             let file_name = asset_info.file_name();
             let lookup_key = (dst_page_id.clone(), file_name.clone());
 
-            let conflict_id = lookup_table
-                .get(&lookup_key)?
-                .map(|entry| entry.value());
+            let conflict_id = lookup_table.get(&lookup_key)?.map(|entry| entry.value());
             if let Some(conflict_id) = conflict_id {
                 if conflict_id == asset_id.clone() {
                     // 同一アセットの再指定は競合として扱わない

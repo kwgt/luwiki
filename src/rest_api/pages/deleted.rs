@@ -15,8 +15,8 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::http_server::app_state::AppState;
 use super::super::resp_error_json;
+use crate::http_server::app_state::AppState;
 
 #[derive(Deserialize)]
 struct DeletedQuery {
@@ -39,15 +39,11 @@ struct DeletedQuery {
 pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
-)
-    -> actix_web::Result<HttpResponse>
-{
+) -> actix_web::Result<HttpResponse> {
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<DeletedQuery>::from_query(
-        req.query_string()
-    ) {
+    let query = match web::Query::<DeletedQuery>::from_query(req.query_string()) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -87,10 +83,12 @@ pub async fn get(
         }
     };
 
-    let body = json!(page_ids
-        .into_iter()
-        .map(|page_id| page_id.to_string())
-        .collect::<Vec<String>>());
+    let body = json!(
+        page_ids
+            .into_iter()
+            .map(|page_id| page_id.to_string())
+            .collect::<Vec<String>>()
+    );
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")

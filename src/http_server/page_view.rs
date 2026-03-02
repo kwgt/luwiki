@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::{HttpResponse, web, http::header};
+use actix_web::{HttpResponse, http::header, web};
 
 use crate::http_server::app_state::AppState;
 use crate::http_server::static_files;
@@ -19,9 +19,7 @@ use crate::rest_api;
 ///
 /// ルートページ表示
 ///
-pub(crate) async fn get_root(
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+pub(crate) async fn get_root(data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     get_by_path(String::new(), data).await
 }
 
@@ -47,9 +45,7 @@ pub(crate) async fn get(
 ///
 /// 編集画面(ルート)
 ///
-pub(crate) async fn get_edit_root(
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+pub(crate) async fn get_edit_root(data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     get_edit_by_path(String::new(), data).await
 }
 
@@ -66,9 +62,7 @@ pub(crate) async fn get_edit(
 ///
 /// 検索画面
 ///
-pub(crate) async fn get_search(
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+pub(crate) async fn get_search(data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     let state = match data.read() {
         Ok(state) => state,
         Err(_) => return HttpResponse::InternalServerError().finish(),
@@ -80,9 +74,7 @@ pub(crate) async fn get_search(
 ///
 /// ページ一覧画面(ルート)
 ///
-pub(crate) async fn get_pages_root(
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+pub(crate) async fn get_pages_root(data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     get_pages_by_path(String::new(), data).await
 }
 
@@ -99,9 +91,7 @@ pub(crate) async fn get_pages(
 ///
 /// リビジョン管理画面(ルート)
 ///
-pub(crate) async fn get_rev_root(
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+pub(crate) async fn get_rev_root(data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     get_rev_by_path(String::new(), data).await
 }
 
@@ -115,10 +105,7 @@ pub(crate) async fn get_rev(
     get_rev_by_path(path.into_inner(), data).await
 }
 
-async fn get_by_path(
-    raw_path: String,
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+async fn get_by_path(raw_path: String, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     let page_path = normalize_path(&raw_path);
     if let Err(reason) = rest_api::validate_page_path(&page_path) {
         return HttpResponse::BadRequest().body(reason);
@@ -150,10 +137,7 @@ async fn get_by_path(
     render_page_html(&state, &page_id.to_string(), &revision.to_string())
 }
 
-async fn get_rev_by_path(
-    raw_path: String,
-    data: web::Data<Arc<RwLock<AppState>>>,
-) -> HttpResponse {
+async fn get_rev_by_path(raw_path: String, data: web::Data<Arc<RwLock<AppState>>>) -> HttpResponse {
     let page_path = normalize_path(&raw_path);
     if let Err(reason) = rest_api::validate_page_path(&page_path) {
         return HttpResponse::BadRequest().body(reason);
@@ -255,11 +239,7 @@ fn escape_html_attribute(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn render_page_html(
-    state: &AppState,
-    page_id: &str,
-    revision: &str,
-) -> HttpResponse {
+fn render_page_html(state: &AppState, page_id: &str, revision: &str) -> HttpResponse {
     let template = match static_files::get_embedded_file("index.html") {
         Some(data) => data,
         None => return HttpResponse::InternalServerError().finish(),
@@ -272,10 +252,7 @@ fn render_page_html(
 
     html = html.replace("{{PAGE_ID}}", page_id);
     html = html.replace("{{REVISION}}", revision);
-    html = html.replace(
-        "{{WIKI_TITLE}}",
-        &escape_html_attribute(state.wiki_title()),
-    );
+    html = html.replace("{{WIKI_TITLE}}", &escape_html_attribute(state.wiki_title()));
     html = html.replace(
         "{{FRONTEND_UI_FONT}}",
         &escape_html_attribute(state.frontend_config().ui_font()),
@@ -296,10 +273,7 @@ fn render_page_html(
         "{{FRONTEND_MD_CODE_FONT}}",
         &escape_html_attribute(state.frontend_config().md_code_font()),
     );
-    html = html.replace(
-        "{{ASSET_MAX_BYTES}}",
-        &state.asset_limit_size().to_string(),
-    );
+    html = html.replace("{{ASSET_MAX_BYTES}}", &state.asset_limit_size().to_string());
 
     HttpResponse::Ok()
         .insert_header((header::CACHE_CONTROL, "no-store, no-cache"))
