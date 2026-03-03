@@ -38,20 +38,40 @@ impl HelpAllCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for HelpAllCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// 全ヘルプの出力に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         Self::print_help_all();
         Ok(())
     }
 }
 
+///
+/// 再帰的にヘルプ対象コマンドを収集
+///
+/// # 引数
+/// * `cmd` - 収集対象のコマンド定義
+/// * `prefix` - 親コマンド名
+/// * `include_self` - 自コマンドを含めるか否か
+/// * `entries` - 収集結果の格納先
+///
+/// # 戻り値
+/// 収集処理を行うため戻り値はない。
+///
 fn collect_commands(
     cmd: &clap::Command,
     prefix: &str,
     include_self: bool,
     entries: &mut Vec<(String, String, clap::Command)>,
 ) {
+    /*
+     * 自コマンド情報の追加
+     */
     if include_self {
         let path = if prefix.is_empty() {
             cmd.get_name().to_string()
@@ -66,6 +86,9 @@ fn collect_commands(
         entries.push((path, description, cmd.clone()));
     }
 
+    /*
+     * サブコマンド情報の再帰収集
+     */
     for sub in cmd.get_subcommands() {
         let name = sub.get_name();
         let path = if prefix.is_empty() {
@@ -86,6 +109,8 @@ fn collect_commands(
 ///
 /// コマンドコンテキストの生成
 ///
-pub(crate) fn build_context(_opts: &Options) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(
+    _opts: &Options,
+) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(HelpAllCommandContext))
 }

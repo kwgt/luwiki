@@ -8,7 +8,7 @@
 //! サブコマンド"asset undelete"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{AssetUndeleteOpts, Options};
@@ -38,9 +38,17 @@ impl AssetUndeleteCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for AssetUndeleteCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// アセット復元に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 復元対象アセットの検証
+         */
         let asset_info = self
             .manager
             .get_asset_info_by_id(&self.asset_id)?
@@ -49,6 +57,9 @@ impl CommandContext for AssetUndeleteCommandContext {
             return Err(anyhow!("asset not deleted"));
         }
 
+        /*
+         * アセット復元の実行
+         */
         self.manager
             .undelete_asset(&self.asset_id, self.rename_to.as_deref())?;
         Ok(())

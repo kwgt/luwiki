@@ -10,13 +10,18 @@
 
 use std::fs;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::Local;
 use redb::{ReadableDatabase, ReadableTable};
 
 use super::DatabaseManager;
 use crate::database::entries::LockListEntry;
-use crate::database::schema::{LOCK_INFO_TABLE, PAGE_INDEX_TABLE, USER_ID_TABLE, USER_INFO_TABLE};
+use crate::database::schema::{
+    LOCK_INFO_TABLE,
+    PAGE_INDEX_TABLE,
+    USER_ID_TABLE,
+    USER_INFO_TABLE,
+};
 use crate::database::txn_helpers::{delete_draft_in_txn, find_lock_by_page};
 use crate::database::types::{AssetId, LockInfo, LockToken, PageId};
 
@@ -31,7 +36,10 @@ impl DatabaseManager {
     /// ロック情報を取得できた場合は`Ok(Some(LockInfo))`を返す。
     /// ロックが存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_page_lock_info(&self, page_id: &PageId) -> Result<Option<LockInfo>> {
+    pub(crate) fn get_page_lock_info(
+        &self,
+        page_id: &PageId,
+    ) -> Result<Option<LockInfo>> {
         /*
          * 書き込みトランザクション開始
          */
@@ -127,7 +135,11 @@ impl DatabaseManager {
     /// # 戻り値
     /// 取得したロック情報を返す。
     ///
-    pub(crate) fn acquire_page_lock(&self, page_id: &PageId, user_name: &str) -> Result<LockInfo> {
+    pub(crate) fn acquire_page_lock(
+        &self,
+        page_id: &PageId,
+        user_name: &str,
+    ) -> Result<LockInfo> {
         /*
          * 書き込みトランザクション開始
          */
@@ -145,30 +157,44 @@ impl DatabaseManager {
                 let key = user_name.to_string();
                 match id_table.get(&key)? {
                     Some(id) => id.value(),
-                    None => return Err(anyhow!(crate::database::DbError::UserNotFound)),
+                    None => {
+                        return Err(anyhow!(
+                            crate::database::DbError::UserNotFound
+                        ));
+                    }
                 }
             };
 
             let mut index = match index_table.get(page_id.clone())? {
                 Some(entry) => entry.value(),
-                None => return Err(anyhow!(crate::database::DbError::LockNotFound)),
+                None => {
+                    return Err(anyhow!(crate::database::DbError::LockNotFound));
+                }
             };
 
             /*
              * 既存ロックの確認
              */
             if index.is_draft() {
-                if let Some((token, existing)) = find_lock_by_page(&lock_table, page_id)? {
+                if let Some((token, existing)) =
+                    find_lock_by_page(&lock_table, page_id)?
+                {
                     if existing.expire() > now {
-                        return Err(anyhow!(crate::database::DbError::PageLocked));
+                        return Err(anyhow!(
+                            crate::database::DbError::PageLocked
+                        ));
                     }
                     lock_table.remove(token)?;
                 }
             } else if let Some(token) = index.lock_token() {
-                let existing = lock_table.get(token.clone())?.map(|entry| entry.value());
+                let existing = lock_table
+                    .get(token.clone())?
+                    .map(|entry| entry.value());
                 if let Some(lock_info) = existing {
                     if lock_info.expire() > now {
-                        return Err(anyhow!(crate::database::DbError::PageLocked));
+                        return Err(anyhow!(
+                            crate::database::DbError::PageLocked
+                        ));
                     }
                     lock_table.remove(token)?;
                 }
@@ -231,13 +257,19 @@ impl DatabaseManager {
                 let key = user_name.to_string();
                 match id_table.get(&key)? {
                     Some(id) => id.value(),
-                    None => return Err(anyhow!(crate::database::DbError::UserNotFound)),
+                    None => {
+                        return Err(anyhow!(
+                            crate::database::DbError::UserNotFound
+                        ));
+                    }
                 }
             };
 
             let mut index = match index_table.get(page_id.clone())? {
                 Some(entry) => entry.value(),
-                None => return Err(anyhow!(crate::database::DbError::LockNotFound)),
+                None => {
+                    return Err(anyhow!(crate::database::DbError::LockNotFound));
+                }
             };
 
             /*
@@ -249,11 +281,17 @@ impl DatabaseManager {
                  */
                 let mut lock_info = match lock_table.get(token.clone())? {
                     Some(lock_info) => lock_info.value(),
-                    None => return Err(anyhow!(crate::database::DbError::LockNotFound)),
+                    None => {
+                        return Err(anyhow!(
+                            crate::database::DbError::LockNotFound
+                        ));
+                    }
                 };
 
                 if lock_info.page() != *page_id {
-                    return Err(anyhow!(crate::database::DbError::LockForbidden));
+                    return Err(anyhow!(
+                        crate::database::DbError::LockForbidden
+                    ));
                 }
 
                 if lock_info.expire() <= now {
@@ -262,7 +300,9 @@ impl DatabaseManager {
                 }
 
                 if lock_info.user() != user_id {
-                    return Err(anyhow!(crate::database::DbError::LockForbidden));
+                    return Err(anyhow!(
+                        crate::database::DbError::LockForbidden
+                    ));
                 }
 
                 lock_info.renew();
@@ -277,7 +317,9 @@ impl DatabaseManager {
                 };
 
                 if current != *token {
-                    return Err(anyhow!(crate::database::DbError::LockForbidden));
+                    return Err(anyhow!(
+                        crate::database::DbError::LockForbidden
+                    ));
                 }
 
                 /*
@@ -288,7 +330,9 @@ impl DatabaseManager {
                     None => {
                         index.set_lock_token(None);
                         index_table.insert(page_id.clone(), index)?;
-                        return Err(anyhow!(crate::database::DbError::LockNotFound));
+                        return Err(anyhow!(
+                            crate::database::DbError::LockNotFound
+                        ));
                     }
                 };
 
@@ -300,7 +344,9 @@ impl DatabaseManager {
                 }
 
                 if lock_info.user() != user_id {
-                    return Err(anyhow!(crate::database::DbError::LockForbidden));
+                    return Err(anyhow!(
+                        crate::database::DbError::LockForbidden
+                    ));
                 }
 
                 /*
@@ -364,13 +410,19 @@ impl DatabaseManager {
                 let key = user_name.to_string();
                 match id_table.get(&key)? {
                     Some(id) => id.value(),
-                    None => return Err(anyhow!(crate::database::DbError::UserNotFound)),
+                    None => {
+                        return Err(anyhow!(
+                            crate::database::DbError::UserNotFound
+                        ));
+                    }
                 }
             };
 
             let mut index = match index_table.get(page_id.clone())? {
                 Some(entry) => entry.value(),
-                None => return Err(anyhow!(crate::database::DbError::LockNotFound)),
+                None => {
+                    return Err(anyhow!(crate::database::DbError::LockNotFound));
+                }
             };
 
             /*
@@ -385,14 +437,18 @@ impl DatabaseManager {
                         index_table.insert(page_id.clone(), index.clone())?;
                         needs_commit = true;
                     }
-                    result = Err(anyhow!(crate::database::DbError::LockNotFound));
+                    result = Err(anyhow!(
+                        crate::database::DbError::LockNotFound
+                    ));
                 }
             }
 
             if result.is_ok() {
                 let lock_info = lock_info.expect("lock info");
                 if lock_info.page() != *page_id {
-                    result = Err(anyhow!(crate::database::DbError::LockForbidden));
+                    result = Err(anyhow!(
+                        crate::database::DbError::LockForbidden
+                    ));
                 } else if lock_info.expire() <= now {
                     lock_table.remove(token.clone())?;
                     needs_commit = true;
@@ -402,9 +458,13 @@ impl DatabaseManager {
                         index.set_lock_token(None);
                         index_table.insert(page_id.clone(), index)?;
                     }
-                    result = Err(anyhow!(crate::database::DbError::LockNotFound));
+                    result = Err(anyhow!(
+                        crate::database::DbError::LockNotFound
+                    ));
                 } else if lock_info.user() != user_id {
-                    result = Err(anyhow!(crate::database::DbError::LockForbidden));
+                    result = Err(anyhow!(
+                        crate::database::DbError::LockForbidden
+                    ));
                 } else {
                     /*
                      * ロック情報の削除
@@ -711,7 +771,10 @@ impl DatabaseManager {
     /// # 戻り値
     /// ロック削除に成功した場合は`true`を返す。
     ///
-    pub(crate) fn delete_page_lock_by_id(&self, page_id: &PageId) -> Result<bool> {
+    pub(crate) fn delete_page_lock_by_id(
+        &self,
+        page_id: &PageId,
+    ) -> Result<bool> {
         /*
          * 書き込みトランザクション開始
          */

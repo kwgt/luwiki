@@ -19,7 +19,8 @@ use crate::http_server::app_state::AppState;
 /// GET /api/hello の実体
 ///
 /// # 概要
-/// アプリケーション動作確認用APIとして、単純に文字列"hello"を返す
+/// アプリケーション動作確認用APIとして、
+/// 単純に文字列"hello"を返す
 ///
 /// # 引数
 /// * `_state` - 共有状態
@@ -30,6 +31,8 @@ use crate::http_server::app_state::AppState;
 /// # 戻り値
 /// actix-webのレスポンスオブジェクト
 ///
-pub async fn get(_state: web::Data<Arc<RwLock<AppState>>>) -> actix_web::Result<HttpResponse> {
+pub async fn get(
+    _state: web::Data<Arc<RwLock<AppState>>>,
+) -> actix_web::Result<HttpResponse> {
     Ok(resp_200("hello"))
 }

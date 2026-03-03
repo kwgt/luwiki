@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{FrontendConfig, Options, RunOpts};
@@ -103,8 +103,13 @@ impl RunCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for RunCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// サーバ起動処理に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         /*
          * データベースのオープン
@@ -145,7 +150,10 @@ impl CommandContext for RunCommandContext {
 ///
 /// コマンドコンテキストの生成
 ///
-pub(crate) fn build_context(opts: &Options, sub_opts: &RunOpts) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(
+    opts: &Options,
+    sub_opts: &RunOpts,
+) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(RunCommandContext::new(opts, sub_opts)?))
 }
 

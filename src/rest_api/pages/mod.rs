@@ -23,7 +23,7 @@ pub(crate) mod template;
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
@@ -33,7 +33,8 @@ use crate::database::DbError;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthUser;
 
-/// ページパスで禁止する文字(追加しやすいように集約する)
+/// ページパスで禁止する文字
+/// (追加しやすいように集約する)
 const FORBIDDEN_PATH_CHARS: &[char] = &['\\'];
 
 #[derive(Deserialize)]
@@ -57,7 +58,8 @@ struct CreatePageQuery {
 ///
 /// # 注記
 /// エラー時はJSON形式で返却する。
-/// 処理の流れはクエリ検証、ボディ検証、認証ユーザ取得、
+/// 処理の流れは
+/// クエリ検証、ボディ検証、認証ユーザ取得、
 /// 状態取得、ドラフト作成、レスポンス生成の順。
 ///
 pub async fn post(
@@ -68,7 +70,9 @@ pub async fn post(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<CreatePageQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<CreatePageQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -121,11 +125,19 @@ pub async fn post(
     /*
      * ドラフト作成
      */
-    let (page_id, lock_info) = match state.db().create_draft_page(&query.path, auth_user) {
+    let (page_id, lock_info) = match state
+        .db()
+        .create_draft_page(&query.path, auth_user)
+    {
         Ok(result) => result,
         Err(err) => {
-            if let Some(DbError::PageAlreadyExists) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::CONFLICT, "page already exists"));
+            if let Some(DbError::PageAlreadyExists) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::CONFLICT,
+                    "page already exists",
+                ));
             }
 
             return Ok(resp_error_json(

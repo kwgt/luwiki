@@ -64,7 +64,10 @@ pub async fn get(
     let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
         Ok(Some(info)) => info,
         Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
+            return Ok(resp_error_json(
+                StatusCode::NOT_FOUND,
+                "asset not found",
+            ));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -129,6 +132,9 @@ pub async fn get(
 fn parse_asset_id(raw: String) -> Result<AssetId, HttpResponse> {
     match AssetId::from_string(&raw) {
         Ok(asset_id) => Ok(asset_id),
-        Err(_) => Err(resp_error_json(StatusCode::NOT_FOUND, "asset not found")),
+        Err(_) => Err(resp_error_json(
+            StatusCode::NOT_FOUND,
+            "asset not found",
+        )),
     }
 }

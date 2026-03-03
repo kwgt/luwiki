@@ -16,7 +16,11 @@ use anyhow::Result;
 use super::CommandContext;
 use crate::cmd_args::Options;
 use crate::database::DatabaseManager;
-use crate::fts::{FtsDocument, FtsIndexConfig, extract_markdown_sections};
+use crate::fts::{
+    extract_markdown_sections,
+    FtsDocument,
+    FtsIndexConfig,
+};
 
 ///
 /// "fts rebuild"コマンド実行コンテキスト
@@ -64,7 +68,10 @@ impl CommandContext for FtsRebuildCommandContext {
             if index.is_draft() {
                 continue;
             }
-            index_map.insert(entry.page_id(), (index.deleted(), index.latest()));
+            index_map.insert(
+                entry.page_id(),
+                (index.deleted(), index.latest()),
+            );
         }
 
         /*

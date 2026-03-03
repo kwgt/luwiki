@@ -12,19 +12,35 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use lindera_core::mode::Mode;
 use lindera_dictionary::{DictionaryConfig, DictionaryKind};
-use lindera_tokenizer::tokenizer::{Tokenizer as LinderaTokenizer, TokenizerConfig};
+use lindera_tokenizer::tokenizer::{
+    Tokenizer as LinderaTokenizer,
+    TokenizerConfig,
+};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
-    Field, INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions,
+    Field,
+    INDEXED,
+    IndexRecordOption,
+    STORED,
+    STRING,
+    Schema,
+    TextFieldIndexing,
+    TextOptions,
     Value,
 };
-use tantivy::tokenizer::{LowerCaser, TextAnalyzer, Token, TokenStream, Tokenizer};
-use tantivy::{Index, Score, TantivyDocument, Term, doc};
+use tantivy::tokenizer::{
+    LowerCaser,
+    TextAnalyzer,
+    Token,
+    TokenStream,
+    Tokenizer,
+};
+use tantivy::{doc, Index, Score, TantivyDocument, Term};
 
 use crate::cmd_args::FtsSearchTarget;
 use crate::database::DatabaseManager;
@@ -128,6 +144,9 @@ impl FtsDocument {
         body: String,
         code: String,
     ) -> Self {
+        /*
+         * 文書情報を構築する
+         */
         Self {
             page_id,
             revision,
@@ -217,7 +236,8 @@ pub(crate) struct MarkdownSections {
 /// Markdownソースから見出し/本文/コードブロックを抽出する
 ///
 /// # 概要
-/// pulldown-cmarkのイベント走査により要素ごとにテキストを収集する。
+/// pulldown-cmarkのイベント走査により
+/// 要素ごとにテキストを収集する。
 ///
 /// # 引数
 /// * `source` - Markdownソース
@@ -553,7 +573,8 @@ impl FtsSchema {
     /// 既存インデックスからスキーマを復元
     ///
     /// # 概要
-    /// インデックス内のフィールド定義を参照して構築する。
+    /// インデックス内のフィールド定義を参照して
+    /// 構築する。
     ///
     /// # 引数
     /// * `index` - インデックス
@@ -617,7 +638,8 @@ impl FtsIndexManager {
     /// インデックスを開く（未作成なら生成）
     ///
     /// # 概要
-    /// ディレクトリを作成し、存在しない場合は新規インデックスを作成する。
+    /// ディレクトリを作成し、存在しない場合は
+    /// 新規インデックスを作成する。
     ///
     /// # 引数
     /// * `config` - インデックス設定
@@ -639,7 +661,8 @@ impl FtsIndexManager {
             Ok(index) => index,
             Err(_) => {
                 let schema = FtsSchema::build(config.tokenizer_kind.name())?;
-                let index = Index::create_in_dir(index_path, schema.schema.clone())?;
+                let index =
+                    Index::create_in_dir(index_path, schema.schema.clone())?;
                 index
             }
         };
@@ -657,7 +680,8 @@ impl FtsIndexManager {
     /// インデックスを新規作成する（既存は削除）
     ///
     /// # 概要
-    /// 既存インデックスを削除し、空のインデックスを作成する。
+    /// 既存インデックスを削除し、
+    /// 空のインデックスを作成する。
     ///
     /// # 引数
     /// * `config` - インデックス設定
@@ -769,7 +793,8 @@ impl FtsIndexManager {
             /*
              * フィルタ条件の組み立て
              */
-            let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+            let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
+                Vec::new();
             clauses.push((Occur::Must, query));
 
             if !with_deleted {
@@ -793,7 +818,11 @@ impl FtsIndexManager {
          * スニペット生成器の準備
          */
         let mut snippet_generator =
-            tantivy::snippet::SnippetGenerator::create(&searcher, &*query, field)?;
+            tantivy::snippet::SnippetGenerator::create(
+                &searcher,
+                &*query,
+                field,
+            )?;
         snippet_generator.set_max_num_chars(200);
 
         /*
@@ -811,8 +840,8 @@ impl FtsIndexManager {
                 .get_first(self.schema.page_id)
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| anyhow!("page_id missing"))?;
-            let page_id =
-                PageId::from_string(page_id).map_err(|err| anyhow!("invalid page_id: {}", err))?;
+            let page_id = PageId::from_string(page_id)
+                .map_err(|err| anyhow!("invalid page_id: {}", err))?;
 
             let revision = doc
                 .get_first(self.schema.revision)
@@ -845,7 +874,8 @@ impl FtsIndexManager {
     /// 特定ページの文書を置き換える
     ///
     /// # 概要
-    /// ページIDで既存文書を削除し、新しい文書群を登録する。
+    /// ページIDで既存文書を削除し、
+    /// 新しい文書群を登録する。
     ///
     /// # 引数
     /// * `page_id` - 対象ページID
@@ -854,7 +884,11 @@ impl FtsIndexManager {
     /// # 戻り値
     /// 処理に成功した場合は`Ok(())`
     ///
-    fn replace_page_docs(&self, page_id: &PageId, docs: &[FtsDocument]) -> Result<()> {
+    fn replace_page_docs(
+        &self,
+        page_id: &PageId,
+        docs: &[FtsDocument],
+    ) -> Result<()> {
         /*
          * ライタの準備
          */
@@ -863,7 +897,10 @@ impl FtsIndexManager {
         /*
          * 既存文書の削除
          */
-        let term = Term::from_field_text(self.schema.page_id, &page_id.to_string());
+        let term = Term::from_field_text(
+            self.schema.page_id,
+            &page_id.to_string(),
+        );
         writer.delete_term(term);
 
         /*
@@ -907,7 +944,10 @@ impl FtsIndexManager {
         /*
          * 文書の削除
          */
-        let term = Term::from_field_text(self.schema.page_id, &page_id.to_string());
+        let term = Term::from_field_text(
+            self.schema.page_id,
+            &page_id.to_string(),
+        );
         writer.delete_term(term);
 
         /*
@@ -979,7 +1019,10 @@ fn register_tokenizer(index: &Index, kind: TokenizerKind) -> Result<()> {
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
-pub(crate) fn rebuild_index(config: &FtsIndexConfig, docs: &[FtsDocument]) -> Result<()> {
+pub(crate) fn rebuild_index(
+    config: &FtsIndexConfig,
+    docs: &[FtsDocument],
+) -> Result<()> {
     let manager = FtsIndexManager::create(config)?;
     manager.rebuild(docs)
 }
@@ -1052,7 +1095,10 @@ pub(crate) fn reindex_page(
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
-pub(crate) fn delete_page_index(config: &FtsIndexConfig, page_id: &PageId) -> Result<()> {
+pub(crate) fn delete_page_index(
+    config: &FtsIndexConfig,
+    page_id: &PageId,
+) -> Result<()> {
     let index_manager = FtsIndexManager::open(config)?;
     index_manager.delete_page_docs(page_id)
 }
@@ -1095,7 +1141,10 @@ pub(crate) fn update_pages_index(
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
-pub(crate) fn delete_pages_index(config: &FtsIndexConfig, page_ids: &[PageId]) -> Result<()> {
+pub(crate) fn delete_pages_index(
+    config: &FtsIndexConfig,
+    page_ids: &[PageId],
+) -> Result<()> {
     /*
      * インデックス削除の実行
      */
@@ -1110,7 +1159,8 @@ pub(crate) fn delete_pages_index(config: &FtsIndexConfig, page_ids: &[PageId]) -
 /// 指定パス配下のページID一覧を収集する
 ///
 /// # 概要
-/// 起点パス配下のページ情報から削除済みとドラフトを除外し、
+/// 起点パス配下のページ情報から
+/// 削除済みとドラフトを除外し、
 /// ページIDを収集する。
 ///
 /// # 引数
@@ -1169,7 +1219,8 @@ pub(crate) fn merge_index(config: &FtsIndexConfig) -> Result<()> {
 /// ページ単位の登録文書を構築する
 ///
 /// # 概要
-/// ページインデックスとソースを参照し、検索文書を生成する。
+/// ページインデックスとソースを参照し、
+/// 検索文書を生成する。
 ///
 /// # 引数
 /// * `manager` - データベースマネージャ

@@ -48,7 +48,9 @@ pub async fn post(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<RevisionQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<RevisionQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -58,7 +60,10 @@ pub async fn post(
         }
     };
 
-    let (rollback_to, keep_from) = match (&query.rollback_to, &query.keep_from) {
+    let (rollback_to, keep_from) = match (
+        &query.rollback_to,
+        &query.keep_from,
+    ) {
         (Some(rollback), None) => (Some(rollback.as_str()), None),
         (None, Some(keep)) => (None, Some(keep.as_str())),
         _ => {
@@ -156,7 +161,12 @@ pub async fn post(
     /*
      * FTSの更新
      */
-    if let Err(err) = fts::reindex_page(state.fts_config(), state.db(), &page_id, false) {
+    if let Err(err) = fts::reindex_page(
+        state.fts_config(),
+        state.db(),
+        &page_id,
+        false,
+    ) {
         log::error!("fts update failed: {:?}", err);
         return Ok(resp_error_json(
             StatusCode::INTERNAL_SERVER_ERROR,

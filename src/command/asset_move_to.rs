@@ -8,7 +8,7 @@
 //! サブコマンド"asset move_to"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{AssetMoveToOpts, Options};
@@ -40,6 +40,12 @@ impl AssetMoveToCommandContext {
         })
     }
 
+    ///
+    /// 移動先ページIDを解決
+    ///
+    /// # 戻り値
+    /// 解決できた移動先ページIDを返す。
+    ///
     fn resolve_dst_page_id(&self) -> Result<PageId> {
         if let Ok(page_id) = PageId::from_string(&self.dst_target) {
             return Ok(page_id);
@@ -55,9 +61,17 @@ impl AssetMoveToCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for AssetMoveToCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// アセット移動に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 移動先と対象アセットの検証
+         */
         let dst_page_id = self.resolve_dst_page_id()?;
         let dst_index = self
             .manager
@@ -77,6 +91,9 @@ impl CommandContext for AssetMoveToCommandContext {
             .map(|id| id != &self.asset_id)
             .unwrap_or(false);
 
+        /*
+         * 強制上書き指定なしの競合チェック
+         */
         if !self.force {
             if dst_index.deleted() && has_conflict {
                 return Err(anyhow!(
@@ -91,14 +108,23 @@ impl CommandContext for AssetMoveToCommandContext {
             }
         }
 
+        /*
+         * アセット移動の実行
+         */
         match self
             .manager
             .move_asset(&self.asset_id, &dst_page_id, self.force)?
         {
             AssetMoveResult::Moved => Ok(()),
-            AssetMoveResult::PageNotFound => Err(anyhow!("destination page not found")),
-            AssetMoveResult::PageDeleted => Err(anyhow!("destination page not found")),
-            AssetMoveResult::NameConflict => Err(anyhow!("destination asset already exists")),
+            AssetMoveResult::PageNotFound => {
+                Err(anyhow!("destination page not found"))
+            }
+            AssetMoveResult::PageDeleted => {
+                Err(anyhow!("destination page not found"))
+            }
+            AssetMoveResult::NameConflict => {
+                Err(anyhow!("destination asset already exists"))
+            }
         }
     }
 }

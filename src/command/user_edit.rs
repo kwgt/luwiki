@@ -8,7 +8,7 @@
 //! サブコマンド"user edit"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use super::common::read_password_with_confirm;
@@ -39,19 +39,33 @@ impl UserEditCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for UserEditCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ユーザ更新に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 更新内容の検証
+         */
         if self.display_name.is_none() && !self.change_password {
             return Err(anyhow!("no update options specified"));
         }
 
+        /*
+         * パスワード変更入力の取得
+         */
         let password = if self.change_password {
             Some(read_password_with_confirm()?)
         } else {
             None
         };
 
+        /*
+         * ユーザ情報の更新
+         */
         self.manager.update_user(
             &self.username,
             self.display_name.as_deref(),
@@ -81,9 +95,16 @@ mod tests {
     const TEST_PASSWORD: &str = "password123";
 
     #[test]
+    ///
+    /// 表示名更新が成功することを確認
+    ///
+    /// # 注記
+    /// テスト用ユーザを追加し、表示名更新後に一覧から反映を検証する。
+    ///
     fn update_display_name_succeeds() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir)
+            .expect("open failed");
         manager
             .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
@@ -102,9 +123,16 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// パスワード更新が成功することを確認
+    ///
+    /// # 注記
+    /// テスト用ユーザのパスワードを変更し、新旧パスワードの認証結果を検証する。
+    ///
     fn update_password_succeeds() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir)
+            .expect("open failed");
         manager
             .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
@@ -125,9 +153,16 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 存在しないユーザ更新が失敗することを確認
+    ///
+    /// # 注記
+    /// 空のテスト用DBで未登録ユーザを更新し、エラーになることを検証する。
+    ///
     fn update_user_fails_when_missing() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir)
+            .expect("open failed");
 
         let result = manager.update_user("missing", Some("x"), None);
         assert!(result.is_err());
@@ -136,9 +171,16 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 更新内容なしのユーザ更新が失敗することを確認
+    ///
+    /// # 注記
+    /// 表示名変更もパスワード変更も指定しない更新要求が失敗することを検証する。
+    ///
     fn update_user_fails_when_no_changes() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir)
+            .expect("open failed");
         manager
             .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
@@ -149,6 +191,12 @@ mod tests {
         fs::remove_dir_all(db_dir).expect("cleanup failed");
     }
 
+    ///
+    /// テスト用ディレクトリ群を生成
+    ///
+    /// # 戻り値
+    /// ベースディレクトリ、DBパス、アセットディレクトリを返す。
+    ///
     fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
         let base = PathBuf::from("tests").join("tmp").join(unique_suffix());
         let db_dir = base.join("db");
@@ -160,6 +208,12 @@ mod tests {
         (base, db_path, assets_dir)
     }
 
+    ///
+    /// 一意なテスト用サフィックスを生成
+    ///
+    /// # 戻り値
+    /// ULIDベースの一意文字列を返す。
+    ///
     fn unique_suffix() -> String {
         Ulid::new().to_string()
     }

@@ -5,12 +5,15 @@
  */
 
 //!
-//! ページパス取得・リネームAPIの実装をまとめたモジュール
+//!
+//! ページパス取得・リネームAPIの実装をまとめた
+//! モジュール
+//!
 //!
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
@@ -125,7 +128,9 @@ pub async fn post(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<RenameQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<RenameQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -139,11 +144,15 @@ pub async fn post(
     let (target_path, is_restore) =
         if let (Some(path), None) = (&query.rename_to, &query.restore_to) {
             (path.to_owned(), false)
-        } else if let (None, Some(path)) = (&query.rename_to, &query.restore_to) {
+        } else if let (None, Some(path)) = (
+            &query.rename_to,
+            &query.restore_to,
+        ) {
             (path.to_owned(), true)
         } else {
-            // `rename_to`と`restore_to`のどちらも指定されていないか、両方指定されて
-            // いる場合はエラー
+            // `rename_to`と`restore_to`のどちらも
+            // 指定されていないか、
+            // 両方指定されている場合はエラー
             return Ok(resp_error_json(
                 StatusCode::BAD_REQUEST,
                 "invalid query parameter: rename_to or restore_to",
@@ -197,7 +206,8 @@ pub async fn post(
         }
     };
 
-    // 移動の場合で対象ページが削除されている場合はエラー
+    // 移動の場合で対象ページが
+    // 削除されている場合はエラー
     if !is_restore && page_index.deleted() {
         return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
     }
@@ -253,7 +263,10 @@ pub async fn post(
     let result = if is_restore {
         // ページが作成されていない場合はエラー
         if !page_index.deleted() {
-            return Ok(resp_error_json(StatusCode::CONFLICT, "page not deleted"));
+            return Ok(resp_error_json(
+                StatusCode::CONFLICT,
+                "page not deleted",
+            ));
         }
 
         if recursive {
@@ -290,22 +303,34 @@ pub async fn post(
         Err(err) => {
             log::error!("page rename failed: {:?}", err);
 
-            if let Some(DbError::PageAlreadyExists) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::CONFLICT, "page already exists"));
+            if let Some(DbError::PageAlreadyExists) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::CONFLICT,
+                    "page already exists",
+                ));
             }
             if let Some(DbError::PageLocked) = err.downcast_ref::<DbError>() {
                 return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
             }
             if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "page not found",
+                ));
             }
-            if let Some(DbError::InvalidMoveDestination) = err.downcast_ref::<DbError>() {
+            if let Some(DbError::InvalidMoveDestination) =
+                err.downcast_ref::<DbError>()
+            {
                 return Ok(resp_error_json(
                     StatusCode::BAD_REQUEST,
                     "invalid destination path",
                 ));
             }
-            if let Some(DbError::RootPageProtected) = err.downcast_ref::<DbError>() {
+            if let Some(DbError::RootPageProtected) =
+                err.downcast_ref::<DbError>()
+            {
                 return Ok(resp_error_json(
                     StatusCode::BAD_REQUEST,
                     "root page is protected",
@@ -323,7 +348,10 @@ pub async fn post(
      * FTSの更新
      */
     if recursive {
-        let target_ids = match fts::collect_page_ids_by_path_prefix(state.db(), &target_path) {
+        let target_ids = match fts::collect_page_ids_by_path_prefix(
+            state.db(),
+            &target_path,
+        ) {
             Ok(target_ids) => target_ids,
             Err(err) => {
                 log::error!("fts target collect failed: {:?}", err);
@@ -334,7 +362,12 @@ pub async fn post(
             }
         };
         if let Err(err) =
-            fts::update_pages_index(state.fts_config(), state.db(), &target_ids, false)
+            fts::update_pages_index(
+                state.fts_config(),
+                state.db(),
+                &target_ids,
+                false,
+            )
         {
             log::error!("fts update failed: {:?}", err);
             return Ok(resp_error_json(
@@ -345,7 +378,12 @@ pub async fn post(
     } else {
         let target_ids = [page_id.clone()];
         if let Err(err) =
-            fts::update_pages_index(state.fts_config(), state.db(), &target_ids, false)
+            fts::update_pages_index(
+                state.fts_config(),
+                state.db(),
+                &target_ids,
+                false,
+            )
         {
             log::error!("fts update failed: {:?}", err);
             return Ok(resp_error_json(

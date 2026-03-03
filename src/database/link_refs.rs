@@ -251,6 +251,9 @@ where
 /// スキーマ指定リンクの場合は`true`を返す。
 ///
 fn is_schema_link(link: &str) -> bool {
+    /*
+     * スキーマ部の検証
+     */
     let mut chars = link.chars().peekable();
     let mut had_char = false;
 
@@ -361,18 +364,11 @@ fn cleanup_path(path: &str) -> String {
     normalized
 }
 
-///
-/// パスからページIDを解決
-///
-/// # 引数
-/// * `txn` - 書き込みトランザクション
-/// * `path` - ページパス
-///
-/// # 戻り値
-/// 解決できたページIDを返す。存在しない場合は`None`を返す。
-///
 #[allow(dead_code)]
-fn resolve_page_id(txn: &redb::WriteTransaction, path: &str) -> Result<Option<PageId>> {
+fn resolve_page_id(
+    txn: &redb::WriteTransaction,
+    path: &str,
+) -> Result<Option<PageId>> {
     let table = txn.open_table(PAGE_PATH_TABLE)?;
     resolve_page_id_with_table(&table, path)
 }

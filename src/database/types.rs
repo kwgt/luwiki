@@ -54,6 +54,9 @@ impl Id {
     ///
     /// IDの全域を表す範囲オブジェクトを返す
     ///
+    /// # 戻り値
+    /// IDの全域を表す範囲オブジェクトを返す。
+    ///
     #[allow(dead_code)]
     pub(crate) fn range_all() -> RangeInclusive<Id> {
         Self::min()..=Self::max()
@@ -62,17 +65,25 @@ impl Id {
     ///
     /// IDの最小値を返す
     ///
+    /// # 戻り値
+    /// IDの最小値を返す。
+    ///
     #[allow(dead_code)]
     pub(crate) fn min() -> Self {
-        Self::from_string("00000000000000000000000000").expect("invalid ULID string")
+        Self::from_string("00000000000000000000000000")
+            .expect("invalid ULID string")
     }
 
     ///
     /// IDの最大値を返す
     ///
+    /// # 戻り値
+    /// IDの最大値を返す。
+    ///
     #[allow(dead_code)]
     pub(crate) fn max() -> Self {
-        Self::from_string("7ZZZZZZZZZZZZZZZZZZZZZZZZZ").expect("invalid ULID string")
+        Self::from_string("7ZZZZZZZZZZZZZZZZZZZZZZZZZ")
+            .expect("invalid ULID string")
     }
 }
 
@@ -521,7 +532,11 @@ impl PageIndex {
     pub(crate) fn set_deleted(&mut self, deleted: bool) {
         if let Some(info) = self.as_page_info_mut() {
             if deleted {
-                if let Some(path) = info.path_state.current().map(|value| value.to_string()) {
+                if let Some(path) = info
+                    .path_state
+                    .current()
+                    .map(|value| value.to_string())
+                {
                     info.path_state = PagePathState::LastDeleted(path);
                 }
             } else if let Some(path) = info
@@ -595,14 +610,16 @@ impl Value for PageIndex {
     where
         Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'b,
     {
-        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -728,7 +745,11 @@ impl PageSource {
     /// # 注記
     /// ページ作成時の生成専用として、リビジョン番号は1で固定する。
     ///
-    pub(crate) fn new(source: String, user: UserId, rename: RenameInfo) -> Self {
+    pub(crate) fn new(
+        source: String,
+        user: UserId,
+        rename: RenameInfo,
+    ) -> Self {
         let revision = 1u64;
 
         Self {
@@ -860,14 +881,16 @@ impl Value for PageSource {
     where
         Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'b,
     {
-        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -1176,14 +1199,16 @@ impl Value for AssetInfo {
     where
         Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'b,
     {
-        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -1242,13 +1267,17 @@ impl UserInfo {
         /*
          * パスワードのハッシュ化
          */
-        let salt_string = SaltString::encode_b64(&salt).expect("salt encode failed");
+        let salt_string =
+            SaltString::encode_b64(&salt).expect("salt encode failed");
         let argon2 = Argon2::default();
         let hashed = argon2
             .hash_password(password.as_ref().as_bytes(), &salt_string)
             .expect("hash failed")
             .to_string();
 
+        /*
+         * ユーザ情報の構築
+         */
         Self {
             id: UserId::new(),
             username: name.as_ref().to_string(),
@@ -1326,13 +1355,17 @@ impl UserInfo {
         /*
          * パスワードのハッシュ化
          */
-        let salt_string = SaltString::encode_b64(&salt).expect("salt encode failed");
+        let salt_string =
+            SaltString::encode_b64(&salt).expect("salt encode failed");
         let argon2 = Argon2::default();
         let hashed = argon2
             .hash_password(password.as_bytes(), &salt_string)
             .expect("hash failed")
             .to_string();
 
+        /*
+         * 更新内容の反映
+         */
         self.password = hashed;
         self.salt = salt;
         self.timestamp = Local::now();
@@ -1407,14 +1440,16 @@ impl Value for UserInfo {
     where
         Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'b,
     {
-        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
     }
 }
 
@@ -1539,13 +1574,15 @@ impl Value for LockInfo {
     where
         Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data).expect("invalid MessagePack packed bytes")
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'b,
     {
-        rmp_serde::to_vec_named(value).expect("failed to serialize to MessagePack bytes")
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
     }
 }

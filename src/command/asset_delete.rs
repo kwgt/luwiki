@@ -8,7 +8,7 @@
 //! サブコマンド"asset delete"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{AssetDeleteOpts, Options};
@@ -37,6 +37,15 @@ impl AssetDeleteCommandContext {
         })
     }
 
+    ///
+    /// 指定文字列から対象ページIDを解決
+    ///
+    /// # 引数
+    /// * `target` - ページIDまたはページパス
+    ///
+    /// # 戻り値
+    /// 解決できたページIDを返す。
+    ///
     fn resolve_page_id(&self, target: &str) -> Result<PageId> {
         if let Ok(page_id) = PageId::from_string(target) {
             if self.manager.get_page_index_by_id(&page_id)?.is_some() {
@@ -54,7 +63,16 @@ impl AssetDeleteCommandContext {
             .ok_or_else(|| anyhow!(DbError::PageNotFound))
     }
 
+    ///
+    /// 削除対象のアセットまたはページを解決
+    ///
+    /// # 戻り値
+    /// 削除対象を表す列挙値を返す。
+    ///
     fn resolve_target(&self) -> Result<AssetDeleteTarget> {
+        /*
+         * 直接指定されたアセットID・ページIDの解決
+         */
         if let Ok(asset_id) = AssetId::from_string(&self.target) {
             if self.manager.get_asset_info_by_id(&asset_id)?.is_some() {
                 return Ok(AssetDeleteTarget::Asset(asset_id));
@@ -67,6 +85,9 @@ impl AssetDeleteCommandContext {
             }
         }
 
+        /*
+         * アセットパス指定からの解決
+         */
         if let Ok((page_path, file_name)) = parse_asset_path(&self.target) {
             if let Err(message) = validate_page_path(&page_path) {
                 return Err(anyhow!("invalid page path: {}", message));
@@ -75,7 +96,10 @@ impl AssetDeleteCommandContext {
                 return Err(anyhow!("invalid file name: {}", message));
             }
 
-            if let Some(page_id) = self.manager.get_page_id_by_path(&page_path)? {
+            if let Some(page_id) = self
+                .manager
+                .get_page_id_by_path(&page_path)?
+            {
                 if let Some(asset_id) = self
                     .manager
                     .get_asset_id_by_page_file(&page_id, &file_name)?
@@ -98,11 +122,29 @@ impl AssetDeleteCommandContext {
             }
         }
 
+        /*
+         * ページ単位削除として解決
+         */
         let page_id = self.resolve_page_id(&self.target)?;
         Ok(AssetDeleteTarget::Page(page_id))
     }
 
-    fn delete_page_assets(&self, page_id: &crate::database::types::PageId) -> Result<()> {
+    ///
+    /// 指定ページに紐付くアセット群を削除
+    ///
+    /// # 引数
+    /// * `page_id` - 削除対象ページID
+    ///
+    /// # 戻り値
+    /// 対象ページのアセット削除に成功した場合は`Ok(())`を返す。
+    ///
+    fn delete_page_assets(
+        &self,
+        page_id: &crate::database::types::PageId,
+    ) -> Result<()> {
+        /*
+         * 削除対象アセットの検証
+         */
         let assets = self.manager.list_page_assets(page_id)?;
         if assets.is_empty() {
             return Err(anyhow!(DbError::AssetNotFound));
@@ -112,6 +154,9 @@ impl AssetDeleteCommandContext {
             return Err(anyhow!(DbError::AssetDeleted));
         }
 
+        /*
+         * アセット削除の実行
+         */
         for asset in assets {
             if self.hard_delete {
                 self.manager.delete_asset_hard(&asset.id())?;
@@ -124,9 +169,17 @@ impl AssetDeleteCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for AssetDeleteCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// 削除処理に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 削除対象の解決と削除実行
+         */
         match self.resolve_target()? {
             AssetDeleteTarget::Asset(asset_id) => {
                 if self.hard_delete {

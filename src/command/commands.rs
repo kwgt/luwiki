@@ -33,15 +33,38 @@ impl CommandsCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for CommandsCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// コマンド一覧の出力に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         Self::print_commands();
         Ok(())
     }
 }
 
-fn collect_commands(cmd: &clap::Command, prefix: &str, entries: &mut Vec<(String, String)>) {
+///
+/// 再帰的にコマンド一覧を収集
+///
+/// # 引数
+/// * `cmd` - 収集対象のコマンド定義
+/// * `prefix` - 親コマンド名
+/// * `entries` - 収集結果の格納先
+///
+/// # 戻り値
+/// 収集処理を行うため戻り値はない。
+///
+fn collect_commands(
+    cmd: &clap::Command,
+    prefix: &str,
+    entries: &mut Vec<(String, String)>,
+) {
+    /*
+     * サブコマンド情報の収集
+     */
     for sub in cmd.get_subcommands() {
         let name = sub.get_name();
 
@@ -65,6 +88,8 @@ fn collect_commands(cmd: &clap::Command, prefix: &str, entries: &mut Vec<(String
 ///
 /// コマンドコンテキストの生成
 ///
-pub(crate) fn build_context(_opts: &Options) -> Result<Box<dyn CommandContext>> {
+pub(crate) fn build_context(
+    _opts: &Options,
+) -> Result<Box<dyn CommandContext>> {
     Ok(Box::new(CommandsCommandContext))
 }

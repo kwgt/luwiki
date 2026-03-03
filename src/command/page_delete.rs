@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{Options, PageDeleteOpts};
@@ -74,13 +74,20 @@ impl PageDeleteCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for PageDeleteCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ページ削除に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         /*
          * 削除対象の解決
          */
-        let (page_id, index) = if let Ok(page_id) = PageId::from_string(&self.target) {
+        let (page_id, index) = if let Ok(page_id) =
+            PageId::from_string(&self.target)
+        {
             self.manager
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))

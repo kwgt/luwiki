@@ -15,8 +15,14 @@ use redb::{Database, ReadableDatabase};
 
 use super::init::init_database;
 use super::schema::{
-    DEFAULT_ROOT_SOURCE, DEFAULT_SANDBOX_SOURCE, DbError, ROOT_PAGE_PATH, SANDBOX_PAGE_PATH,
-    SANDBOX_SAMPLE_CODE_FILE_NAME, SANDBOX_SAMPLE_CODE_SOURCE, SANDBOX_SAMPLE_CSV_FILE_NAME,
+    DbError,
+    DEFAULT_ROOT_SOURCE,
+    DEFAULT_SANDBOX_SOURCE,
+    ROOT_PAGE_PATH,
+    SANDBOX_PAGE_PATH,
+    SANDBOX_SAMPLE_CODE_FILE_NAME,
+    SANDBOX_SAMPLE_CODE_SOURCE,
+    SANDBOX_SAMPLE_CSV_FILE_NAME,
     SANDBOX_SAMPLE_CSV_SOURCE,
 };
 use super::types::{AssetId, PageId};
@@ -55,6 +61,9 @@ impl DatabaseManager {
     where
         P: AsRef<Path>,
     {
+        /*
+         * データベース生成と初期化
+         */
         let db = match Database::create(db_path) {
             Ok(mut db) => {
                 init_database(&mut db)?;
@@ -80,14 +89,33 @@ impl DatabaseManager {
     /// 初期化に成功した場合は`Ok(())`を返す。
     ///
     pub(crate) fn ensure_default_root(&self, user_name: &str) -> Result<()> {
-        self.create_page_if_missing(ROOT_PAGE_PATH, DEFAULT_ROOT_SOURCE, user_name)?;
-        self.create_page_if_missing(SANDBOX_PAGE_PATH, DEFAULT_SANDBOX_SOURCE, user_name)?;
+        /*
+         * 既定ページの作成
+         */
+        self.create_page_if_missing(
+            ROOT_PAGE_PATH,
+            DEFAULT_ROOT_SOURCE,
+            user_name,
+        )?;
+        self.create_page_if_missing(
+            SANDBOX_PAGE_PATH,
+            DEFAULT_SANDBOX_SOURCE,
+            user_name,
+        )?;
 
-        let sandbox_page_id = match self.get_page_id_by_path(SANDBOX_PAGE_PATH)? {
+        /*
+         * Sandbox ページIDの解決
+         */
+        let sandbox_page_id = match self
+            .get_page_id_by_path(SANDBOX_PAGE_PATH)?
+        {
             Some(id) => id,
             None => return Err(anyhow::anyhow!(DbError::PageNotFound)),
         };
 
+        /*
+         * 既定アセットの作成
+         */
         self.create_asset_if_missing(
             &sandbox_page_id,
             SANDBOX_SAMPLE_CODE_FILE_NAME,
@@ -124,7 +152,12 @@ impl DatabaseManager {
     ///
     /// ページが存在しない場合にページを作成する。
     ///
-    fn create_page_if_missing(&self, path: &str, source: &str, user_name: &str) -> Result<()> {
+    fn create_page_if_missing(
+        &self,
+        path: &str,
+        source: &str,
+        user_name: &str,
+    ) -> Result<()> {
         if self.page_exists(path)? {
             return Ok(());
         }
@@ -132,7 +165,9 @@ impl DatabaseManager {
         match self.create_page(path, user_name, source.to_string()) {
             Ok(_) => Ok(()),
             Err(err) => {
-                if let Some(DbError::PageAlreadyExists) = err.downcast_ref::<DbError>() {
+                if let Some(DbError::PageAlreadyExists) =
+                    err.downcast_ref::<DbError>()
+                {
                     return Ok(());
                 }
 
@@ -152,17 +187,16 @@ impl DatabaseManager {
         user_name: &str,
         data: &[u8],
     ) -> Result<()> {
-        if self
-            .get_asset_id_by_page_file(page_id, file_name)?
-            .is_some()
-        {
+        if self.get_asset_id_by_page_file(page_id, file_name)?.is_some() {
             return Ok(());
         }
 
         match self.create_asset(page_id, file_name, mime, user_name, data) {
             Ok(_) => Ok(()),
             Err(err) => {
-                if let Some(DbError::AssetAlreadyExists) = err.downcast_ref::<DbError>() {
+                if let Some(DbError::AssetAlreadyExists) =
+                    err.downcast_ref::<DbError>()
+                {
                     return Ok(());
                 }
 

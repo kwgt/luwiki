@@ -83,7 +83,10 @@ pub async fn get(
         ));
     }
 
-    let with_deleted = match parse_bool_param("with_deleted", query.with_deleted.as_deref()) {
+    let with_deleted = match parse_bool_param(
+        "with_deleted",
+        query.with_deleted.as_deref(),
+    ) {
         Ok(value) => value,
         Err(resp) => return Ok(resp),
     };
@@ -141,7 +144,10 @@ pub async fn get(
     let items = filtered
         .into_iter()
         .map(|entry| {
-            let timestamp = entry.timestamp().format("%Y-%m-%dT%H:%M:%S").to_string();
+            let timestamp = entry
+                .timestamp()
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string();
             json!({
                 "page_id": entry.id().to_string(),
                 "path": entry.path(),
@@ -173,6 +179,15 @@ pub async fn get(
         .body(body.to_string()))
 }
 
+///
+/// カーソルの向きと基準値を解決する
+///
+/// # 引数
+/// * `query` - 一覧取得クエリ
+///
+/// # 戻り値
+/// (前方走査フラグ, カーソル文字列)
+///
 fn resolve_cursor(query: &ListQuery) -> (bool, String) {
     if let Some(rewind) = query.rewind.as_deref() {
         return (false, rewind.to_string());
@@ -185,6 +200,18 @@ fn resolve_cursor(query: &ListQuery) -> (bool, String) {
     (true, query.prefix.clone())
 }
 
+///
+/// カーソル条件で一覧を絞り込む
+///
+/// # 引数
+/// * `entries` - ページ一覧
+/// * `prefix` - 起点パス
+/// * `cursor` - カーソル
+/// * `forward` - 前方走査なら`true`
+///
+/// # 戻り値
+/// 絞り込み後のページ一覧
+///
 fn apply_cursor(
     entries: Vec<PageListEntry>,
     prefix: &str,
@@ -205,6 +232,16 @@ fn apply_cursor(
         .collect()
 }
 
+///
+/// 一覧の並び順を整える
+///
+/// # 引数
+/// * `entries` - 並び替え対象
+/// * `forward` - 前方走査なら`true`
+///
+/// # 戻り値
+/// なし
+///
 fn sort_entries(entries: &mut [PageListEntry], forward: bool) {
     entries.sort_by(|left, right| {
         let ord = match left.path().cmp(&right.path()) {
@@ -215,7 +252,10 @@ fn sort_entries(entries: &mut [PageListEntry], forward: bool) {
     });
 }
 
-fn parse_bool_param(name: &str, raw: Option<&str>) -> Result<bool, HttpResponse> {
+fn parse_bool_param(
+    name: &str,
+    raw: Option<&str>,
+) -> Result<bool, HttpResponse> {
     match raw {
         None => Ok(false),
         Some(value) => match value {
@@ -229,6 +269,15 @@ fn parse_bool_param(name: &str, raw: Option<&str>) -> Result<bool, HttpResponse>
     }
 }
 
+///
+/// 件数上限パラメータを解析する
+///
+/// # 引数
+/// * `raw` - クエリーパラメータ値
+///
+/// # 戻り値
+/// 解析した件数上限
+///
 fn parse_limit_param(raw: Option<&str>) -> Result<usize, HttpResponse> {
     match raw {
         None => Ok(50),

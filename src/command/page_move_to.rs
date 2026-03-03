@@ -8,7 +8,7 @@
 //! サブコマンド"page move_to"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{Options, PageMoveToOpts};
@@ -41,10 +41,20 @@ impl PageMoveToCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for PageMoveToCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ページ移動に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
-        let (src_path, index) = if let Ok(page_id) = PageId::from_string(&self.src_path) {
+        /*
+         * 移動元ページの解決
+         */
+        let (src_path, index) = if let Ok(page_id) =
+            PageId::from_string(&self.src_path)
+        {
             self.manager
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?
@@ -58,6 +68,9 @@ impl CommandContext for PageMoveToCommandContext {
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?
         };
 
+        /*
+         * 単体移動時のロック検証
+         */
         if !self.force && !self.recursive {
             let page_id = index.id();
             let lock_info = self.manager.get_page_lock_info(&page_id)?;
@@ -66,6 +79,9 @@ impl CommandContext for PageMoveToCommandContext {
             }
         }
 
+        /*
+         * 移動の実行
+         */
         if self.recursive {
             self.manager
                 .rename_pages_recursive_by_id(&index.id(), &self.dst_path)?;

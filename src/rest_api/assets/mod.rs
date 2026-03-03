@@ -14,7 +14,7 @@ pub(crate) mod meta;
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
@@ -194,7 +194,10 @@ pub async fn post(
         };
 
         if lock_info.token() != token {
-            return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Ok(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
 
         let user_id = match state.db().get_user_id_by_name(&auth_user) {
@@ -224,20 +227,35 @@ pub async fn post(
     let asset_id =
         match state
             .db()
-            .create_asset(&page_id, &file_name, &mime, &auth_user, body.as_ref())
+            .create_asset(
+                &page_id,
+                &file_name,
+                &mime,
+                &auth_user,
+                body.as_ref(),
+            )
         {
             Ok(asset_id) => asset_id,
             Err(err) => {
-                if let Some(DbError::AssetAlreadyExists) = err.downcast_ref::<DbError>() {
+                if let Some(DbError::AssetAlreadyExists) =
+                    err.downcast_ref::<DbError>()
+                {
                     return Ok(resp_error_json(
                         StatusCode::CONFLICT,
                         "asset already exists",
                     ));
                 }
-                if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
-                    return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
+                if let Some(DbError::PageNotFound) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(resp_error_json(
+                        StatusCode::NOT_FOUND,
+                        "page not found",
+                    ));
                 }
-                if let Some(DbError::UserNotFound) = err.downcast_ref::<DbError>() {
+                if let Some(DbError::UserNotFound) =
+                    err.downcast_ref::<DbError>()
+                {
                     return Ok(resp_error_json(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "user not found",
@@ -371,7 +389,10 @@ pub async fn get(
     /*
      * アセットIDの解決
      */
-    let asset_id = match state.db().get_asset_id_by_page_file(&page_id, &file_name) {
+    let asset_id = match state
+        .db()
+        .get_asset_id_by_page_file(&page_id, &file_name)
+    {
         Ok(Some(asset_id)) => asset_id,
         Ok(None) => {
             match state
@@ -379,7 +400,10 @@ pub async fn get(
                 .has_deleted_asset_by_page_file(&page_id, &file_name)
             {
                 Ok(true) => {
-                    return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
+                    return Ok(resp_error_json(
+                        StatusCode::GONE,
+                        "asset deleted",
+                    ));
                 }
                 Ok(false) => {}
                 Err(_) => {
@@ -390,7 +414,10 @@ pub async fn get(
                 }
             }
 
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
+            return Ok(resp_error_json(
+                StatusCode::NOT_FOUND,
+                "asset not found",
+            ));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -403,7 +430,10 @@ pub async fn get(
     let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
         Ok(Some(info)) => info,
         Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
+            return Ok(resp_error_json(
+                StatusCode::NOT_FOUND,
+                "asset not found",
+            ));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -436,17 +466,29 @@ pub async fn get(
 /// ロック解除トークンの解析
 ///
 fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
+    /*
+     * ヘッダ値の取得
+     */
     let raw = match req.headers().get(LOCK_AUTH_HEADER) {
         Some(raw) => raw,
         None => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
+    /*
+     * トークン文字列の抽出
+     */
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
@@ -461,12 +503,21 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
+    /*
+     * LockTokenへの変換
+     */
     match LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid")),
+        Err(_) => Err(resp_error_json(
+            StatusCode::FORBIDDEN,
+            "lock token invalid",
+        )),
     }
 }

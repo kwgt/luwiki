@@ -8,12 +8,12 @@
 //! サブコマンド"lock delete"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{LockDeleteOpts, Options};
-use crate::database::DatabaseManager;
 use crate::database::types::LockToken;
+use crate::database::DatabaseManager;
 
 ///
 /// "lock delete"サブコマンドのコンテキスト情報をパックした構造体
@@ -36,8 +36,13 @@ impl LockDeleteCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for LockDeleteCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ロック削除に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         if self.manager.delete_lock(&self.lock_id)? {
             Ok(())

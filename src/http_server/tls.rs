@@ -13,11 +13,17 @@ use std::io::{BufReader, Cursor};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use log::info;
-use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
-use rustls::ServerConfig;
+use rcgen::{
+    CertificateParams,
+    DistinguishedName,
+    DnType,
+    KeyPair,
+    SanType,
+};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::ServerConfig;
 use time::{Duration, OffsetDateTime};
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -32,7 +38,10 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 /// # 戻り値
 /// 設定に成功した場合はTLSサーバ設定を返す。
 ///
-pub(crate) fn load_server_config(cert_path: &Path, cert_is_explicit: bool) -> Result<ServerConfig> {
+pub(crate) fn load_server_config(
+    cert_path: &Path,
+    cert_is_explicit: bool,
+) -> Result<ServerConfig> {
     /*
      * 証明書ファイルの存在確認と生成
      */
@@ -81,7 +90,9 @@ fn build_server_config(
 /// # 戻り値
 /// 読み込みに成功した場合は証明書と秘密鍵を返す。
 ///
-fn load_pem(cert_path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+fn load_pem(
+    cert_path: &Path,
+) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     /*
      * PEMの読み込み
      */
@@ -91,7 +102,8 @@ fn load_pem(cert_path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKe
      * 証明書の抽出
      */
     let mut cert_reader = BufReader::new(Cursor::new(&pem));
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+    let certs: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut cert_reader)
         .collect::<Result<_, _>>()
         .map_err(|err| anyhow!("read cert error: {}", err))?;
     if certs.is_empty() {
@@ -104,7 +116,9 @@ fn load_pem(cert_path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKe
     let mut key_reader = BufReader::new(Cursor::new(&pem));
     let key = rustls_pemfile::private_key(&mut key_reader)
         .map_err(|err| anyhow!("read private key error: {}", err))?
-        .ok_or_else(|| anyhow!("no private key found: {}", cert_path.display()))?;
+        .ok_or_else(|| {
+            anyhow!("no private key found: {}", cert_path.display())
+        })?;
 
     Ok((certs, key))
 }
@@ -211,9 +225,29 @@ fn log_certificate_info(certs: &[CertificateDer<'static>]) {
                         let ip_bytes: &[u8] = bytes.as_ref();
                         match ip_bytes {
                             [a, b, c, d] => {
-                                Some(IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d)).to_string())
+                                Some(
+                                    IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d))
+                                        .to_string(),
+                                )
                             }
-                            [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] => Some(
+                            [
+                                a,
+                                b,
+                                c,
+                                d,
+                                e,
+                                f,
+                                g,
+                                h,
+                                i,
+                                j,
+                                k,
+                                l,
+                                m,
+                                n,
+                                o,
+                                p,
+                            ] => Some(
                                 IpAddr::V6(Ipv6Addr::new(
                                     ((*a as u16) << 8) | (*b as u16),
                                     ((*c as u16) << 8) | (*d as u16),
@@ -243,8 +277,14 @@ fn log_certificate_info(certs: &[CertificateDer<'static>]) {
     let not_after = validity.not_after;
 
     info!(
-        "certificate info: subject_cn={}, san={:?}, not_before={}, not_after={}",
-        subject_cn, san, not_before, not_after
+        concat!(
+            "certificate info: subject_cn={}, san={:?}, ",
+            "not_before={}, not_after={}"
+        ),
+        subject_cn,
+        san,
+        not_before,
+        not_after,
     );
 }
 
@@ -289,7 +329,8 @@ mod tests {
     }
 
     ///
-    /// 既定パス未存在時に自己署名証明書を生成することを確認する
+    /// 既定パス未存在時に
+    /// 自己署名証明書を生成することを確認する
     ///
     /// # 注記
     /// 1) 一時パスを作成する
@@ -323,7 +364,9 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let cert_path = temp_cert_path(&dir, "cert_only.pem");
 
-        let params = CertificateParams::new(vec!["localhost".to_string()]).expect("params");
+        let params =
+            CertificateParams::new(vec!["localhost".to_string()])
+                .expect("params");
         let key_pair = KeyPair::generate().expect("key");
         let cert = params.self_signed(&key_pair).expect("cert");
         let cert_pem = cert.pem();

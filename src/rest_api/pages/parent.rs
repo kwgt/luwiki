@@ -58,7 +58,9 @@ pub async fn get(
     /*
      * クエリ取得
      */
-    let query = match web::Query::<ParentQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<ParentQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -116,11 +118,18 @@ pub async fn get(
         }
     };
 
-    let (parent_id, parent_path) = match resolve_parent(state.db(), current_path, recursive) {
+    let (parent_id, parent_path) = match resolve_parent(
+        state.db(),
+        current_path,
+        recursive,
+    ) {
         Ok(result) => result,
         Err(err) => {
             if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::NOT_FOUND, "parent not found"));
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "parent not found",
+                ));
             }
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -139,11 +148,25 @@ pub async fn get(
         .body(body.to_string()))
 }
 
+///
+/// 親ページを解決する
+///
+/// # 引数
+/// * `db` - データベースマネージャ
+/// * `current_path` - 現在ページパス
+/// * `recursive` - 再帰的に親を探索する場合は`true`
+///
+/// # 戻り値
+/// (親ページID, 親ページパス)
+///
 fn resolve_parent(
     db: &crate::database::DatabaseManager,
     current_path: String,
     recursive: bool,
 ) -> anyhow::Result<(PageId, String)> {
+    /*
+     * 直接の親を解決する
+     */
     let mut path = parent_path(&current_path);
     if !recursive {
         let parent_id = db
@@ -152,6 +175,9 @@ fn resolve_parent(
         return Ok((parent_id, path));
     }
 
+    /*
+     * 存在する親ページまで遡る
+     */
     loop {
         if let Some(parent_id) = db.get_page_id_by_path(&path)? {
             return Ok((parent_id, path));
@@ -165,6 +191,15 @@ fn resolve_parent(
     Err(anyhow::anyhow!(DbError::PageNotFound))
 }
 
+///
+/// 親ページパスを計算する
+///
+/// # 引数
+/// * `path` - 現在ページパス
+///
+/// # 戻り値
+/// 親ページパス
+///
 fn parent_path(path: &str) -> String {
     if path == "/" {
         return "/".to_string();

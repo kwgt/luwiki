@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde_json::json;
 
@@ -105,7 +105,10 @@ pub async fn post(
         Ok(lock_info) => lock_info,
         Err(err) => {
             if let Some(DbError::PageLocked) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::CONFLICT, "page already locked"));
+                return Ok(resp_error_json(
+                    StatusCode::CONFLICT,
+                    "page already locked",
+                ));
             }
 
             return Ok(resp_error_json(
@@ -207,14 +210,27 @@ pub async fn put(
     /*
      * ロック延長
      */
-    let lock_info = match state.db().renew_page_lock(&page_id, &auth_user, &token) {
+    let lock_info = match state
+        .db()
+        .renew_page_lock(&page_id, &auth_user, &token)
+    {
         Ok(lock_info) => lock_info,
         Err(err) => {
-            if let Some(DbError::LockNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::NOT_FOUND, "lock not found"));
+            if let Some(DbError::LockNotFound) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "lock not found",
+                ));
             }
-            if let Some(DbError::LockForbidden) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
+            if let Some(DbError::LockForbidden) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::FORBIDDEN,
+                    "lock forbidden",
+                ));
             }
 
             return Ok(resp_error_json(
@@ -424,10 +440,18 @@ pub async fn delete(
         Ok(()) => {}
         Err(err) => {
             if let Some(DbError::LockNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::NOT_FOUND, "lock not found"));
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "lock not found",
+                ));
             }
-            if let Some(DbError::LockForbidden) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
+            if let Some(DbError::LockForbidden) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::FORBIDDEN,
+                    "lock forbidden",
+                ));
             }
 
             return Ok(resp_error_json(
@@ -457,6 +481,9 @@ fn parse_page_id(raw: String) -> Result<PageId, HttpResponse> {
 /// ロック解除トークンの解析
 ///
 fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
+    /*
+     * ヘッダ値の取得
+     */
     let raw = match req.headers().get(LOCK_AUTH_HEADER) {
         Some(raw) => raw,
         None => {
@@ -467,10 +494,16 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
         }
     };
 
+    /*
+     * トークン文字列の抽出
+     */
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
@@ -485,20 +518,31 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
+    /*
+     * LockTokenへの変換
+     */
     match LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid")),
+        Err(_) => Err(resp_error_json(
+            StatusCode::FORBIDDEN,
+            "lock token invalid",
+        )),
     }
 }
 
 ///
 /// ロック情報ヘッダの生成
 ///
-pub(crate) fn build_lock_header(lock_info: &crate::database::types::LockInfo) -> String {
+pub(crate) fn build_lock_header(
+    lock_info: &crate::database::types::LockInfo,
+) -> String {
     format!(
         "expire={} token={}",
         lock_info.expire().to_rfc3339(),

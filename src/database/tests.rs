@@ -24,21 +24,33 @@ use super::schema::{
 use super::types::{PageId, PageIndex};
 
 ///
-/// Wikiリンク抽出処理が期待通りに動作することを確認する。
+/// Wikiリンク抽出処理が期待通りに動作することを
+/// 確認する。
 ///
 /// # 注記
-/// テスト用データベースを作成し、固定ソースからリンク参照を抽出して検証する。
+/// テスト用データベースを作成し、固定ソースから
+/// リンク参照を抽出して検証する。
 ///
 #[test]
 fn build_link_refs_extracts_wiki_links() {
+    /*
+     * テスト用データベースを初期化する
+     */
     let (base_dir, db_path) = prepare_test_dirs();
     let mut db = Database::create(&db_path).expect("create db failed");
     init_database(&mut db).expect("init db failed");
 
+    /*
+     * ページパスとインデックスを登録する
+     */
     let txn = db.begin_write().expect("begin write failed");
     {
-        let mut path_table = txn.open_table(PAGE_PATH_TABLE).expect("open table failed");
-        let mut index_table = txn.open_table(PAGE_INDEX_TABLE).expect("open table failed");
+        let mut path_table = txn
+            .open_table(PAGE_PATH_TABLE)
+            .expect("open table failed");
+        let mut index_table = txn
+            .open_table(PAGE_INDEX_TABLE)
+            .expect("open table failed");
         let id_root = PageId::new();
         let id_page = PageId::new();
         path_table
@@ -61,6 +73,9 @@ fn build_link_refs_extracts_wiki_links() {
             .expect("insert /a/b index failed");
     }
 
+    /*
+     * リンク参照を抽出して結果を検証する
+     */
     let source = concat!(
         "[abs](/a/b) ",
         "[child](child) ",
@@ -71,7 +86,8 @@ fn build_link_refs_extracts_wiki_links() {
         "[mail](mailto:info@example.com)",
     );
 
-    let refs = build_link_refs(&txn, "/a/b", source).expect("build_link_refs failed");
+    let refs = build_link_refs(&txn, "/a/b", source)
+        .expect("build_link_refs failed");
 
     assert!(matches!(refs.get("/a/b"), Some(Some(_))));
     assert!(matches!(refs.get("/a"), Some(Some(_))));
@@ -87,7 +103,8 @@ fn build_link_refs_extracts_wiki_links() {
 /// テスト用の一時ディレクトリとDBパスを生成する。
 ///
 /// # 戻り値
-/// テスト用ディレクトリとDBファイルパスのタプルを返す。
+/// テスト用ディレクトリとDBファイルパスの
+/// タプルを返す。
 ///
 fn prepare_test_dirs() -> (PathBuf, PathBuf) {
     let base = Path::new("tests").join("tmp").join(unique_suffix());
@@ -97,17 +114,23 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf) {
 }
 
 ///
-/// ルートページの初期化が正しく行われることを確認する。
+/// ルートページの初期化が正しく行われることを
+/// 確認する。
 ///
 /// # 注記
-/// ユーザ登録後にルートページ初期化を実行し、ページの存在を検証する。
+/// ユーザ登録後にルートページ初期化を実行し、
+/// ページの存在を検証する。
 ///
 #[test]
 fn ensure_default_root_creates_root_page() {
+    /*
+     * データベースを開き初期化処理を実行する
+     */
     let (base_dir, db_path) = prepare_test_dirs();
     let asset_path = base_dir.join("assets");
 
-    let manager = DatabaseManager::open(&db_path, &asset_path).expect("open manager failed");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
     manager
         .add_user("user", "pass", None)
         .expect("add user failed");
@@ -115,6 +138,9 @@ fn ensure_default_root_creates_root_page() {
         .ensure_default_root("user")
         .expect("ensure root failed");
 
+    /*
+     * 生成されたページとアセットの存在を検証する
+     */
     let exists = manager
         .get_page_id_by_path(ROOT_PAGE_PATH)
         .expect("page exists failed")
@@ -126,12 +152,18 @@ fn ensure_default_root_creates_root_page() {
         .expect("sandbox page resolve failed")
         .expect("sandbox page not found");
     let code_asset_exists = manager
-        .get_asset_id_by_page_file(&sandbox_page_id, SANDBOX_SAMPLE_CODE_FILE_NAME)
+        .get_asset_id_by_page_file(
+            &sandbox_page_id,
+            SANDBOX_SAMPLE_CODE_FILE_NAME,
+        )
         .expect("sandbox code asset lookup failed")
         .is_some();
     assert!(code_asset_exists);
     let csv_asset_exists = manager
-        .get_asset_id_by_page_file(&sandbox_page_id, SANDBOX_SAMPLE_CSV_FILE_NAME)
+        .get_asset_id_by_page_file(
+            &sandbox_page_id,
+            SANDBOX_SAMPLE_CSV_FILE_NAME,
+        )
         .expect("sandbox csv asset lookup failed")
         .is_some();
     assert!(csv_asset_exists);

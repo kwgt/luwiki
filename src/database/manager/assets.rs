@@ -10,13 +10,17 @@
 
 use std::fs;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use redb::{ReadableDatabase, ReadableTable};
 
 use super::DatabaseManager;
 use crate::database::entries::{AssetListEntry, AssetMoveResult};
 use crate::database::schema::{
-    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, PAGE_INDEX_TABLE, USER_ID_TABLE,
+    ASSET_GROUP_TABLE,
+    ASSET_INFO_TABLE,
+    ASSET_LOOKUP_TABLE,
+    PAGE_INDEX_TABLE,
+    USER_ID_TABLE,
     USER_INFO_TABLE,
 };
 use crate::database::types::{AssetId, AssetInfo, PageId};
@@ -112,7 +116,10 @@ impl DatabaseManager {
     /// 取得に成功した場合は`Ok(Some(AssetInfo))`を返す。
     /// 存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_asset_info_by_id(&self, asset_id: &AssetId) -> Result<Option<AssetInfo>> {
+    pub(crate) fn get_asset_info_by_id(
+        &self,
+        asset_id: &AssetId,
+    ) -> Result<Option<AssetInfo>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -133,7 +140,10 @@ impl DatabaseManager {
     /// # 戻り値
     /// アセット情報の一覧を返す。
     ///
-    pub(crate) fn list_page_assets(&self, page_id: &PageId) -> Result<Vec<AssetInfo>> {
+    pub(crate) fn list_page_assets(
+        &self,
+        page_id: &PageId,
+    ) -> Result<Vec<AssetInfo>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -207,7 +217,10 @@ impl DatabaseManager {
     /// # 戻り値
     /// アセットデータを返す。
     ///
-    pub(crate) fn read_asset_data(&self, asset_id: &AssetId) -> Result<Vec<u8>> {
+    pub(crate) fn read_asset_data(
+        &self,
+        asset_id: &AssetId,
+    ) -> Result<Vec<u8>> {
         /*
          * アセットパスの生成
          */
@@ -281,7 +294,11 @@ impl DatabaseManager {
                 let key = user_name.to_string();
                 match id_table.get(&key)? {
                     Some(id) => id.value(),
-                    None => return Err(anyhow!(crate::database::DbError::UserNotFound)),
+                    None => {
+                        return Err(anyhow!(
+                            crate::database::DbError::UserNotFound
+                        ));
+                    }
                 }
             };
 
@@ -295,7 +312,9 @@ impl DatabaseManager {
             };
 
             if let Some(conflict_id) = conflict_id {
-                let deleted_conflict = match info_table.get(conflict_id.clone())? {
+                let deleted_conflict = match info_table
+                    .get(conflict_id.clone())?
+                {
                     Some(info) => info.value().deleted(),
                     None => false,
                 };
@@ -303,7 +322,9 @@ impl DatabaseManager {
                 if deleted_conflict {
                     let _ = lookup_table.remove(lookup_key.clone());
                 } else {
-                    return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetAlreadyExists
+                    ));
                 }
             }
 
@@ -366,7 +387,11 @@ impl DatabaseManager {
             let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let mut asset_info = match info_table.get(asset_id.clone())? {
                 Some(info) => info.value(),
-                None => return Err(anyhow!(crate::database::DbError::AssetNotFound)),
+                None => {
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetNotFound
+                    ));
+                }
             };
 
             /*
@@ -445,7 +470,11 @@ impl DatabaseManager {
              */
             let asset_info = match info_table.get(asset_id.clone())? {
                 Some(info) => info.value(),
-                None => return Err(anyhow!(crate::database::DbError::AssetNotFound)),
+                None => {
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetNotFound
+                    ));
+                }
             };
 
             /*
@@ -509,7 +538,11 @@ impl DatabaseManager {
     /// # 戻り値
     /// 復帰に成功した場合は`Ok(())`を返す。
     ///
-    pub(crate) fn undelete_asset(&self, asset_id: &AssetId, new_name: Option<&str>) -> Result<()> {
+    pub(crate) fn undelete_asset(
+        &self,
+        asset_id: &AssetId,
+        new_name: Option<&str>,
+    ) -> Result<()> {
         /*
          * 書き込みトランザクション開始
          */
@@ -517,28 +550,44 @@ impl DatabaseManager {
         let update_result = (|| -> Result<()> {
             let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
             let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
+
+            /*
+             * 対象アセットの取得と状態確認
+             */
             let mut asset_info = match info_table.get(asset_id.clone())? {
                 Some(info) => info.value(),
-                None => return Err(anyhow!(crate::database::DbError::AssetNotFound)),
+                None => {
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetNotFound
+                    ));
+                }
             };
 
             if !asset_info.deleted() {
-                return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+                return Err(anyhow!(
+                    crate::database::DbError::AssetAlreadyExists
+                ));
             }
 
             let target_name = new_name
                 .unwrap_or(asset_info.file_name().as_str())
                 .to_string();
 
+            /*
+             * 名前競合の確認と参照更新
+             */
             if let Some(page_id) = asset_info.page_id() {
                 let lookup_key = (page_id.clone(), target_name.clone());
                 if lookup_table.get(&lookup_key)?.is_some() {
-                    return Err(anyhow!(crate::database::DbError::AssetAlreadyExists));
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetAlreadyExists
+                    ));
                 }
 
                 let current_name = asset_info.file_name();
                 if current_name != target_name {
-                    let _ = lookup_table.remove((page_id.clone(), current_name));
+                    let _ =
+                        lookup_table.remove((page_id.clone(), current_name));
                 }
                 asset_info.set_file_name(target_name.clone());
                 lookup_table.insert(lookup_key, asset_id.clone())?;
@@ -546,6 +595,9 @@ impl DatabaseManager {
                 asset_info.set_file_name(target_name);
             }
 
+            /*
+             * 削除フラグ解除の反映
+             */
             asset_info.set_deleted(false);
             info_table.insert(asset_id.clone(), asset_info)?;
             Ok(())
@@ -614,13 +666,19 @@ impl DatabaseManager {
              */
             let mut asset_info = match info_table.get(asset_id.clone())? {
                 Some(info) => info.value(),
-                None => return Err(anyhow!(crate::database::DbError::AssetNotFound)),
+                None => {
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetNotFound
+                    ));
+                }
             };
 
             let file_name = asset_info.file_name();
             let lookup_key = (dst_page_id.clone(), file_name.clone());
 
-            let conflict_id = lookup_table.get(&lookup_key)?.map(|entry| entry.value());
+            let conflict_id = lookup_table
+                .get(&lookup_key)?
+                .map(|entry| entry.value());
             if let Some(conflict_id) = conflict_id {
                 if conflict_id == asset_id.clone() {
                     // 同一アセットの再指定は競合として扱わない
@@ -629,7 +687,10 @@ impl DatabaseManager {
                 } else {
                     conflict_asset = Some(conflict_id.clone());
                     let _ = lookup_table.remove(lookup_key.clone());
-                    let _ = group_table.remove(dst_page_id.clone(), conflict_id.clone());
+                    let _ = group_table.remove(
+                        dst_page_id.clone(),
+                        conflict_id.clone(),
+                    );
                     let _ = info_table.remove(conflict_id)?;
                 }
             }

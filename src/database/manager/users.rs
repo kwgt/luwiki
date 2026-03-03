@@ -8,7 +8,7 @@
 //! ユーザ情報の操作を提供するモジュール
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 
 use super::DatabaseManager;
@@ -56,7 +56,10 @@ impl DatabaseManager {
              * 既存ユーザの確認
              */
             if id_table.get(&key)?.is_some() {
-                return Err(anyhow!("user already exists: {}", username.as_ref()));
+                return Err(anyhow!(
+                    "user already exists: {}",
+                    username.as_ref()
+                ));
             }
 
             /*
@@ -91,7 +94,11 @@ impl DatabaseManager {
     /// # 戻り値
     /// 認証に成功した場合は`Ok(true)`を返す。
     ///
-    pub(crate) fn verify_user(&self, username: &str, password: &str) -> Result<bool> {
+    pub(crate) fn verify_user(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<bool> {
         /*
          * 読み取りトランザクション開始
          */
@@ -132,7 +139,10 @@ impl DatabaseManager {
     /// 取得に成功した場合は`Ok(Some(ユーザ名))`を返す。
     /// 存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_user_name_by_id(&self, user_id: &UserId) -> Result<Option<String>> {
+    pub(crate) fn get_user_name_by_id(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<String>> {
         let txn = self.db.begin_read()?;
         let info_table = txn.open_table(USER_INFO_TABLE)?;
         let info = match info_table.get(user_id.clone())? {
@@ -153,7 +163,10 @@ impl DatabaseManager {
     /// 取得に成功した場合は`Ok(Some(UserId))`を返す。
     /// 存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_user_id_by_name(&self, user_name: &str) -> Result<Option<UserId>> {
+    pub(crate) fn get_user_id_by_name(
+        &self,
+        user_name: &str,
+    ) -> Result<Option<UserId>> {
         let txn = self.db.begin_read()?;
         let id_table = txn.open_table(USER_ID_TABLE)?;
         let key = user_name.to_string();
@@ -170,7 +183,10 @@ impl DatabaseManager {
     /// 取得に成功した場合は`Ok(Some(UserInfo))`を返す。
     /// 存在しない場合は`Ok(None)`を返す。
     ///
-    pub(crate) fn get_user_info_by_name(&self, user_name: &str) -> Result<Option<UserInfo>> {
+    pub(crate) fn get_user_info_by_name(
+        &self,
+        user_name: &str,
+    ) -> Result<Option<UserInfo>> {
         let txn = self.db.begin_read()?;
         let id_table = txn.open_table(USER_ID_TABLE)?;
         let key = user_name.to_string();

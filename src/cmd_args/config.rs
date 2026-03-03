@@ -12,14 +12,22 @@ use std::default::Default;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    LogLevel, default_assets_path, default_db_path, default_fts_index_path, default_log_path,
+    default_assets_path,
+    default_db_path,
+    default_fts_index_path,
+    default_log_path,
+    LogLevel,
 };
 use crate::cmd_args::{
-    AssetListSortMode, FtsSearchTarget, LockListSortMode, PageListSortMode, UserListSortMode,
+    AssetListSortMode,
+    FtsSearchTarget,
+    LockListSortMode,
+    PageListSortMode,
+    UserListSortMode,
 };
 
 const DEFAULT_FRONTEND_UI_FONT: &str = "sans-serif";
@@ -161,7 +169,7 @@ impl Config {
     ///
     /// user listサブコマンドのソートモードを更新
     ///
-    pub(super) fn set_user_list_sort_mode(&mut self, mode: UserListSortMode) {
+    pub(super) fn set_user_list_sort_mode(&mut self, mode: UserListSortMode,) {
         let list = self.ensure_user_list();
         list.sort_mode = Some(mode);
     }
@@ -177,7 +185,7 @@ impl Config {
     ///
     /// page listサブコマンドのソートモードを更新
     ///
-    pub(super) fn set_page_list_sort_mode(&mut self, mode: PageListSortMode) {
+    pub(super) fn set_page_list_sort_mode(&mut self, mode: PageListSortMode,) {
         let list = self.ensure_page_list();
         list.sort_mode = Some(mode);
     }
@@ -217,7 +225,7 @@ impl Config {
     ///
     /// lock listサブコマンドのソートモードを更新
     ///
-    pub(super) fn set_lock_list_sort_mode(&mut self, mode: LockListSortMode) {
+    pub(super) fn set_lock_list_sort_mode(&mut self, mode: LockListSortMode,) {
         let list = self.ensure_lock_list();
         list.sort_mode = Some(mode);
     }
@@ -249,7 +257,10 @@ impl Config {
     ///
     /// asset listサブコマンドのソートモードを更新
     ///
-    pub(super) fn set_asset_list_sort_mode(&mut self, mode: AssetListSortMode) {
+    pub(super) fn set_asset_list_sort_mode(
+        &mut self,
+        mode: AssetListSortMode,
+    ) {
         let list = self.ensure_asset_list();
         list.sort_mode = Some(mode);
     }
@@ -321,7 +332,9 @@ impl Config {
     /// ログレベルへのアクセサ
     ///
     pub(super) fn log_level(&self) -> Option<LogLevel> {
-        self.global.as_ref().and_then(|global| global.log_level)
+        self.global
+            .as_ref()
+            .and_then(|global| global.log_level)
     }
 
     ///
@@ -378,21 +391,24 @@ impl Config {
     /// TLS使用フラグへのアクセサ
     ///
     pub(super) fn use_tls(&self) -> Option<bool> {
-        let run_value = self.run.as_ref().and_then(|run| run.use_tls);
+        let run_value = self.run
+            .as_ref()
+            .and_then(|run| run.use_tls);
 
         if run_value.is_some() {
             return run_value;
         }
 
-        self.global.as_ref().and_then(|global| global.use_tls)
+        self.global
+            .as_ref()
+            .and_then(|global| global.use_tls)
     }
 
     ///
     /// サーバ証明書パスへのアクセサ
     ///
     pub(super) fn server_cert(&self) -> Option<PathBuf> {
-        let run_value = self
-            .run
+        let run_value = self.run
             .as_ref()
             .and_then(|run| run.server_cert.as_ref())
             .map(|path| self.resolve_path(path));
@@ -411,20 +427,24 @@ impl Config {
     /// サブコマンドrunのバインドアドレスへのアクセサ
     ///
     pub(super) fn run_bind_addr(&self) -> Option<String> {
-        self.run.as_ref().and_then(|run| run.bind_addr.clone())
+        self.run
+            .as_ref()
+            .and_then(|run| run.bind_addr.clone())
     }
 
     ///
     /// サブコマンドrunのバインドポートへのアクセサ
     ///
     pub(super) fn run_bind_port(&self) -> Option<u16> {
-        self.run.as_ref().and_then(|run| run.bind_port)
+        self.run
+            .as_ref()
+            .and_then(|run| run.bind_port)
     }
 
     ///
     /// user listサブコマンドのソートモードへのアクセサ
     ///
-    pub(super) fn user_list_sort_mode(&self) -> Option<UserListSortMode> {
+    pub(super) fn user_list_sort_mode(&self,) -> Option<UserListSortMode> {
         self.user
             .as_ref()
             .and_then(|user| user.list.as_ref())
@@ -444,7 +464,7 @@ impl Config {
     ///
     /// page listサブコマンドのソートモードへのアクセサ
     ///
-    pub(super) fn page_list_sort_mode(&self) -> Option<PageListSortMode> {
+    pub(super) fn page_list_sort_mode(&self,) -> Option<PageListSortMode> {
         self.page
             .as_ref()
             .and_then(|page| page.list.as_ref())
@@ -494,7 +514,7 @@ impl Config {
     ///
     /// lock listサブコマンドのソートモードへのアクセサ
     ///
-    pub(super) fn lock_list_sort_mode(&self) -> Option<LockListSortMode> {
+    pub(super) fn lock_list_sort_mode(&self,) -> Option<LockListSortMode> {
         self.lock
             .as_ref()
             .and_then(|lock| lock.list.as_ref())
@@ -595,6 +615,9 @@ impl Config {
     /// frontend設定へのアクセサ
     ///
     pub(super) fn frontend_config(&self) -> FrontendConfig {
+        /*
+         * frontend設定の既定値とユーザ設定を取得
+         */
         let default_config = FrontendConfig::default();
         let frontend = self.frontend.as_ref();
 
@@ -612,9 +635,14 @@ impl Config {
             .unwrap_or_else(|| default_config.md_font_mono.clone());
         let md_code_font = frontend
             .and_then(|section| section.md_code_font.clone())
-            .or_else(|| frontend.and_then(|section| section.md_font_mono.clone()))
+            .or_else(|| {
+                frontend.and_then(|section| section.md_font_mono.clone())
+            })
             .unwrap_or_else(|| default_config.md_code_font.clone());
 
+        /*
+         * 解決済み設定を返却
+         */
         FrontendConfig {
             ui_font,
             md_font_sans,
@@ -647,6 +675,9 @@ impl Config {
     /// グローバル設定の初期化または取得
     ///
     fn ensure_global(&mut self) -> &mut GlobalInfo {
+        /*
+         * 設定セクションの初期化
+         */
         if self.global.is_none() {
             self.global = Some(GlobalInfo {
                 log_level: None,
@@ -662,6 +693,9 @@ impl Config {
             });
         }
 
+        /*
+         * 初期化済みセクションを返却
+         */
         self.global.as_mut().expect("global must be initialized")
     }
 
@@ -685,7 +719,19 @@ impl Config {
         path.to_path_buf()
     }
 
+    ///
+    /// パス中の `.` と `..` を解決した正規化パスを生成
+    ///
+    /// # 引数
+    /// * `path` - 正規化対象のパス
+    ///
+    /// # 戻り値
+    /// 余分なカレントディレクトリ・親ディレクトリ参照を除いたパスを返す。
+    ///
     fn normalize_path(path: PathBuf) -> PathBuf {
+        /*
+         * パス要素を走査して不要な要素を整理
+         */
         let mut result = PathBuf::new();
         let mut segments: Vec<OsString> = Vec::new();
         let mut prefix: Option<std::path::PrefixComponent<'_>> = None;
@@ -705,6 +751,9 @@ impl Config {
             }
         }
 
+        /*
+         * 正規化後のパスを再構築
+         */
         if let Some(value) = prefix {
             result.push(value.as_os_str());
         }
@@ -759,6 +808,9 @@ impl Config {
     /// page list設定の初期化または取得
     ///
     fn ensure_page_list(&mut self) -> &mut PageListInfo {
+        /*
+         * 親セクションの初期化
+         */
         if self.page.is_none() {
             self.page = Some(PageSection {
                 list: None,
@@ -768,6 +820,10 @@ impl Config {
         }
 
         let page = self.page.as_mut().expect("page must be initialized");
+
+        /*
+         * listセクションの初期化
+         */
         if page.list.is_none() {
             page.list = Some(PageListInfo {
                 sort_mode: None,
@@ -783,6 +839,9 @@ impl Config {
     /// page add設定の初期化または取得
     ///
     fn ensure_page_add(&mut self) -> &mut PageAddInfo {
+        /*
+         * 親セクションの初期化
+         */
         if self.page.is_none() {
             self.page = Some(PageSection {
                 list: None,
@@ -792,8 +851,14 @@ impl Config {
         }
 
         let page = self.page.as_mut().expect("page must be initialized");
+
+        /*
+         * addセクションの初期化
+         */
         if page.add.is_none() {
-            page.add = Some(PageAddInfo { default_user: None });
+            page.add = Some(PageAddInfo {
+                default_user: None,
+            });
         }
 
         page.add.as_mut().expect("page.add must be initialized")
@@ -803,6 +868,9 @@ impl Config {
     /// page undelete設定の初期化または取得
     ///
     fn ensure_page_undelete(&mut self) -> &mut PageUndeleteInfo {
+        /*
+         * 親セクションの初期化
+         */
         if self.page.is_none() {
             self.page = Some(PageSection {
                 list: None,
@@ -812,23 +880,35 @@ impl Config {
         }
 
         let page = self.page.as_mut().expect("page must be initialized");
+
+        /*
+         * undeleteセクションの初期化
+         */
         if page.undelete.is_none() {
-            page.undelete = Some(PageUndeleteInfo { with_assets: None });
+            page.undelete = Some(PageUndeleteInfo {
+                with_assets: None,
+            });
         }
 
-        page.undelete
-            .as_mut()
-            .expect("page.undelete must be initialized")
+        page.undelete.as_mut().expect("page.undelete must be initialized")
     }
+
     ///
     /// lock list設定の初期化または取得
     ///
     fn ensure_lock_list(&mut self) -> &mut LockListInfo {
+        /*
+         * 親セクションの初期化
+         */
         if self.lock.is_none() {
             self.lock = Some(LockSection { list: None });
         }
 
         let lock = self.lock.as_mut().expect("lock must be initialized");
+
+        /*
+         * listセクションの初期化
+         */
         if lock.list.is_none() {
             lock.list = Some(LockListInfo {
                 sort_mode: None,
@@ -845,15 +925,14 @@ impl Config {
     ///
     fn ensure_asset_add(&mut self) -> &mut AssetAddInfo {
         if self.asset.is_none() {
-            self.asset = Some(AssetSection {
-                add: None,
-                list: None,
-            });
+            self.asset = Some(AssetSection { add: None, list: None });
         }
 
         let asset = self.asset.as_mut().expect("asset must be initialized");
         if asset.add.is_none() {
-            asset.add = Some(AssetAddInfo { default_user: None });
+            asset.add = Some(AssetAddInfo {
+                default_user: None,
+            });
         }
 
         asset.add.as_mut().expect("asset.add must be initialized")
@@ -863,14 +942,18 @@ impl Config {
     /// asset list設定の初期化または取得
     ///
     fn ensure_asset_list(&mut self) -> &mut AssetListInfo {
+        /*
+         * 親セクションの初期化
+         */
         if self.asset.is_none() {
-            self.asset = Some(AssetSection {
-                add: None,
-                list: None,
-            });
+            self.asset = Some(AssetSection { add: None, list: None });
         }
 
         let asset = self.asset.as_mut().expect("asset must be initialized");
+
+        /*
+         * listセクションの初期化
+         */
         if asset.list.is_none() {
             asset.list = Some(AssetListInfo {
                 sort_mode: None,
@@ -1023,8 +1106,8 @@ struct GlobalInfo {
 /// コンフィギュレーション情報の読み込み
 ///
 pub(super) fn load<P>(path: P) -> Result<Config>
-where
-    P: AsRef<Path>,
+where 
+    P: AsRef<Path>
 {
     let path = path.as_ref();
     let mut config: Config = toml::from_str(&std::fs::read_to_string(path)?)?;
@@ -1138,28 +1221,64 @@ pub(crate) struct FrontendConfig {
 }
 
 impl FrontendConfig {
+    ///
+    /// UI全体のフォントファミリーを返す
+    ///
+    /// # 戻り値
+    /// UIに適用するフォントファミリー
+    ///
     pub(crate) fn ui_font(&self) -> &str {
         &self.ui_font
     }
 
+    ///
+    /// Markdown表示向けのSansフォントファミリーを返す
+    ///
+    /// # 戻り値
+    /// Markdown表示に適用するSansフォントファミリー
+    ///
     pub(crate) fn md_font_sans(&self) -> &str {
         &self.md_font_sans
     }
 
+    ///
+    /// Markdown表示向けのSerifフォントファミリーを返す
+    ///
+    /// # 戻り値
+    /// Markdown表示に適用するSerifフォントファミリー
+    ///
     pub(crate) fn md_font_serif(&self) -> &str {
         &self.md_font_serif
     }
 
+    ///
+    /// Markdown表示向けのMonoフォントファミリーを返す
+    ///
+    /// # 戻り値
+    /// Markdown表示に適用するMonoフォントファミリー
+    ///
     pub(crate) fn md_font_mono(&self) -> &str {
         &self.md_font_mono
     }
 
+    ///
+    /// Markdown表示向けのコードフォントファミリーを返す
+    ///
+    /// # 戻り値
+    /// コードブロックに適用するフォントファミリー
+    ///
     pub(crate) fn md_code_font(&self) -> &str {
         &self.md_code_font
     }
 }
 
 impl Default for FrontendConfig {
+    ///
+    /// frontend設定の既定値を生成
+    ///
+    /// # 戻り値
+    /// 既定のフォント設定を格納した構造体
+    ///
     fn default() -> Self {
         Self {
             ui_font: DEFAULT_FRONTEND_UI_FONT.to_string(),
@@ -1342,15 +1461,22 @@ mod tests {
             server_cert = "certs/server.pem"
         "#;
 
-        let mut config: Config = toml::from_str(toml_str).expect("parse failed");
+        let mut config: Config =
+            toml::from_str(toml_str).expect("parse failed");
         config.config_path = Some(PathBuf::from("/tmp/config/config.toml"));
 
-        assert_eq!(config.log_output(), Some(PathBuf::from("/tmp/config/log")));
+        assert_eq!(
+            config.log_output(),
+            Some(PathBuf::from("/tmp/config/log"))
+        );
         assert_eq!(
             config.db_path(),
             Some(PathBuf::from("/tmp/config/db/database.redb"))
         );
-        assert_eq!(config.assets_path(), Some(PathBuf::from("/tmp/assets")));
+        assert_eq!(
+            config.assets_path(),
+            Some(PathBuf::from("/tmp/assets"))
+        );
         assert_eq!(config.use_tls(), Some(true));
         assert_eq!(
             config.server_cert(),
@@ -1367,11 +1493,18 @@ mod tests {
             assets_path = "/var/data/assets"
         "#;
 
-        let mut config: Config = toml::from_str(toml_str).expect("parse failed");
+        let mut config: Config =
+            toml::from_str(toml_str).expect("parse failed");
         config.config_path = Some(PathBuf::from("/tmp/config/config.toml"));
 
-        assert_eq!(config.log_output(), Some(PathBuf::from("/var/log/app.log")));
-        assert_eq!(config.db_path(), Some(PathBuf::from("/var/db/data.redb")));
+        assert_eq!(
+            config.log_output(),
+            Some(PathBuf::from("/var/log/app.log"))
+        );
+        assert_eq!(
+            config.db_path(),
+            Some(PathBuf::from("/var/db/data.redb"))
+        );
         assert_eq!(
             config.assets_path(),
             Some(PathBuf::from("/var/data/assets"))
@@ -1391,7 +1524,10 @@ mod tests {
 
         let config: Config = toml::from_str(toml_str).expect("parse failed");
         assert_eq!(config.log_output(), Some(PathBuf::from("log")));
-        assert_eq!(config.db_path(), Some(PathBuf::from("db/database.redb")));
+        assert_eq!(
+            config.db_path(),
+            Some(PathBuf::from("db/database.redb"))
+        );
         assert_eq!(config.assets_path(), Some(PathBuf::from("assets")));
         assert_eq!(config.use_tls(), Some(true));
         assert_eq!(

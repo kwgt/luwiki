@@ -20,7 +20,10 @@ use crate::fts;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthUser;
 use crate::rest_api::{
-    CACHE_CONTROL_NO_STORE, CACHE_CONTROL_REVALIDATE_PRIVATE, build_etag, if_none_match_matches,
+    build_etag,
+    if_none_match_matches,
+    CACHE_CONTROL_NO_STORE,
+    CACHE_CONTROL_REVALIDATE_PRIVATE,
 };
 /// ロック認証ヘッダの名称
 const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
@@ -62,7 +65,9 @@ pub async fn get(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<GetSourceQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<GetSourceQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -162,14 +167,20 @@ pub async fn get(
         let etag = build_etag(instance_id.to_string());
         if if_none_match_matches(&req, &etag) {
             return Ok(HttpResponse::NotModified()
-                .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_REVALIDATE_PRIVATE))
+                .insert_header((
+                    header::CACHE_CONTROL,
+                    CACHE_CONTROL_REVALIDATE_PRIVATE,
+                ))
                 .insert_header((header::ETAG, etag))
                 .finish());
         }
 
         return Ok(HttpResponse::Ok()
             .content_type("text/markdown")
-            .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_REVALIDATE_PRIVATE))
+            .insert_header((
+                header::CACHE_CONTROL,
+                CACHE_CONTROL_REVALIDATE_PRIVATE,
+            ))
             .insert_header((header::ETAG, etag))
             .body(body));
     }
@@ -198,7 +209,8 @@ pub async fn get(
 /// # 注記
 /// エラー時はJSON形式で返却する。
 /// 処理の流れはクエリ検証、Content-Type検証、ボディ解析、
-/// 認証ユーザ取得、状態取得、ロック検証、ページ更新の順。
+/// 認証ユーザ取得、状態取得、
+/// ロック検証、ページ更新の順。
 ///
 pub async fn put(
     req: HttpRequest,
@@ -209,7 +221,9 @@ pub async fn put(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<PutSourceQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<PutSourceQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -356,7 +370,10 @@ pub async fn put(
         };
 
         if lock_info.token() != token {
-            return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Ok(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
 
         let user_id = match state.db().get_user_id_by_name(&auth_user) {
@@ -385,19 +402,26 @@ pub async fn put(
     /*
      * ページ更新
      */
-    let update_result = state.db().put_page(&page_id, &auth_user, source, amend);
+    let update_result =
+        state.db().put_page(&page_id, &auth_user, source, amend);
     match update_result {
         Ok(()) => {}
         Err(err) => {
             if let Some(crate::database::DbError::AmendForbidden) =
                 err.downcast_ref::<crate::database::DbError>()
             {
-                return Ok(resp_error_json(StatusCode::FORBIDDEN, "amend forbidden"));
+                return Ok(resp_error_json(
+                    StatusCode::FORBIDDEN,
+                    "amend forbidden",
+                ));
             }
             if let Some(crate::database::DbError::PageNotFound) =
                 err.downcast_ref::<crate::database::DbError>()
             {
-                return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "page not found",
+                ));
             }
             if let Some(crate::database::DbError::UserNotFound) =
                 err.downcast_ref::<crate::database::DbError>()
@@ -419,7 +443,9 @@ pub async fn put(
      * ロック解除
      */
     if let Some(token) = lock_token {
-        if let Err(err) = state.db().release_page_lock(&page_id, &auth_user, &token) {
+        if let Err(err) =
+            state.db().release_page_lock(&page_id, &auth_user, &token)
+        {
             if let Some(crate::database::DbError::LockNotFound) =
                 err.downcast_ref::<crate::database::DbError>()
             {
@@ -431,7 +457,10 @@ pub async fn put(
             if let Some(crate::database::DbError::LockForbidden) =
                 err.downcast_ref::<crate::database::DbError>()
             {
-                return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
+                return Ok(resp_error_json(
+                    StatusCode::FORBIDDEN,
+                    "lock forbidden",
+                ));
             }
 
             return Ok(resp_error_json(
@@ -444,7 +473,12 @@ pub async fn put(
     /*
      * FTSの更新
      */
-    if let Err(err) = fts::reindex_page(state.fts_config(), state.db(), &page_id, false) {
+    if let Err(err) = fts::reindex_page(
+        state.fts_config(),
+        state.db(),
+        &page_id,
+        false,
+    ) {
         log::error!("fts update failed: {:?}", err);
         return Ok(resp_error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -462,17 +496,29 @@ pub async fn put(
 /// ロック解除トークンの解析
 ///
 fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
+    /*
+     * ヘッダ値の取得
+     */
     let raw = match req.headers().get(LOCK_AUTH_HEADER) {
         Some(raw) => raw,
         None => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
+    /*
+     * トークン文字列の抽出
+     */
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
@@ -487,12 +533,21 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
+    /*
+     * LockTokenへの変換
+     */
     match LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid")),
+        Err(_) => Err(resp_error_json(
+            StatusCode::FORBIDDEN,
+            "lock token invalid",
+        )),
     }
 }

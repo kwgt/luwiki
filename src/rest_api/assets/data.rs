@@ -17,7 +17,10 @@ use super::super::resp_error_json;
 use crate::database::types::AssetId;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::{
-    CACHE_CONTROL_NO_STORE, CACHE_CONTROL_REVALIDATE_PRIVATE, build_etag, if_none_match_matches,
+    build_etag,
+    if_none_match_matches,
+    CACHE_CONTROL_NO_STORE,
+    CACHE_CONTROL_REVALIDATE_PRIVATE,
 };
 
 ///
@@ -65,7 +68,10 @@ pub async fn get(
     let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
         Ok(Some(info)) => info,
         Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "asset not found"));
+            return Ok(resp_error_json(
+                StatusCode::NOT_FOUND,
+                "asset not found",
+            ));
         }
         Err(_) => {
             return Ok(resp_error_json(
@@ -106,7 +112,10 @@ pub async fn get(
         let etag = build_etag(instance_id.to_string());
         if if_none_match_matches(&req, &etag) {
             return Ok(HttpResponse::NotModified()
-                .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_REVALIDATE_PRIVATE))
+                .insert_header((
+                    header::CACHE_CONTROL,
+                    CACHE_CONTROL_REVALIDATE_PRIVATE,
+                ))
                 .insert_header((header::ETAG, etag))
                 .finish());
         }
@@ -114,7 +123,10 @@ pub async fn get(
         return Ok(HttpResponse::Ok()
             .content_type(asset_info.mime())
             .insert_header((header::CONTENT_DISPOSITION, content_disposition))
-            .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_REVALIDATE_PRIVATE))
+            .insert_header((
+                header::CACHE_CONTROL,
+                CACHE_CONTROL_REVALIDATE_PRIVATE,
+            ))
             .insert_header((header::ETAG, etag))
             .body(data));
     }
@@ -122,7 +134,10 @@ pub async fn get(
     Ok(HttpResponse::Ok()
         .content_type(asset_info.mime())
         .insert_header((header::CONTENT_DISPOSITION, content_disposition))
-        .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
+        .insert_header((
+            header::CACHE_CONTROL,
+            CACHE_CONTROL_NO_STORE,
+        ))
         .body(data))
 }
 
@@ -138,6 +153,9 @@ pub async fn get(
 fn parse_asset_id(raw: String) -> Result<AssetId, HttpResponse> {
     match AssetId::from_string(&raw) {
         Ok(asset_id) => Ok(asset_id),
-        Err(_) => Err(resp_error_json(StatusCode::NOT_FOUND, "asset not found")),
+        Err(_) => Err(resp_error_json(
+            StatusCode::NOT_FOUND,
+            "asset not found",
+        )),
     }
 }

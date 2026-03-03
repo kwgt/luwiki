@@ -52,8 +52,13 @@ impl PageAddCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for PageAddCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ページ追加に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         /*
          * ソースの読み込み

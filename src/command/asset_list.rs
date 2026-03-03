@@ -41,11 +41,23 @@ impl AssetListCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for AssetListCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// アセット一覧の出力に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 一覧取得とソート
+         */
         let mut assets = self.manager.list_assets()?;
         sort_assets(&mut assets, self.sort_mode, self.reverse_sort);
+
+        /*
+         * 整形結果の出力
+         */
         println!("{}", format_asset_table(&assets, self.long_info));
         Ok(())
     }
@@ -59,12 +71,23 @@ impl CommandContext for AssetListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_assets(assets: &mut [AssetListEntry], sort_mode: AssetListSortMode, reverse_sort: bool) {
+fn sort_assets(
+    assets: &mut [AssetListEntry],
+    sort_mode: AssetListSortMode,
+    reverse_sort: bool,
+) {
+    /*
+     * ソートキーに応じた比較
+     */
     assets.sort_by(|left, right| {
         let ord = match sort_mode {
             AssetListSortMode::Default => left.id().cmp(&right.id()),
-            AssetListSortMode::Upload => left.timestamp().cmp(&right.timestamp()),
-            AssetListSortMode::UserName => left.user_name().cmp(&right.user_name()),
+            AssetListSortMode::Upload => {
+                left.timestamp().cmp(&right.timestamp())
+            }
+            AssetListSortMode::UserName => {
+                left.user_name().cmp(&right.user_name())
+            }
             AssetListSortMode::MimeType => left.mime().cmp(&right.mime()),
             AssetListSortMode::Size => left.size().cmp(&right.size()),
             AssetListSortMode::Path => {
@@ -80,6 +103,15 @@ fn sort_assets(assets: &mut [AssetListEntry], sort_mode: AssetListSortMode, reve
     });
 }
 
+///
+/// パスソート用キーを生成
+///
+/// # 引数
+/// * `asset` - 対象アセット情報
+///
+/// # 戻り値
+/// パス比較に使用する文字列を返す。
+///
 fn path_sort_key(asset: &AssetListEntry) -> String {
     asset.page_path().unwrap_or_else(|| "?????".to_string())
 }
@@ -101,7 +133,15 @@ fn format_asset_table(assets: &[AssetListEntry], long_info: bool) -> String {
     let mut lines: Vec<Vec<String>> = Vec::with_capacity(assets.len() + 1);
 
     if long_info {
-        let header = ["", "ASSET_ID", "TIMESTAMP", "USER", "MIME", "SIZE", "PATH"];
+        let header = [
+            "",
+            "ASSET_ID",
+            "TIMESTAMP",
+            "USER",
+            "MIME",
+            "SIZE",
+            "PATH",
+        ];
         lines.push(header.iter().map(|value| value.to_string()).collect());
         for asset in assets {
             lines.push(vec![
@@ -183,10 +223,28 @@ fn format_asset_table(assets: &[AssetListEntry], long_info: bool) -> String {
     output
 }
 
+///
+/// タイムスタンプ表示文字列を生成
+///
+/// # 引数
+/// * `timestamp` - 整形対象タイムスタンプ
+///
+/// # 戻り値
+/// 整形済みタイムスタンプ文字列を返す。
+///
 fn format_timestamp(timestamp: DateTime<Local>) -> String {
     timestamp.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
+///
+/// サイズ表示文字列を生成
+///
+/// # 引数
+/// * `size` - バイト数
+///
+/// # 戻り値
+/// 単位付きのサイズ文字列を返す。
+///
 fn format_size(size: u64) -> String {
     let (value, unit) = if size >= 1024 * 1024 * 1024 {
         (size / (1024 * 1024 * 1024), "Gi")
@@ -201,6 +259,15 @@ fn format_size(size: u64) -> String {
     format!("{}{}", format_number_with_commas(value), unit)
 }
 
+///
+/// 3桁区切りの数値文字列を生成
+///
+/// # 引数
+/// * `value` - 整形対象数値
+///
+/// # 戻り値
+/// カンマ区切りの数値文字列を返す。
+///
 fn format_number_with_commas(value: u64) -> String {
     let raw = value.to_string();
     let mut chars: Vec<char> = raw.chars().collect();
@@ -236,6 +303,15 @@ fn asset_mark(asset: &AssetListEntry) -> String {
     }
 }
 
+///
+/// アセットパス表示文字列を生成
+///
+/// # 引数
+/// * `asset` - アセット情報
+///
+/// # 戻り値
+/// 表示用アセットパス文字列を返す。
+///
 fn asset_path_display(asset: &AssetListEntry) -> String {
     let file_name = asset.file_name();
     let path = match asset.page_path() {
@@ -263,9 +339,25 @@ pub(crate) fn build_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::types::AssetId;
     use chrono::{Local, TimeZone};
+    use crate::database::types::AssetId;
 
+    ///
+    /// テスト用アセット情報を生成
+    ///
+    /// # 引数
+    /// * `id` - アセットID
+    /// * `ts` - タイムスタンプ
+    /// * `user` - ユーザ名
+    /// * `file` - ファイル名
+    /// * `mime` - MIMEタイプ
+    /// * `size` - サイズ(バイト)
+    /// * `path` - ページパス
+    /// * `deleted` - 削除済みフラグ
+    ///
+    /// # 戻り値
+    /// テスト用のアセット一覧エントリを返す。
+    ///
     fn build_asset(
         id: &str,
         ts: i64,
@@ -289,6 +381,12 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// パスソート時にページパス順で整列されることを確認
+    ///
+    /// # 注記
+    /// 異なるページパスを持つ2件を用意し、`Path`ソート後の順序を検証する。
+    ///
     fn sort_assets_by_path() {
         let mut assets = vec![
             build_asset(
@@ -319,6 +417,12 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 状態記号が削除・ゾンビ状態に応じて表示されることを確認
+    ///
+    /// # 注記
+    /// 削除済み、ゾンビ、両方の3件を一覧整形し、各行頭の記号を検証する。
+    ///
     fn format_asset_table_marks_states() {
         let assets = vec![
             build_asset(

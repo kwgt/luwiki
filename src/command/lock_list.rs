@@ -41,11 +41,23 @@ impl LockListCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for LockListCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ロック一覧の出力に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 一覧取得とソート
+         */
         let mut locks = self.manager.list_locks()?;
         sort_locks(&mut locks, self.sort_mode, self.reverse_sort);
+
+        /*
+         * 整形結果の出力
+         */
         println!("{}", format_lock_table(&locks, self.long_info));
         Ok(())
     }
@@ -59,13 +71,24 @@ impl CommandContext for LockListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_locks(locks: &mut [LockListEntry], sort_mode: LockListSortMode, reverse_sort: bool) {
+fn sort_locks(
+    locks: &mut [LockListEntry],
+    sort_mode: LockListSortMode,
+    reverse_sort: bool,
+) {
+    /*
+     * ソートキーに応じた比較
+     */
     locks.sort_by(|left, right| {
         let ord = match sort_mode {
             LockListSortMode::Default => left.token().cmp(&right.token()),
             LockListSortMode::Expire => left.expire().cmp(&right.expire()),
-            LockListSortMode::UserName => left.user_name().cmp(&right.user_name()),
-            LockListSortMode::PagePath => left.page_path().cmp(&right.page_path()),
+            LockListSortMode::UserName => {
+                left.user_name().cmp(&right.user_name())
+            }
+            LockListSortMode::PagePath => {
+                left.page_path().cmp(&right.page_path())
+            }
         };
 
         if reverse_sort { ord.reverse() } else { ord }
@@ -94,7 +117,8 @@ fn format_lock_table(locks: &[LockListEntry], long_info: bool) -> String {
         for lock in locks {
             lines.push(vec![
                 lock.token().to_string(),
-                lock.expire().to_rfc3339_opts(SecondsFormat::Secs, true),
+                lock.expire()
+                    .to_rfc3339_opts(SecondsFormat::Secs, true),
                 lock.user_name(),
                 lock.page_path(),
             ]);

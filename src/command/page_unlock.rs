@@ -8,7 +8,7 @@
 //! サブコマンド"page unlock"の実装
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{Options, PageUnlockOpts};
@@ -36,10 +36,20 @@ impl PageUnlockCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for PageUnlockCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ページロック解除に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
-        let (_page_id, index) = if let Ok(page_id) = PageId::from_string(&self.target) {
+        /*
+         * 対象ページの解決
+         */
+        let (_page_id, index) = if let Ok(page_id) =
+            PageId::from_string(&self.target)
+        {
             self.manager
                 .get_page_index_entry_by_id(&page_id)?
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))
@@ -59,6 +69,9 @@ impl CommandContext for PageUnlockCommandContext {
             (page_id, index)
         };
 
+        /*
+         * 削除状態とロックの検証
+         */
         if index.deleted() {
             return Err(anyhow!("page deleted"));
         }

@@ -261,6 +261,22 @@ impl AssetListEntry {
     }
 
     #[cfg(test)]
+    ///
+    /// テスト用のアセット一覧情報を生成
+    ///
+    /// # 引数
+    /// * `id` - アセットID
+    /// * `file_name` - ファイル名
+    /// * `mime` - MIME種別
+    /// * `size` - サイズ(バイト)
+    /// * `timestamp` - 登録日時
+    /// * `user_name` - 登録ユーザ名
+    /// * `page_path` - 所有ページパス
+    /// * `deleted` - 削除済みフラグ
+    ///
+    /// # 戻り値
+    /// テスト用のAssetListEntryを返す。
+    ///
     pub(crate) fn new_for_test(
         id: AssetId,
         file_name: String,
@@ -484,6 +500,22 @@ impl PageListEntry {
     }
 
     #[cfg(test)]
+    ///
+    /// テスト用のページ一覧情報を生成
+    ///
+    /// # 引数
+    /// * `id` - ページID
+    /// * `path` - ページパス
+    /// * `latest_revision` - 最新リビジョン番号
+    /// * `timestamp` - 作成日時
+    /// * `user_name` - 記述ユーザ名
+    /// * `deleted` - 削除済みフラグ
+    /// * `draft` - ドラフトフラグ
+    /// * `locked` - ロックフラグ
+    ///
+    /// # 戻り値
+    /// テスト用のPageListEntryを返す。
+    ///
     pub(crate) fn new_for_test(
         id: PageId,
         path: String,
@@ -554,7 +586,11 @@ impl PageSourceEntry {
     /// # 戻り値
     /// PageSourceEntryを返す。
     ///
-    pub(in crate::database) fn new(page_id: PageId, revision: u64, source: PageSource) -> Self {
+    pub(in crate::database) fn new(
+        page_id: PageId,
+        revision: u64,
+        source: PageSource,
+    ) -> Self {
         Self {
             page_id,
             revision,

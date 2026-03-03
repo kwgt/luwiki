@@ -51,7 +51,9 @@ pub async fn delete(
     /*
      * クエリ取得
      */
-    let query = match web::Query::<DeleteQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<DeleteQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -116,20 +118,35 @@ pub async fn delete(
     let recursive = query.recursive.unwrap_or(false);
 
     if recursive {
-        let deleted_ids = match state.db().delete_pages_recursive_by_id(&page_id, false) {
+        let deleted_ids = match state
+            .db()
+            .delete_pages_recursive_by_id(&page_id, false)
+        {
             Ok(deleted_ids) => deleted_ids,
             Err(err) => {
-                if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
-                    return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
+                if let Some(DbError::PageNotFound) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(resp_error_json(
+                        StatusCode::NOT_FOUND,
+                        "page not found",
+                    ));
                 }
-                if let Some(DbError::RootPageProtected) = err.downcast_ref::<DbError>() {
+                if let Some(DbError::RootPageProtected) =
+                    err.downcast_ref::<DbError>()
+                {
                     return Ok(resp_error_json(
                         StatusCode::BAD_REQUEST,
                         "root page is protected",
                     ));
                 }
-                if let Some(DbError::PageLocked) = err.downcast_ref::<DbError>() {
-                    return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
+                if let Some(DbError::PageLocked) =
+                    err.downcast_ref::<DbError>()
+                {
+                    return Ok(resp_error_json(
+                        StatusCode::LOCKED,
+                        "page locked",
+                    ));
                 }
 
                 return Ok(resp_error_json(
@@ -143,7 +160,12 @@ pub async fn delete(
          * FTSの更新
          */
         if let Err(err) =
-            fts::update_pages_index(state.fts_config(), state.db(), &deleted_ids, true)
+            fts::update_pages_index(
+                state.fts_config(),
+                state.db(),
+                &deleted_ids,
+                true,
+            )
         {
             log::error!("fts update failed: {:?}", err);
             return Ok(resp_error_json(
@@ -199,9 +221,14 @@ pub async fn delete(
         Ok(()) => {}
         Err(err) => {
             if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
+                return Ok(resp_error_json(
+                    StatusCode::NOT_FOUND,
+                    "page not found",
+                ));
             }
-            if let Some(DbError::RootPageProtected) = err.downcast_ref::<DbError>() {
+            if let Some(DbError::RootPageProtected) =
+                err.downcast_ref::<DbError>()
+            {
                 return Ok(resp_error_json(
                     StatusCode::BAD_REQUEST,
                     "root page is protected",
@@ -210,8 +237,13 @@ pub async fn delete(
             if let Some(DbError::PageLocked) = err.downcast_ref::<DbError>() {
                 return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
             }
-            if let Some(DbError::LockForbidden) = err.downcast_ref::<DbError>() {
-                return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
+            if let Some(DbError::LockForbidden) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::FORBIDDEN,
+                    "lock forbidden",
+                ));
             }
 
             return Ok(resp_error_json(
@@ -225,7 +257,12 @@ pub async fn delete(
      * FTSの更新
      */
     let target_ids = [page_id.clone()];
-    if let Err(err) = fts::update_pages_index(state.fts_config(), state.db(), &target_ids, true) {
+    if let Err(err) = fts::update_pages_index(
+        state.fts_config(),
+        state.db(),
+        &target_ids,
+        true,
+    ) {
         log::error!("fts update failed: {:?}", err);
         return Ok(resp_error_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -268,6 +305,9 @@ fn parse_page_id(raw: String) -> Result<PageId, HttpResponse> {
 /// 解析に成功した場合は`Ok(LockToken)`を返す。
 ///
 fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
+    /*
+     * ヘッダ値の取得
+     */
     let raw = match req.headers().get(LOCK_AUTH_HEADER) {
         Some(raw) => raw,
         None => {
@@ -278,10 +318,16 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
         }
     };
 
+    /*
+     * トークン文字列の抽出
+     */
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
@@ -296,13 +342,22 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid"));
+            return Err(resp_error_json(
+                StatusCode::FORBIDDEN,
+                "lock token invalid",
+            ));
         }
     };
 
+    /*
+     * LockTokenへの変換
+     */
     match LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(StatusCode::FORBIDDEN, "lock token invalid")),
+        Err(_) => Err(resp_error_json(
+            StatusCode::FORBIDDEN,
+            "lock token invalid",
+        )),
     }
 }
 
@@ -310,7 +365,8 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
 /// ロック解除トークンの解析（任意）
 ///
 /// # 概要
-/// ヘッダが存在する場合のみロック解除トークンを解析する。
+/// ヘッダが存在する場合のみ
+/// ロック解除トークンを解析する。
 ///
 /// # 引数
 /// * `req` - HTTPリクエスト
@@ -318,7 +374,9 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
 /// # 戻り値
 /// トークンが指定されていない場合は`Ok(None)`を返す。
 ///
-fn parse_lock_token_optional(req: &HttpRequest) -> Result<Option<LockToken>, HttpResponse> {
+fn parse_lock_token_optional(
+    req: &HttpRequest,
+) -> Result<Option<LockToken>, HttpResponse> {
     if !req.headers().contains_key(LOCK_AUTH_HEADER) {
         return Ok(None);
     }

@@ -34,8 +34,13 @@ impl UserDeleteCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for UserDeleteCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ユーザ削除に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
         self.manager.delete_user(&self.username)
     }
@@ -62,9 +67,16 @@ mod tests {
     const TEST_PASSWORD: &str = "password123";
 
     #[test]
+    ///
+    /// 既存ユーザを削除できることを確認
+    ///
+    /// # 注記
+    /// テスト用DBにユーザを追加し、削除後に認証が失敗することを検証する。
+    ///
     fn delete_user_succeeds() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir)
+            .expect("open failed");
         manager
             .add_user(TEST_USERNAME, TEST_PASSWORD, None)
             .expect("add failed");
@@ -79,9 +91,16 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 存在しないユーザ削除が失敗することを確認
+    ///
+    /// # 注記
+    /// 空のテスト用DBで未登録ユーザを削除し、エラーになることを検証する。
+    ///
     fn delete_user_fails_when_missing() {
         let (db_dir, db_path, assets_dir) = prepare_test_dirs();
-        let manager = DatabaseManager::open(&db_path, &assets_dir).expect("open failed");
+        let manager = DatabaseManager::open(&db_path, &assets_dir)
+            .expect("open failed");
 
         let result = manager.delete_user("missing_user");
         assert!(result.is_err());
@@ -89,6 +108,12 @@ mod tests {
         fs::remove_dir_all(db_dir).expect("cleanup failed");
     }
 
+    ///
+    /// テスト用ディレクトリ群を生成
+    ///
+    /// # 戻り値
+    /// ベースディレクトリ、DBパス、アセットディレクトリを返す。
+    ///
     fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
         let base = PathBuf::from("tests").join("tmp").join(unique_suffix());
         let db_dir = base.join("db");
@@ -100,6 +125,12 @@ mod tests {
         (base, db_path, assets_dir)
     }
 
+    ///
+    /// 一意なテスト用サフィックスを生成
+    ///
+    /// # 戻り値
+    /// ULIDベースの一意文字列を返す。
+    ///
     fn unique_suffix() -> String {
         Ulid::new().to_string()
     }

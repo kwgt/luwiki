@@ -24,14 +24,16 @@ use serde_json::json;
 
 use crate::http_server::app_state::AppState;
 
-/// ファイル名で禁止する文字(追加しやすいように集約する)
+/// ファイル名で禁止する文字
+/// (追加しやすいように集約する)
 const FORBIDDEN_FILE_NAME_CHARS: &[char] = &['/', '\\'];
 
 /// キャッシュを禁止させる場合のCache-Controlヘッダ値
 pub(crate) const CACHE_CONTROL_NO_STORE: &str = "no-store";
 
 /// 条件付きGETを許可する場合のCache-Controlヘッダ値
-pub(crate) const CACHE_CONTROL_REVALIDATE_PRIVATE: &str = "private, max-age=3600, no-cache";
+pub(crate) const CACHE_CONTROL_REVALIDATE_PRIVATE: &str =
+    "private, max-age=3600, no-cache";
 
 ///
 /// Success (200)を返す場合のレスポンスビルド関数
@@ -53,7 +55,8 @@ where
 }
 
 ///
-/// JSON形式のエラーレスポンスを返す場合のレスポンスビルド関数
+/// JSON形式のエラーレスポンスを返す場合の
+/// レスポンスビルド関数
 ///
 /// # 引数
 /// * `status` - ステータスコード
@@ -62,7 +65,10 @@ where
 /// # 戻り値
 /// レスポンスオブジェクト
 ///
-fn resp_error_json<S>(status: actix_web::http::StatusCode, reason: S) -> HttpResponse
+fn resp_error_json<S>(
+    status: actix_web::http::StatusCode,
+    reason: S,
+) -> HttpResponse
 where
     S: ToString,
 {
@@ -102,7 +108,13 @@ where
 /// # 戻り値
 /// 一致する場合は`true`を返す。
 ///
-pub(crate) fn if_none_match_matches(req: &actix_web::HttpRequest, etag: &str) -> bool {
+pub(crate) fn if_none_match_matches(
+    req: &actix_web::HttpRequest,
+    etag: &str,
+) -> bool {
+    /*
+     * ヘッダ値の取得
+     */
     let raw = match req.headers().get(header::IF_NONE_MATCH) {
         Some(value) => value,
         None => return false,
@@ -113,6 +125,9 @@ pub(crate) fn if_none_match_matches(req: &actix_web::HttpRequest, etag: &str) ->
         Err(_) => return false,
     };
 
+    /*
+     * ETag候補との照合
+     */
     raw.split(',').map(|part| part.trim()).any(|candidate| {
         candidate == "*"
             || candidate == etag
@@ -138,7 +153,9 @@ pub(crate) struct AuthUser {
 /// # 戻り値
 /// 検証に成功した場合は`Ok(())`を返す。
 ///
-pub(crate) fn validate_asset_file_name(file_name: &str) -> Result<(), &'static str> {
+pub(crate) fn validate_asset_file_name(
+    file_name: &str,
+) -> Result<(), &'static str> {
     if file_name.is_empty() {
         return Err("file name is empty");
     }
@@ -219,7 +236,9 @@ pub(crate) async fn validate_basic_auth(
 
     let state = match data.read() {
         Ok(state) => state,
-        Err(_) => return Err((ErrorInternalServerError("state lock failed"), req)),
+        Err(_) => {
+            return Err((ErrorInternalServerError("state lock failed"), req));
+        }
     };
     let ok = match state.db().verify_user(&username, &password) {
         Ok(ok) => ok,
@@ -238,12 +257,20 @@ pub(crate) async fn validate_basic_auth(
 ///
 /// REST APIエンドポイントの生成
 ///
-pub(crate) fn create_api_scope(payload_limit: usize) -> impl HttpServiceFactory {
+pub(crate) fn create_api_scope(
+    payload_limit: usize,
+) -> impl HttpServiceFactory {
+    /*
+     * APIスコープの初期設定
+     */
     web::scope("/api")
         .app_data(Config::default().realm("LuWiki REST API"))
         .wrap(actix_web_httpauth::middleware::HttpAuthentication::basic(
             validate_basic_auth,
         ))
+        /*
+         * 共通・ページ系エンドポイント
+         */
         .route("/hello", web::get().to(hello::get))
         .route("/pages", web::post().to(pages::post))
         .route("/pages", web::get().to(pages::list::get))
@@ -275,6 +302,9 @@ pub(crate) fn create_api_scope(payload_limit: usize) -> impl HttpServiceFactory 
             web::delete().to(pages::lock::delete),
         )
         .route("/pages/{page_id}", web::delete().to(pages::delete::delete))
+        /*
+         * アセット系エンドポイント
+         */
         .service(
             web::resource("/assets")
                 .app_data(web::PayloadConfig::new(payload_limit))
@@ -287,5 +317,8 @@ pub(crate) fn create_api_scope(payload_limit: usize) -> impl HttpServiceFactory 
             "/assets/{asset_id}",
             web::delete().to(assets::delete::delete),
         )
+        /*
+         * ユーザ系エンドポイント
+         */
         .route("/users/me", web::get().to(users::me::get))
 }

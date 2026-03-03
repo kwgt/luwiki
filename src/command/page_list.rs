@@ -41,11 +41,23 @@ impl PageListCommandContext {
     }
 }
 
-// トレイトCommandContextの実装
 impl CommandContext for PageListCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ページ一覧の出力に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 一覧取得とソート
+         */
         let mut pages = self.manager.list_pages()?;
         sort_pages(&mut pages, self.sort_mode, self.reverse_sort);
+
+        /*
+         * 整形結果の出力
+         */
         println!("{}", format_page_table(&pages, self.long_info));
         Ok(())
     }
@@ -59,13 +71,24 @@ impl CommandContext for PageListCommandContext {
 /// * `sort_mode` - ソートモード
 /// * `reverse_sort` - 逆順ソートの有無
 ///
-fn sort_pages(pages: &mut [PageListEntry], sort_mode: PageListSortMode, reverse_sort: bool) {
+fn sort_pages(
+    pages: &mut [PageListEntry],
+    sort_mode: PageListSortMode,
+    reverse_sort: bool,
+) {
+    /*
+     * ソートキーに応じた比較
+     */
     pages.sort_by(|left, right| {
         let ord = match sort_mode {
             PageListSortMode::Default => left.id().cmp(&right.id()),
-            PageListSortMode::UserName => left.user_name().cmp(&right.user_name()),
+            PageListSortMode::UserName => {
+                left.user_name().cmp(&right.user_name())
+            }
             PageListSortMode::PagePath => left.path().cmp(&right.path()),
-            PageListSortMode::LastUpdate => left.timestamp().cmp(&right.timestamp()),
+            PageListSortMode::LastUpdate => {
+                left.timestamp().cmp(&right.timestamp())
+            }
         };
 
         if reverse_sort { ord.reverse() } else { ord }
@@ -96,7 +119,8 @@ fn format_page_table(pages: &[PageListEntry], long_info: bool) -> String {
                 ("***".to_string(), "***".to_string(), "***".to_string())
             } else {
                 (
-                    page.timestamp().to_rfc3339_opts(SecondsFormat::Secs, true),
+                    page.timestamp()
+                        .to_rfc3339_opts(SecondsFormat::Secs, true),
                     page.user_name(),
                     page.latest_revision().to_string(),
                 )
@@ -158,6 +182,13 @@ fn format_page_table(pages: &[PageListEntry], long_info: bool) -> String {
 
 ///
 /// 状態表示の文字列を返す
+///
+/// # 引数
+/// * `page` - ページ情報
+///
+/// # 戻り値
+/// 状態表示の文字列を返す。
+///
 fn state_mark(page: &PageListEntry) -> String {
     if page.deleted() {
         "D".to_string()
@@ -170,6 +201,15 @@ fn state_mark(page: &PageListEntry) -> String {
     }
 }
 
+///
+/// ページパス表示文字列を生成
+///
+/// # 引数
+/// * `page` - ページ情報
+///
+/// # 戻り値
+/// 表示用のページパス文字列を返す。
+///
 fn format_page_path(page: &PageListEntry) -> String {
     let path = page.path();
     if page.deleted() {
@@ -192,9 +232,25 @@ pub(crate) fn build_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::types::PageId;
     use chrono::{Local, TimeZone};
+    use crate::database::types::PageId;
 
+    ///
+    /// テスト用ページ情報を生成
+    ///
+    /// # 引数
+    /// * `id` - ページID
+    /// * `ts` - タイムスタンプ
+    /// * `user` - ユーザ名
+    /// * `path` - ページパス
+    /// * `rev` - 最新リビジョン番号
+    /// * `deleted` - 削除済みフラグ
+    /// * `draft` - ドラフトフラグ
+    /// * `locked` - ロックフラグ
+    ///
+    /// # 戻り値
+    /// テスト用のページ一覧エントリを返す。
+    ///
     fn build_page(
         id: &str,
         ts: i64,
@@ -218,6 +274,12 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// パスソート時にページパス順で整列されることを確認
+    ///
+    /// # 注記
+    /// 異なるページパスを持つ2件を用意し、`PagePath`ソート後の順序を検証する。
+    ///
     fn sort_pages_by_path() {
         let mut pages = vec![
             build_page(
@@ -248,6 +310,12 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 長形式テーブルのヘッダ列が出力されることを確認
+    ///
+    /// # 注記
+    /// 1件のページ一覧を長形式で整形し、主要ヘッダ名の存在を検証する。
+    ///
     fn format_page_table_has_header() {
         let pages = vec![build_page(
             "01ARZ3NDEKTSV4RRFFQ69G5FA0",
@@ -270,6 +338,12 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 短形式テーブルのヘッダ列が出力されることを確認
+    ///
+    /// # 注記
+    /// 1件のページ一覧を短形式で整形し、必要列のみが出力されることを検証する。
+    ///
     fn format_page_table_has_short_header() {
         let pages = vec![build_page(
             "01ARZ3NDEKTSV4RRFFQ69G5FA0",
@@ -290,6 +364,12 @@ mod tests {
     }
 
     #[test]
+    ///
+    /// 削除済みページの状態記号が表示されることを確認
+    ///
+    /// # 注記
+    /// 削除済みと通常ページを整形し、各行頭の状態記号を検証する。
+    ///
     fn format_page_table_marks_deleted() {
         let pages = vec![
             build_page(

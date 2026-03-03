@@ -10,7 +10,7 @@
 
 use std::fs;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use mime_guess::MimeGuess;
 
 use super::CommandContext;
@@ -47,9 +47,17 @@ impl AssetAddCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for AssetAddCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// アセット追加に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 入力ファイルの検証
+         */
         let metadata = fs::metadata(&self.file_path)?;
         if metadata.len() > self.asset_limit_size {
             return Err(anyhow!("asset size exceeds limit"));
@@ -64,6 +72,9 @@ impl CommandContext for AssetAddCommandContext {
             return Err(anyhow!("invalid file name: {}", message));
         }
 
+        /*
+         * 追加先ページの解決
+         */
         let page_id = if let Ok(page_id) = PageId::from_string(&self.target) {
             page_id
         } else {
@@ -75,6 +86,9 @@ impl CommandContext for AssetAddCommandContext {
                 .ok_or_else(|| anyhow!(DbError::PageNotFound))?
         };
 
+        /*
+         * MIMEタイプとデータの準備
+         */
         let mime = if let Some(value) = &self.mime_type {
             value.clone()
         } else {
@@ -85,10 +99,17 @@ impl CommandContext for AssetAddCommandContext {
         };
 
         let data = fs::read(&self.file_path)?;
-        let asset_id =
-            self.manager
-                .create_asset(&page_id, file_name, &mime, &self.user_name, &data)?;
+        let asset_id = self.manager.create_asset(
+            &page_id,
+            file_name,
+            &mime,
+            &self.user_name,
+            &data,
+        )?;
 
+        /*
+         * 実行結果の出力
+         */
         println!("{}", asset_id.to_string());
         Ok(())
     }

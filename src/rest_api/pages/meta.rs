@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::SecondsFormat;
 use serde::Deserialize;
@@ -53,7 +53,9 @@ pub async fn get(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<GetMetaQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<GetMetaQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -256,6 +258,15 @@ pub async fn get(
         .body(Value::Object(body).to_string()))
 }
 
+///
+/// ページパス情報オブジェクトを構築する
+///
+/// # 引数
+/// * `page_index` - ページインデックス
+///
+/// # 戻り値
+/// パス情報のJSON値
+///
 fn build_path_info(page_index: &PageIndex) -> Value {
     let kind = if page_index.deleted() {
         "last_deleted"

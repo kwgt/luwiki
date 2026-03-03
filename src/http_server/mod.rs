@@ -40,6 +40,15 @@ use crate::rest_api;
 use self::app_state::AppState;
 use self::logger::AccessLogger;
 
+///
+/// ペイロード超過時のエラーレスポンスを生成する
+///
+/// # 引数
+/// * `res` - 元のサービスレスポンス
+///
+/// # 戻り値
+/// エラーハンドラのレスポンス
+///
 fn payload_too_large_handler<B>(
     res: ServiceResponse<B>,
 ) -> actix_web::Result<ErrorHandlerResponse<B>> {
@@ -56,6 +65,29 @@ fn payload_too_large_handler<B>(
     )))
 }
 
+///
+/// HTTPサーバを起動する
+///
+/// # 概要
+/// アプリケーション状態を初期化し、
+/// サーバと補助タスクを起動する。
+///
+/// # 引数
+/// * `addr` - バインド先アドレス
+/// * `port` - バインド先ポート番号
+/// * `manager` - データベースマネージャ
+/// * `frontend_config` - フロントエンド設定
+/// * `fts_config` - 全文検索設定
+/// * `template_root` - テンプレートルート
+/// * `wiki_title` - Wikiタイトル
+/// * `asset_limit_size` - アセット上限サイズ(バイト)
+/// * `use_tls` - TLSを使用する場合は`true`
+/// * `cert_path` - 証明書ファイルパス
+/// * `cert_is_explicit` - 証明書パスが明示指定なら`true`
+///
+/// # 戻り値
+/// 起動処理に成功した場合は`Ok(())`
+///
 pub(crate) fn run(
     addr: String,
     port: u16,
@@ -139,7 +171,14 @@ pub(crate) fn run(
 /// # 引数
 /// * `addr` - サーバーをバインドさせるアドレス
 /// * `port` - サーバーをバインドさせるポート番号
-/// * `manager` - データベースマネージャ
+/// * `state` - アプリケーション状態
+/// * `asset_limit_size` - アセット上限サイズ(バイト)
+/// * `use_tls` - TLSを利用する場合は`true`
+/// * `cert_path` - 証明書ファイルパス
+/// * `cert_is_explicit` - 証明書パスが明示指定なら`true`
+///
+/// # 戻り値
+/// 生成したHTTPサーバ
 ///
 fn create_server(
     addr: String,
@@ -150,6 +189,9 @@ fn create_server(
     cert_path: PathBuf,
     cert_is_explicit: bool,
 ) -> Result<Server> {
+    /*
+     * サーバ設定の構築
+     */
     let payload_limit = asset_limit_size as usize;
     let server = HttpServer::new(move || {
         App::new()
@@ -157,7 +199,10 @@ fn create_server(
             .wrap(AccessLogger::new())
             .wrap(
                 ErrorHandlers::new()
-                    .handler(StatusCode::PAYLOAD_TOO_LARGE, payload_too_large_handler),
+                    .handler(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        payload_too_large_handler,
+                    ),
             )
             // REST APIエンドポイント設定
             .app_data(state.clone())
@@ -180,6 +225,9 @@ fn create_server(
         //.servcie(...)
     });
 
+    /*
+     * バインド方式の選択
+     */
     let bind_addr = format!("{}:{}", addr, port);
     let server = if use_tls {
         let tls_config = tls::load_server_config(&cert_path, cert_is_explicit)?;
@@ -204,7 +252,8 @@ fn create_server(
 fn windows_event_fook(handle: ServerHandle) {
     let mut close = ctrl_close().expect("failed to install CLOSE handler");
     let mut logoff = ctrl_logoff().expect("failed to install LOGOFF handler");
-    let mut shutdown = ctrl_shutdown().expect("failed to install SHUTDOWN handler");
+    let mut shutdown =
+        ctrl_shutdown().expect("failed to install SHUTDOWN handler");
 
     tokio::spawn(async move {
         // どれか来たら終了
@@ -221,12 +270,27 @@ fn windows_event_fook(handle: ServerHandle) {
 ///
 /// ロック期限切れ監視タスク
 ///
+/// # 概要
+/// 一定間隔で期限切れロックの削除を実行する。
+///
+/// # 引数
+/// * `state` - アプリケーション状態
+///
+/// # 戻り値
+/// なし
+///
 async fn lock_cleanup_task(state: web::Data<Arc<RwLock<AppState>>>) {
+    /*
+     * 監視間隔の初期化
+     */
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {
         interval.tick().await;
 
+        /*
+         * 期限切れロックの削除
+         */
         let result = {
             let state = match state.read() {
                 Ok(state) => state,
@@ -238,6 +302,9 @@ async fn lock_cleanup_task(state: web::Data<Arc<RwLock<AppState>>>) {
             state.db().cleanup_expired_locks()
         };
 
+        /*
+         * エラーの記録
+         */
         if let Err(err) = result {
             warn!("lock cleanup failed: {}", err);
         }

@@ -10,12 +10,12 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::CommandContext;
 use crate::cmd_args::{Options, PageUndeleteOpts};
-use crate::database::DatabaseManager;
 use crate::database::types::PageId;
+use crate::database::DatabaseManager;
 use crate::fts::{self, FtsIndexConfig};
 
 ///
@@ -77,9 +77,17 @@ impl PageUndeleteCommandContext {
     }
 }
 
-// CommandContextの実装
 impl CommandContext for PageUndeleteCommandContext {
+    ///
+    /// サブコマンドを実行
+    ///
+    /// # 戻り値
+    /// ページ復帰に成功した場合は`Ok(())`を返す。
+    ///
     fn exec(&self) -> Result<()> {
+        /*
+         * 再帰指定に応じた復帰処理の振り分け
+         */
         if self.recursive {
             /*
              * 再帰復帰の実行
@@ -98,7 +106,10 @@ impl CommandContext for PageUndeleteCommandContext {
                 .get_page_index_by_id(&self.page_id)?
                 .ok_or_else(|| anyhow!("page not found"))?
                 .path();
-            let target_ids = fts::collect_page_ids_by_path_prefix(&self.manager, &base_path)?;
+            let target_ids = fts::collect_page_ids_by_path_prefix(
+                &self.manager,
+                &base_path,
+            )?;
 
             /*
              * インデックスの更新
@@ -111,7 +122,11 @@ impl CommandContext for PageUndeleteCommandContext {
              * 単体復帰の実行
              */
             self.manager
-                .undelete_page_by_id(&self.page_id, &self.restore_to, self.with_assets)?;
+                .undelete_page_by_id(
+                    &self.page_id,
+                    &self.restore_to,
+                    self.with_assets,
+                )?;
 
             /*
              * インデックスの更新

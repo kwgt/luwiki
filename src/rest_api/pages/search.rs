@@ -51,7 +51,9 @@ pub async fn get(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<SearchQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<SearchQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(
@@ -74,11 +76,17 @@ pub async fn get(
         Err(resp) => return Ok(resp),
     };
 
-    let with_deleted = match parse_bool_param("with_deleted", query.with_deleted.as_deref()) {
+    let with_deleted = match parse_bool_param(
+        "with_deleted",
+        query.with_deleted.as_deref(),
+    ) {
         Ok(value) => value,
         Err(resp) => return Ok(resp),
     };
-    let all_revision = match parse_bool_param("all_revision", query.all_revision.as_deref()) {
+    let all_revision = match parse_bool_param(
+        "all_revision",
+        query.all_revision.as_deref(),
+    ) {
         Ok(value) => value,
         Err(resp) => return Ok(resp),
     };
@@ -99,7 +107,8 @@ pub async fn get(
     /*
      * 検索の実行と結果の集約
      */
-    let mut merged: HashMap<(PageId, u64), fts::FtsSearchResult> = HashMap::new();
+    let mut merged: HashMap<(PageId, u64), fts::FtsSearchResult> =
+        HashMap::new();
     for target in targets {
         let results = match fts::search_index(
             state.fts_config(),
@@ -136,7 +145,11 @@ pub async fn get(
     let mut items = Vec::with_capacity(merged.len());
     for result in merged.into_values() {
         let page_id = result.page_id();
-        let (path, deleted) = match resolve_page_info(state.db(), &mut cache, &page_id) {
+        let (path, deleted) = match resolve_page_info(
+            state.db(),
+            &mut cache,
+            &page_id,
+        ) {
             Ok(info) => info,
             Err(resp) => return Ok(resp),
         };
@@ -154,9 +167,13 @@ pub async fn get(
         ));
     }
 
-    items.sort_by(|lhs, rhs| rhs.0.partial_cmp(&lhs.0).unwrap_or(Ordering::Equal));
+    items.sort_by(|lhs, rhs| {
+        rhs.0.partial_cmp(&lhs.0).unwrap_or(Ordering::Equal)
+    });
 
-    let body = json!(items.into_iter().map(|(_, item)| item).collect::<Vec<_>>());
+    let body = json!(
+        items.into_iter().map(|(_, item)| item).collect::<Vec<_>>()
+    );
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")
@@ -172,7 +189,9 @@ pub async fn get(
 /// # 戻り値
 /// 検索対象一覧
 ///
-fn parse_target_param(raw: Option<&str>) -> Result<Vec<FtsSearchTarget>, HttpResponse> {
+fn parse_target_param(
+    raw: Option<&str>,
+) -> Result<Vec<FtsSearchTarget>, HttpResponse> {
     if raw.is_none() {
         return Ok(vec![FtsSearchTarget::Body]);
     }
@@ -234,7 +253,10 @@ fn parse_target_param(raw: Option<&str>) -> Result<Vec<FtsSearchTarget>, HttpRes
 /// # 戻り値
 /// 解析結果
 ///
-fn parse_bool_param(name: &str, raw: Option<&str>) -> Result<bool, HttpResponse> {
+fn parse_bool_param(
+    name: &str,
+    raw: Option<&str>,
+) -> Result<bool, HttpResponse> {
     match raw {
         None => Ok(false),
         Some(value) => match value {

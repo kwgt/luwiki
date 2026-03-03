@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde_json::json;
 

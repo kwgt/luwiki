@@ -13,8 +13,14 @@ use std::pin::Pin;
 use std::time::Instant;
 
 use actix_web::body::{BodySize, MessageBody};
-use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
-use actix_web::http::{Version, header};
+use actix_web::dev::{
+    forward_ready,
+    Service,
+    ServiceRequest,
+    ServiceResponse,
+    Transform,
+};
+use actix_web::http::{header, Version};
 use actix_web::{Error, HttpMessage, HttpRequest};
 use log::info;
 
@@ -39,7 +45,8 @@ impl AccessLogger {
 
 impl<S, B> Transform<S, ServiceRequest> for AccessLogger
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>
+        + 'static,
     S::Future: 'static,
     B: MessageBody + 'static,
 {
@@ -49,6 +56,15 @@ where
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
+    ///
+    /// ミドルウェアインスタンスを生成する
+    ///
+    /// # 引数
+    /// * `service` - ラップ対象のサービス
+    ///
+    /// # 戻り値
+    /// 生成したミドルウェア
+    ///
     fn new_transform(&self, service: S) -> Self::Future {
         ready(Ok(AccessLoggerMiddleware { service }))
     }
@@ -63,16 +79,30 @@ pub(crate) struct AccessLoggerMiddleware<S> {
 
 impl<S, B> Service<ServiceRequest> for AccessLoggerMiddleware<S>
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>
+        + 'static,
     S::Future: 'static,
     B: MessageBody + 'static,
 {
     type Response = ServiceResponse<B>;
     type Error = Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'static>>;
+    type Future = Pin<
+        Box<
+            dyn Future<Output = Result<Self::Response, Self::Error>> + 'static,
+        >,
+    >;
 
     forward_ready!(service);
 
+    ///
+    /// リクエストを処理しアクセスログを出力する
+    ///
+    /// # 引数
+    /// * `req` - 処理対象のリクエスト
+    ///
+    /// # 戻り値
+    /// レスポンス
+    ///
     fn call(&self, req: ServiceRequest) -> Self::Future {
         /*
          * リクエスト処理時間の計測開始
@@ -110,7 +140,16 @@ where
 
             info!(
                 "{} {} \"{} {} {}\" {} {} \"{}\" \"{}\" {:.6}",
-                addr, user, method, path, version, status, size, referer, user_agent, elapsed
+                addr,
+                user,
+                method,
+                path,
+                version,
+                status,
+                size,
+                referer,
+                user_agent,
+                elapsed,
             );
 
             Ok(res)

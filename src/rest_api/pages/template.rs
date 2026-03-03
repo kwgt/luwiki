@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::http::{StatusCode, header};
+use actix_web::http::{header, StatusCode};
 use actix_web::{HttpResponse, web};
 use serde::Serialize;
 
@@ -100,7 +100,9 @@ fn extract_template_name(path: &str) -> String {
 /// 処理の流れは状態取得、テンプレート判定、
 /// ページ収集、レスポンス生成の順。
 ///
-pub async fn get(state: web::Data<Arc<RwLock<AppState>>>) -> actix_web::Result<HttpResponse> {
+pub async fn get(
+    state: web::Data<Arc<RwLock<AppState>>>,
+) -> actix_web::Result<HttpResponse> {
     /*
      * 共有状態取得
      */
@@ -162,5 +164,8 @@ pub async fn get(state: web::Data<Arc<RwLock<AppState>>>) -> actix_web::Result<H
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .insert_header((header::CACHE_CONTROL, "no-store"))
-        .body(serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())))
+        .body(
+            serde_json::to_string(&entries)
+                .unwrap_or_else(|_| "[]".to_string()),
+        ))
 }

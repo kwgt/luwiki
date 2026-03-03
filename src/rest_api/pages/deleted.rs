@@ -43,7 +43,9 @@ pub async fn get(
     /*
      * クエリ取得と検証
      */
-    let query = match web::Query::<DeletedQuery>::from_query(req.query_string()) {
+    let query = match web::Query::<DeletedQuery>::from_query(
+        req.query_string(),
+    ) {
         Ok(query) => query,
         Err(_) => {
             return Ok(resp_error_json(

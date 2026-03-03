@@ -8,7 +8,7 @@
 //! トランザクション内の共通処理を集約するモジュール
 //!
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
 use redb::{MultimapTable, ReadableMultimapTable, ReadableTable, Table};
 
@@ -17,8 +17,13 @@ use crate::database::types::{
 };
 
 use super::schema::{
-    ASSET_GROUP_TABLE, ASSET_INFO_TABLE, ASSET_LOOKUP_TABLE, DbError, PAGE_INDEX_TABLE,
-    PAGE_PATH_TABLE, is_root_path,
+    is_root_path,
+    ASSET_GROUP_TABLE,
+    ASSET_INFO_TABLE,
+    ASSET_LOOKUP_TABLE,
+    DbError,
+    PAGE_INDEX_TABLE,
+    PAGE_PATH_TABLE,
 };
 
 ///
@@ -47,6 +52,9 @@ pub(in crate::database) fn find_lock_by_page<T>(
 where
     T: ReadableTable<LockToken, LockInfo>,
 {
+    /*
+     * ロック情報の線形探索
+     */
     for entry in lock_table.iter()? {
         let (token, info) = entry?;
         let info = info.value();
@@ -150,6 +158,9 @@ pub(in crate::database) fn verify_page_lock_in_txn<'txn>(
     lock_table: &mut Table<'txn, LockToken, LockInfo>,
     now: &DateTime<Local>,
 ) -> Result<()> {
+    /*
+     * 既存ロックの検証
+     */
     if let Some(token) = index.lock_token() {
         let mut remove_lock = false;
         if let Some(info) = lock_table.get(token.clone())? {
@@ -162,6 +173,10 @@ pub(in crate::database) fn verify_page_lock_in_txn<'txn>(
         if remove_lock {
             lock_table.remove(token.clone())?;
         }
+
+        /*
+         * ページインデックス上のロック情報更新
+         */
         index.set_lock_token(None);
         index_table.insert(page_id.clone(), index.clone())?;
     }
@@ -223,7 +238,13 @@ pub(in crate::database) fn collect_recursive_page_ids_in_txn<'txn>(
             return Err(anyhow!("page already deleted"));
         }
 
-        verify_page_lock_in_txn(&page_id, &mut index, index_table, lock_table, &now)?;
+        verify_page_lock_in_txn(
+            &page_id,
+            &mut index,
+            index_table,
+            lock_table,
+            &now,
+        )?;
 
         targets.push(page_id);
     }
@@ -285,7 +306,13 @@ pub(in crate::database) fn collect_recursive_page_targets_in_txn<'txn>(
             return Err(anyhow!("page already deleted"));
         }
 
-        verify_page_lock_in_txn(&page_id, &mut index, index_table, lock_table, &now)?;
+        verify_page_lock_in_txn(
+            &page_id,
+            &mut index,
+            index_table,
+            lock_table,
+            &now,
+        )?;
 
         targets.push(RecursivePageTarget {
             page_id,
@@ -351,7 +378,13 @@ pub(in crate::database) fn collect_recursive_deleted_page_targets_in_txn<'txn>(
                 return Err(anyhow!("page not deleted"));
             }
 
-            verify_page_lock_in_txn(&page_id, &mut index, index_table, lock_table, &now)?;
+            verify_page_lock_in_txn(
+                &page_id,
+                &mut index,
+                index_table,
+                lock_table,
+                &now,
+            )?;
 
             targets.push(RecursivePageTarget {
                 page_id,
