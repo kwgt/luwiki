@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { RevisionRenameInfo } from '../api/pages';
 import { usePageView } from '../composables/usePageView';
 import { useUiSettings } from '../composables/useUiSettings';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
@@ -145,6 +146,28 @@ const canMovePage = computed(
     && !pageMeta.value?.page_info.deleted
     && (pagePath.value || '/') !== '/',
 );
+const pageMetaRenameInfo = computed<RevisionRenameInfo | null>(
+  () => pageMeta.value?.revision_info?.rename_info ?? null,
+);
+const pageMetaRenameLabel = computed(() => {
+  const renameInfo = pageMetaRenameInfo.value;
+  if (!renameInfo) {
+    return null;
+  }
+  if (renameInfo.kind === 'removed_by_migrate') {
+    return 'マイグレートにより失効';
+  }
+  return `${renameInfo.from ?? '旧パス不明'} → ${renameInfo.to}`;
+});
+const pageMetaRenameState = computed(() => {
+  const renameInfo = pageMetaRenameInfo.value;
+  if (!renameInfo) {
+    return null;
+  }
+  return renameInfo.kind === 'removed_by_migrate'
+    ? '失効した rename'
+    : '有効な rename';
+});
 const wikiTitle = getWikiTitle();
 
 function applySidePanelCollapsed(value: boolean): void {
@@ -1144,12 +1167,13 @@ watch(pageTitle, (value) => {
             <span class="text-base-content/60">ロック中</span>
             <div class="font-semibold">{{ pageMeta.page_info.locked ? 'はい' : 'いいえ' }}</div>
           </div>
-          <div v-if="pageMeta.revision_info?.rename_info">
+          <div v-if="pageMetaRenameInfo">
             <span class="text-base-content/60">リネーム</span>
             <div class="font-semibold">
-              {{ pageMeta.revision_info?.rename_info?.from ?? '-' }}
-              →
-              {{ pageMeta.revision_info?.rename_info?.to }}
+              {{ pageMetaRenameLabel }}
+            </div>
+            <div class="text-xs text-base-content/60">
+              状態: {{ pageMetaRenameState }}
             </div>
           </div>
         </div>

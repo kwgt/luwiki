@@ -5,6 +5,7 @@ import {
   fetchPageSource,
   rollbackPageRevision,
   type PageMetaResponse,
+  type RevisionRenameInfo,
 } from '../api/pages';
 import {
   extractTitle,
@@ -27,16 +28,11 @@ type RevisionScope = {
   oldest: number;
 };
 
-type RenameInfo = {
-  from?: string;
-  to: string;
-};
-
 type RevisionMeta = {
   revision: number;
   timestamp: string;
   username: string;
-  rename_info?: RenameInfo;
+  rename_info?: RevisionRenameInfo;
 };
 
 type SourceCache = Record<number, string>;
@@ -97,6 +93,18 @@ function renderPatch(patch: string): string {
       return `<span class="${className}">${escapeHtml(line)}</span>`;
     })
     .join('\n');
+}
+
+function formatRenameTransition(
+  renameInfo: RevisionRenameInfo,
+  arrow: string,
+): string {
+  if (renameInfo.kind === 'removed_by_migrate') {
+    return 'マイグレートにより失効したリネーム情報';
+  }
+
+  const from = renameInfo.from ?? '旧パス不明';
+  return `${from} ${arrow} ${renameInfo.to}`;
 }
 
 export function usePageRevision(diffMode: Ref<DiffMode>) {
@@ -291,9 +299,10 @@ export function usePageRevision(diffMode: Ref<DiffMode>) {
 
   function updateRenameTooltip(revision: number, meta: PageMetaResponse): void {
     const renameInfo = meta.revision_info?.rename_info;
-    const text = renameInfo
-      ? `${renameInfo.from ?? '-'} \u27a1 ${renameInfo.to}`
-      : '情報なし';
+    let text = '情報なし';
+    if (renameInfo) {
+      text = formatRenameTransition(renameInfo, '\u27a1');
+    }
     renameTooltipMap.value = {
       ...renameTooltipMap.value,
       [revision]: {
@@ -484,6 +493,7 @@ export function usePageRevision(diffMode: Ref<DiffMode>) {
     isRenameRevision,
     preloadRenameMeta,
     getRenameTooltip,
+    formatRenameTransition,
     preloadRevisionMeta,
     hasRevisionMeta,
     getRevisionUsername,

@@ -580,25 +580,41 @@ properties:
 
       rename_info:
         description: >-
-          リネーム情報が格納される(リネームが行われたリビジョンにのみ格納される)
+          リネーム情報が格納される。
+          通常リネーム時は `kind="active"` と `from` / `to` / `link_refs` を含み、
+          migrate により失効した場合は `kind="removed_by_migrate"` のみを含む。
         type: "object"
         properties:
+          kind:
+            description: >-
+              リネーム情報の種別。通常リネーム時は `active`、
+              migrate により失効した場合は `removed_by_migrate`。
+            type: "string"
+
           from:
             description: >-
-              変更前のページパス
+              変更前のページパス。
+              `kind="active"` の場合に格納される。
             type: "string"
 
           to:
             description: >-
-              変更後のページパス
+              変更後のページパス。
+              `kind="active"` の場合に格納される。
             type: "string"
 
           link_refs:
             description: >-
               リネーム直前のリンク解決状態(ページ中に現れる正規化済みリンク先パ
               スをキーとしたページIDへのインデックスを検索するためのマップ)。
+              `kind="active"` の場合に格納される。
             type: "object"
 ```
+
+#### 注記
+  - `rename_info` は object のまま `kind` を追加するため、通常リネームのみを扱う既存クライアントは
+    `from` / `to` の参照を継続できる
+  - `kind="removed_by_migrate"` は `from` / `to` を持たないため、この状態を表示するクライアント側対応が別途必要
 
 リクエストに失敗したときは以下のステータスが返される。
 

@@ -6,7 +6,7 @@
 ```text
 ローカル運用向けWikiシステム
 
-Usage: luwiki.exe [OPTIONS] [COMMAND]
+Usage: luwiki [OPTIONS] [COMMAND]
 
 Commands:
   run       サーバの起動
@@ -15,6 +15,8 @@ Commands:
   lock      ロック管理コマンド一覧の表示
   asset     アセット管理コマンド一覧の表示
   fts       全文検索管理コマンド一覧の表示
+  export    バックアップ／マイグレート用データのエクスポート
+  import    エクスポートデータのインポート
   commands  サブコマンド一覧の表示
   help-all  全サブコマンドのヘルプ出力
   help      Print this message or the help of the given subcommand(s)
@@ -91,7 +93,7 @@ Options:
       - [X] Wiki名の表示名設定
       - [X] アセットアップロードの上限サイズ指定
       - [ ] アイコン設定
-  - [ ] バックアップ(インポート／エクスポート)機能の実装
+  - [x] バックアップ(インポート／エクスポート)機能の実装
   - Markdown追加機能
       - [x] Github風チェックボックス
       - [x] Mermaid対応 (Mermaid.js組み込み)
@@ -103,6 +105,8 @@ Options:
       - [x] 単純リンク生成
       - [x] アセットのコードブロック展開マクロ
       - [x] ページ名展開
+  - [ ] Bearer認証のサポート
+  - [ ] MCPサーバ機能
 
 ## ライセンス
 このソフトウェアは[MITライセンス](https://opensource.org/licenses/MIT)の条件下でオープンソースとして利用可能です。

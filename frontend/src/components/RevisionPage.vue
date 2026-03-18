@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { RevisionRenameInfo } from '../api/pages';
 import { usePageRevision } from '../composables/usePageRevision';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
@@ -43,6 +44,7 @@ const {
   isRenameRevision,
   preloadRenameMeta,
   getRenameTooltip,
+  formatRenameTransition,
   preloadRevisionMeta,
   hasRevisionMeta,
   getRevisionUsername,
@@ -144,6 +146,26 @@ const diffHeaderLabel = computed(() => {
   const sorted = [...selectedRevisions.value].sort((a, b) => a - b);
   return `Rev ${sorted[0]} → Rev ${sorted[sorted.length - 1]}`;
 });
+const selectedRevisionRenameInfo = computed<RevisionRenameInfo | null>(
+  () => selectedRevisionInfo.value?.rename_info ?? null,
+);
+const selectedRevisionRenameLabel = computed(() => {
+  const renameInfo = selectedRevisionRenameInfo.value;
+  if (!renameInfo) {
+    return 'なし';
+  }
+  return formatRenameTransition(renameInfo, '→');
+});
+const selectedRevisionRenameState = computed(() => {
+  const renameInfo = selectedRevisionRenameInfo.value;
+  if (!renameInfo) {
+    return 'なし';
+  }
+  return renameInfo.kind === 'removed_by_migrate'
+    ? '失効した rename'
+    : '有効な rename';
+});
+const showRevisionDebugMeta = import.meta.env.DEV || import.meta.env.MODE === 'debug';
 const wikiTitle = getWikiTitle();
 
 function applySidePanelCollapsed(value: boolean): void {
@@ -404,6 +426,14 @@ watch(pageTitle, (value) => {
             </div>
             <div class="mt-2 text-xs text-base-content/60">
               <div>page_id: {{ pageId }}</div>
+              <template
+                v-if="showRevisionDebugMeta && !isRangeSelection && selectedRevisionInfo"
+              >
+                <div>更新者: {{ selectedRevisionInfo.username }}</div>
+                <div>更新日時: {{ selectedRevisionInfo.timestamp }}</div>
+                <div>リネーム状態: {{ selectedRevisionRenameState }}</div>
+                <div>リネーム情報: {{ selectedRevisionRenameLabel }}</div>
+              </template>
             </div>
           </div>
 

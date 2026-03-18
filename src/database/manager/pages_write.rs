@@ -296,7 +296,7 @@ impl DatabaseManager {
                     revision,
                     source,
                     user_id,
-                    None,
+                    RenameInfo::none(),
                 );
 
                 index.set_latest(revision);
@@ -791,7 +791,7 @@ impl DatabaseManager {
                     revision,
                     latest_source.source(),
                     latest_source.user(),
-                    Some(rename_info),
+                    rename_info,
                 );
 
                 index.set_latest(revision);
@@ -1524,7 +1524,7 @@ impl DatabaseManager {
                 revision,
                 latest_source.source(),
                 latest_source.user(),
-                Some(rename_info),
+                rename_info,
             );
 
             /*

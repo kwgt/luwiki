@@ -32,6 +32,8 @@
 - 本プロジェクトに固有の制約事項については `PROJECT_CONSTRAINTS.md` に記載されています。
 - フロントエンドのUI仕様は `FRONTEND_UI_SPECS.md` に記載されています。
 - マクロ仕様は `MACRO_SPECS.md` に記載されています。
+- エクスポートデータの仕様は `EXPORT_DATA_SPEC.md` に記載されています。
+- エクスポート／インポートの設計内容は `EXPORT_IMPORT_DESIGN.md` に記載されています。
 
 ---
 
@@ -65,7 +67,7 @@ ChatGPT / Codex などの AI アシスタントを含む開発支援ツールの
 ---
 
 ## コーディング規約
-- Rustのコーディング規約は `CODING_RUST.md` に従ってください
+- Rustのコーディング規約は `CODING_RUST.md` に従ってください。`cargo fmt`による一括整形は禁止します。
 - TypeScriptのコーディング規約は `CODING_TYPESCRIPT.md` に従ってください
 - Vue3.jsのコーディング規約は `CODING_VUE3.md` に従ってください
 

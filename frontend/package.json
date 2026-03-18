@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build:html": "node scripts/build-html.mjs",
+    "build:debug": "npm run build:html && vite build --mode debug",
     "build": "npm run build:html && vite build",
     "preview": "vite preview"
   },

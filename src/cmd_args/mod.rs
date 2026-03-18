@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{
     asset_add, asset_delete, asset_list, asset_move_to, asset_purge,
-    asset_undelete, commands, fts_merge, fts_rebuild, fts_search, help_all,
+    asset_undelete, commands, export as export_command, fts_merge,
+    fts_rebuild, fts_search, help_all, import as import_command,
     lock_delete, lock_list, page_add, page_delete, page_list, page_move_to,
     page_undelete, page_unlock, run, user_add, user_delete, user_edit,
     user_list, CommandContext,
@@ -595,6 +596,8 @@ impl Options {
                         FtsSubCommand::Search(opts) => Some(opts),
                         _ => None,
                     },
+                    Some(Command::Export(_)) => None,
+                    Some(Command::Import(_)) => None,
                     _ => None,
                 };
 
@@ -665,7 +668,9 @@ impl Options {
                 Command::Fts(fts) => match &mut fts.subcommand {
                     FtsSubCommand::Search(opts) => Some(opts),
                     _ => None,
-                }
+                },
+                Command::Export(opts) => Some(opts),
+                Command::Import(opts) => Some(opts),
                 Command::Commands => None,
                 Command::HelpAll => None,
             };
@@ -751,11 +756,13 @@ impl Options {
                     AssetSubCommand::Purge(opts) => Some(opts),
                     AssetSubCommand::Undelete(opts) => Some(opts),
                     AssetSubCommand::MoveTo(opts) => Some(opts),
-                }
+                },
                 Command::Fts(fts) => match &fts.subcommand {
                     FtsSubCommand::Search(opts) => Some(opts),
                     _ => None,
-                }
+                },
+                Command::Export(opts) => Some(opts),
+                Command::Import(opts) => Some(opts),
                 Command::Commands => None,
                 Command::HelpAll => None,
             };
@@ -845,6 +852,12 @@ impl Options {
                     fts_search::build_context(self, opts)
                 }
             },
+            Some(Command::Export(opts)) => {
+                export_command::build_context(self, opts)
+            }
+            Some(Command::Import(opts)) => {
+                import_command::build_context(self, opts)
+            }
             Some(Command::Commands) => commands::build_context(self),
             Some(Command::HelpAll) => help_all::build_context(self),
             None => Err(anyhow!("command not specified")),
@@ -878,8 +891,16 @@ enum Command {
     Asset(AssetCommand),
 
     /// 全文検索管理コマンド一覧の表示
-    #[command(name = "fts", alias = "i", alias = "index")]
+    #[command(name = "fts", alias = "f", alias = "index")]
     Fts(FtsCommand),
+
+    /// バックアップ／マイグレート用データのエクスポート
+    #[command(name = "export", alias = "e")]
+    Export(ExportOpts),
+
+    /// エクスポートデータのインポート
+    #[command(name = "import", alias = "i")]
+    Import(ImportOpts),
 
     /// サブコマンド一覧の表示
     #[command(name = "commands")]
@@ -937,6 +958,223 @@ pub(crate) struct AssetCommand {
 pub(crate) struct FtsCommand {
     #[command(subcommand)]
     subcommand: FtsSubCommand,
+}
+
+///
+/// サブコマンドexportのオプション
+///
+#[derive(Clone, Args, Debug)]
+pub(crate) struct ExportOpts {
+    /// migrate export 対象のサブツリー
+    #[arg(short = 's', long = "subtree", value_name = "PREFIX")]
+    subtree: Option<String>,
+
+    /// リハーサルモード
+    #[arg(short = 'd', long = "dry-run")]
+    dry_run: bool,
+
+    /// ZIP パスワード
+    #[arg(short = 'p', long = "password", value_name = "PASSWORD")]
+    password: Option<String>,
+
+    /// 確認プロンプトを省略
+    #[arg(short = 'y', long = "yes")]
+    yes: bool,
+
+    /// strict-mode
+    #[arg(short = 'S', long = "strict-mode")]
+    strict_mode: bool,
+
+    /// 出力先 ZIP パス、"-" は標準出力
+    #[arg()]
+    output: String,
+}
+
+impl ExportOpts {
+    ///
+    /// サブツリー指定へのアクセサ
+    ///
+    pub(crate) fn subtree(&self) -> Option<String> {
+        self.subtree.clone()
+    }
+
+    ///
+    /// dry-run 指定へのアクセサ
+    ///
+    pub(crate) fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    ///
+    /// パスワード指定へのアクセサ
+    ///
+    pub(crate) fn password(&self) -> Option<String> {
+        self.password.clone()
+    }
+
+    ///
+    /// 確認省略指定へのアクセサ
+    ///
+    pub(crate) fn is_yes(&self) -> bool {
+        self.yes
+    }
+
+    ///
+    /// strict-mode 指定へのアクセサ
+    ///
+    pub(crate) fn is_strict_mode(&self) -> bool {
+        self.strict_mode
+    }
+
+    ///
+    /// 出力先へのアクセサ
+    ///
+    pub(crate) fn output(&self) -> String {
+        self.output.clone()
+    }
+}
+
+impl ShowOptions for ExportOpts {
+    fn show_options(&self) {
+        println!("export command options");
+        println!(
+            "   subtree:     {}",
+            self.subtree.as_deref().unwrap_or("(none)")
+        );
+        println!("   dry_run:     {}", self.is_dry_run());
+        println!("   password:    {}", self.password.is_some());
+        println!("   yes:         {}", self.is_yes());
+        println!("   strict_mode: {}", self.is_strict_mode());
+        println!("   output:      {}", self.output());
+    }
+}
+
+///
+/// サブコマンドimportのオプション
+///
+#[derive(Clone, Args, Debug)]
+pub(crate) struct ImportOpts {
+    /// migrate import 先のプレフィクス
+    #[arg(short = 'm', long = "migrate", value_name = "PREFIX")]
+    migrate: Option<String>,
+
+    /// ユーザマッピング
+    #[arg(short = 'u', long = "user-map", value_name = "MAPPING")]
+    user_map: Vec<String>,
+
+    /// 編集者一覧のみを表示
+    #[arg(short = 'l', long = "user-list")]
+    user_list: bool,
+
+    /// リハーサルモード
+    #[arg(short = 'd', long = "dry-run")]
+    dry_run: bool,
+
+    /// 破損リンクを about:invalid へ置換
+    #[arg(short = 'f', long = "fix-broken-link")]
+    fix_broken_link: bool,
+
+    /// 確認プロンプトを省略
+    #[arg(short = 'y', long = "yes")]
+    yes: bool,
+
+    /// ZIP パスワード
+    #[arg(short = 'p', long = "password", value_name = "PASSWORD")]
+    password: Option<String>,
+
+    /// strict-mode
+    #[arg(short = 'S', long = "strict-mode")]
+    strict_mode: bool,
+
+    /// 入力 ZIP パス、"-" は標準入力
+    #[arg()]
+    input: String,
+}
+
+impl ImportOpts {
+    ///
+    /// migrate import 先へのアクセサ
+    ///
+    pub(crate) fn migrate(&self) -> Option<String> {
+        self.migrate.clone()
+    }
+
+    ///
+    /// ユーザマッピングへのアクセサ
+    ///
+    pub(crate) fn user_map(&self) -> Vec<String> {
+        self.user_map.clone()
+    }
+
+    ///
+    /// ユーザ一覧表示指定へのアクセサ
+    ///
+    pub(crate) fn is_user_list(&self) -> bool {
+        self.user_list
+    }
+
+    ///
+    /// dry-run 指定へのアクセサ
+    ///
+    pub(crate) fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    ///
+    /// 破損リンク修正指定へのアクセサ
+    ///
+    pub(crate) fn is_fix_broken_link(&self) -> bool {
+        self.fix_broken_link
+    }
+
+    ///
+    /// 確認省略指定へのアクセサ
+    ///
+    pub(crate) fn is_yes(&self) -> bool {
+        self.yes
+    }
+
+    ///
+    /// パスワード指定へのアクセサ
+    ///
+    pub(crate) fn password(&self) -> Option<String> {
+        self.password.clone()
+    }
+
+    ///
+    /// strict-mode 指定へのアクセサ
+    ///
+    pub(crate) fn is_strict_mode(&self) -> bool {
+        self.strict_mode
+    }
+
+    ///
+    /// 入力元へのアクセサ
+    ///
+    pub(crate) fn input(&self) -> String {
+        self.input.clone()
+    }
+}
+
+impl ShowOptions for ImportOpts {
+    fn show_options(&self) {
+        println!("import command options");
+        println!(
+            "   migrate:         {}",
+            self.migrate.as_deref().unwrap_or("(none)")
+        );
+        println!("   user_map:        {:?}", self.user_map());
+        println!("   user_list:       {}", self.is_user_list());
+        println!("   dry_run:         {}", self.is_dry_run());
+        println!(
+            "   fix_broken_link: {}",
+            self.is_fix_broken_link()
+        );
+        println!("   yes:             {}", self.is_yes());
+        println!("   password:        {}", self.password.is_some());
+        println!("   strict_mode:     {}", self.is_strict_mode());
+        println!("   input:           {}", self.input());
+    }
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -1605,6 +1843,70 @@ impl Validate for AssetMoveToOpts {
 // Validateトレイトの実装
 impl Validate for LockListOpts {
     fn validate(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// Validateトレイトの実装
+impl Validate for ExportOpts {
+    fn validate(&mut self) -> Result<()> {
+        if self.output.trim().is_empty() {
+            return Err(anyhow!("output path is empty"));
+        }
+
+        if let Some(subtree) = self.subtree.as_deref() {
+            if let Err(message) = validate_page_path(subtree) {
+                return Err(anyhow!("invalid page path: {}", message));
+            }
+
+            if subtree == "/" {
+                return Err(anyhow!("--subtree / is not allowed"));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// Validateトレイトの実装
+impl Validate for ImportOpts {
+    fn validate(&mut self) -> Result<()> {
+        if self.input.trim().is_empty() {
+            return Err(anyhow!("input path is empty"));
+        }
+
+        if let Some(prefix) = self.migrate.as_deref() {
+            if let Err(message) = validate_page_path(prefix) {
+                return Err(anyhow!("invalid page path: {}", message));
+            }
+        }
+
+        if self.fix_broken_link && self.migrate.is_none() {
+            return Err(anyhow!(
+                "--fix-broken-link requires --migrate"
+            ));
+        }
+
+        for mapping in &self.user_map {
+            if mapping.trim().is_empty() {
+                return Err(anyhow!("user mapping is empty"));
+            }
+
+            let Some((src, dst)) = mapping.split_once('=') else {
+                return Err(anyhow!(
+                    "invalid user mapping: {}",
+                    mapping
+                ));
+            };
+
+            if src.trim().is_empty() || dst.trim().is_empty() {
+                return Err(anyhow!(
+                    "invalid user mapping: {}",
+                    mapping
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -3261,5 +3563,120 @@ mod tests {
             100 * 1024 * 1024,
         );
         assert!(parse_asset_limit_size("101M").is_err());
+    }
+
+    #[test]
+    fn parse_export_command_options() {
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "export",
+            "--subtree",
+            "/docs",
+            "--dry-run",
+            "--password",
+            "secret",
+            "--yes",
+            "--strict-mode",
+            "out.zip",
+        ])
+        .expect("parse failed");
+
+        opts.validate().expect("validate failed");
+        let export_opts = match opts.command {
+            Some(Command::Export(export_opts)) => export_opts,
+            _ => panic!("export options missing"),
+        };
+
+        assert_eq!(export_opts.subtree(), Some("/docs".to_string()));
+        assert!(export_opts.is_dry_run());
+        assert_eq!(export_opts.password(), Some("secret".to_string()));
+        assert!(export_opts.is_yes());
+        assert!(export_opts.is_strict_mode());
+        assert_eq!(export_opts.output(), "out.zip".to_string());
+    }
+
+    #[test]
+    fn export_validate_rejects_root_subtree() {
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "export",
+            "--subtree",
+            "/",
+            "out.zip",
+        ])
+        .expect("parse failed");
+
+        let err = opts.validate().expect_err("root subtree must be rejected");
+        assert!(err.to_string().contains("--subtree /"));
+    }
+
+    #[test]
+    fn parse_import_command_options() {
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "import",
+            "--migrate",
+            "/dst",
+            "--user-map",
+            "alice=bob",
+            "--user-list",
+            "--dry-run",
+            "--fix-broken-link",
+            "--yes",
+            "--password",
+            "secret",
+            "--strict-mode",
+            "in.zip",
+        ])
+        .expect("parse failed");
+
+        opts.validate().expect("validate failed");
+        let import_opts = match opts.command {
+            Some(Command::Import(import_opts)) => import_opts,
+            _ => panic!("import options missing"),
+        };
+
+        assert_eq!(import_opts.migrate(), Some("/dst".to_string()));
+        assert_eq!(import_opts.user_map(), vec!["alice=bob".to_string()]);
+        assert!(import_opts.is_user_list());
+        assert!(import_opts.is_dry_run());
+        assert!(import_opts.is_fix_broken_link());
+        assert!(import_opts.is_yes());
+        assert_eq!(import_opts.password(), Some("secret".to_string()));
+        assert!(import_opts.is_strict_mode());
+        assert_eq!(import_opts.input(), "in.zip".to_string());
+    }
+
+    #[test]
+    fn import_validate_rejects_fix_broken_link_without_migrate() {
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "import",
+            "--fix-broken-link",
+            "in.zip",
+        ])
+        .expect("parse failed");
+
+        let err = opts.validate().expect_err(
+            "fix-broken-link without migrate must be rejected",
+        );
+        assert!(err.to_string().contains("--fix-broken-link requires --migrate"));
+    }
+
+    #[test]
+    fn import_validate_rejects_relative_migrate_prefix() {
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "import",
+            "--migrate",
+            "dst",
+            "in.zip",
+        ])
+        .expect("parse failed");
+
+        let err = opts
+            .validate()
+            .expect_err("relative migrate prefix must be rejected");
+        assert!(err.to_string().contains("invalid page path"));
     }
 }

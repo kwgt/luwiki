@@ -8,5 +8,6 @@
 #![allow(dead_code)]
 
 pub mod database;
+pub mod export_import;
 
 pub use database::page_source_exists_for_test;

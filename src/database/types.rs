@@ -299,6 +299,36 @@ impl PageIndex {
     }
 
     ///
+    /// import 用の通常ページ生成
+    ///
+    /// # 引数
+    /// * `id` - ページID
+    /// * `path` - ページパス
+    /// * `latest` - 最新リビジョン
+    /// * `earliest` - 最古リビジョン
+    /// * `rename_revisions` - path 確定リビジョン一覧
+    ///
+    /// # 戻り値
+    /// import 用に復元したページインデックスを返す。
+    ///
+    pub(crate) fn new_page_import(
+        id: PageId,
+        path: String,
+        latest: u64,
+        earliest: u64,
+        rename_revisions: Vec<u64>,
+    ) -> Self {
+        PageIndex::PageInfo(PageInfo {
+            id,
+            path_state: PagePathState::Current(path),
+            latest,
+            earliest,
+            lock_token: None,
+            rename_revisions,
+        })
+    }
+
+    ///
     /// ドラフトページの生成
     ///
     /// # 引数
@@ -723,8 +753,8 @@ pub(crate) struct PageSource {
     /// このリビジョンを作成したユーザ識別子
     user: UserId,
 
-    /// path が割り当て／変更されたリビジョンのみ Some
-    rename: Option<RenameInfo>,
+    /// path が割り当て／変更されたリビジョン情報
+    rename: RenameInfo,
 
     /// ページのソース(Markdown形式)
     source: String,
@@ -757,7 +787,7 @@ impl PageSource {
             instance_id: Some(Id::new()),
             timestamp: Local::now(),
             user,
-            rename: Some(rename),
+            rename,
             source,
         }
     }
@@ -778,12 +808,44 @@ impl PageSource {
         revision: u64,
         source: String,
         user: UserId,
-        rename: Option<RenameInfo>,
+        rename: RenameInfo,
     ) -> Self {
         Self {
             revision,
             instance_id: Some(Id::new()),
             timestamp: Local::now(),
+            user,
+            rename,
+            source,
+        }
+    }
+
+    ///
+    /// import 用のページソース生成
+    ///
+    /// # 引数
+    /// * `revision` - リビジョン番号
+    /// * `instance_id` - 実体識別用インスタンスID
+    /// * `timestamp` - 作成日時
+    /// * `user` - 編集者ユーザID
+    /// * `rename` - リネーム情報
+    /// * `source` - Markdown ソース
+    ///
+    /// # 戻り値
+    /// import 用に復元したページソースを返す。
+    ///
+    pub(crate) fn new_import(
+        revision: u64,
+        instance_id: Option<Id>,
+        timestamp: DateTime<Local>,
+        user: UserId,
+        rename: RenameInfo,
+        source: String,
+    ) -> Self {
+        Self {
+            revision,
+            instance_id,
+            timestamp,
             user,
             rename,
             source,
@@ -859,7 +921,7 @@ impl PageSource {
     /// # 戻り値
     /// リネーム情報を返す。
     ///
-    pub(crate) fn rename(&self) -> Option<RenameInfo> {
+    pub(crate) fn rename(&self) -> RenameInfo {
         self.rename.clone()
     }
 }
@@ -881,8 +943,14 @@ impl Value for PageSource {
     where
         Self: 'a,
     {
-        rmp_serde::from_slice::<Self>(data)
+        match rmp_serde::from_slice::<Self>(data) {
+            Ok(source) => source,
+            Err(_) => rmp_serde::from_slice::<page_source_v1::PageSourceV1>(
+                data,
+            )
             .expect("invalid MessagePack packed bytes")
+            .into_page_source(),
+        }
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
@@ -898,20 +966,34 @@ impl Value for PageSource {
 /// リネーム操作情報構造体
 ///
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct RenameInfo {
-    /// 旧パス（作成時は None 相当として扱う）
-    from: Option<String>,
+pub(crate) enum RenameInfo {
+    None,
+    Active {
+        /// 旧パス（作成時は None 相当として扱う）
+        from: Option<String>,
 
-    /// 新パス
-    to: String,
+        /// 新パス
+        to: String,
 
-    /// リネーム直前時点でのページ中リンク解決状態（1段分）
-    /// key: 正規化済み path
-    /// value: 解決された page_id（未作成等で解決できなかった場合 None）
-    link_refs: BTreeMap<String, Option<Id>>,
+        /// リネーム直前時点でのページ中リンク解決状態（1段分）
+        /// key: 正規化済み path
+        /// value: 解決された page_id（未作成等で解決できなかった場合 None）
+        link_refs: BTreeMap<String, Option<Id>>,
+    },
+    RemovedByMigrate,
 }
 
 impl RenameInfo {
+    ///
+    /// リネームなし情報の生成
+    ///
+    /// # 戻り値
+    /// 生成したリネームなし情報を返す。
+    ///
+    pub(crate) fn none() -> Self {
+        Self::None
+    }
+
     ///
     /// リネーム情報の生成
     ///
@@ -928,11 +1010,22 @@ impl RenameInfo {
         to: String,
         link_refs: BTreeMap<String, Option<Id>>,
     ) -> Self {
-        Self {
+        Self::Active {
             from,
             to,
             link_refs,
         }
+    }
+
+    ///
+    /// マイグレートにより失効したリネーム情報の生成
+    ///
+    /// # 戻り値
+    /// 生成した失効リネーム情報を返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn removed_by_migrate() -> Self {
+        Self::RemovedByMigrate
     }
 
     ///
@@ -942,7 +1035,10 @@ impl RenameInfo {
     /// 旧パスを返す。
     ///
     pub(crate) fn from(&self) -> Option<String> {
-        self.from.clone()
+        match self {
+            RenameInfo::Active { from, .. } => from.clone(),
+            RenameInfo::None | RenameInfo::RemovedByMigrate => None,
+        }
     }
 
     ///
@@ -951,8 +1047,11 @@ impl RenameInfo {
     /// # 戻り値
     /// 新パスを返す。
     ///
-    pub(crate) fn to(&self) -> String {
-        self.to.clone()
+    pub(crate) fn to(&self) -> Option<String> {
+        match self {
+            RenameInfo::Active { to, .. } => Some(to.clone()),
+            RenameInfo::None | RenameInfo::RemovedByMigrate => None,
+        }
     }
 
     ///
@@ -961,8 +1060,74 @@ impl RenameInfo {
     /// # 戻り値
     /// リンク解決情報を返す。
     ///
-    pub(crate) fn link_refs(&self) -> BTreeMap<String, Option<Id>> {
-        self.link_refs.clone()
+    pub(crate) fn link_refs(&self) -> Option<BTreeMap<String, Option<Id>>> {
+        match self {
+            RenameInfo::Active { link_refs, .. } => Some(link_refs.clone()),
+            RenameInfo::None | RenameInfo::RemovedByMigrate => None,
+        }
+    }
+
+    ///
+    /// 通常リネーム判定
+    ///
+    /// # 戻り値
+    /// 通常リネームの場合はtrueを返す。
+    ///
+    pub(crate) fn is_active(&self) -> bool {
+        matches!(self, RenameInfo::Active { .. })
+    }
+
+    ///
+    /// マイグレート失効判定
+    ///
+    /// # 戻り値
+    /// マイグレート失効の場合はtrueを返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn is_removed_by_migrate(&self) -> bool {
+        matches!(self, RenameInfo::RemovedByMigrate)
+    }
+}
+
+mod page_source_v1 {
+    use super::*;
+
+    #[derive(Deserialize)]
+    pub(super) struct PageSourceV1 {
+        revision: u64,
+        #[serde(default)]
+        instance_id: Option<Id>,
+        timestamp: DateTime<Local>,
+        user: UserId,
+        rename: Option<RenameInfoV1>,
+        source: String,
+    }
+
+    #[derive(Deserialize)]
+    struct RenameInfoV1 {
+        from: Option<String>,
+        to: String,
+        link_refs: BTreeMap<String, Option<Id>>,
+    }
+
+    impl PageSourceV1 {
+        pub(super) fn into_page_source(self) -> PageSource {
+            PageSource {
+                revision: self.revision,
+                instance_id: self.instance_id,
+                timestamp: self.timestamp,
+                user: self.user,
+                rename: match self.rename {
+                    Some(rename) => RenameInfo::new(
+                        rename.from,
+                        rename.to,
+                        rename.link_refs,
+                    ),
+                    None => RenameInfo::none(),
+                },
+                source: self.source,
+            }
+        }
     }
 }
 
@@ -1034,6 +1199,47 @@ impl AssetInfo {
             user,
             timestamp: Local::now(),
             deleted: false,
+        }
+    }
+
+    ///
+    /// import 用のアセット情報生成
+    ///
+    /// # 引数
+    /// * `id` - アセットID
+    /// * `instance_id` - 実体識別用インスタンスID
+    /// * `page_id` - 所属ページID
+    /// * `file_name` - ファイル名
+    /// * `mime` - MIME種別
+    /// * `size` - サイズ
+    /// * `user` - 登録ユーザID
+    /// * `timestamp` - 登録日時
+    /// * `deleted` - 削除済みフラグ
+    ///
+    /// # 戻り値
+    /// import 用に復元したアセット情報を返す。
+    ///
+    pub(crate) fn new_import(
+        id: AssetId,
+        instance_id: Option<Id>,
+        page_id: Option<PageId>,
+        file_name: String,
+        mime: String,
+        size: u64,
+        user: UserId,
+        timestamp: DateTime<Local>,
+        deleted: bool,
+    ) -> Self {
+        Self {
+            id,
+            instance_id,
+            page_id,
+            file_name,
+            mime,
+            size,
+            user,
+            timestamp,
+            deleted,
         }
     }
 
@@ -1289,6 +1495,38 @@ impl UserInfo {
     }
 
     ///
+    /// import 用のユーザ情報生成
+    ///
+    /// # 引数
+    /// * `id` - ユーザID
+    /// * `username` - ユーザ名
+    /// * `password` - ハッシュ済みパスワード
+    /// * `salt` - ソルト
+    /// * `display_name` - 表示名
+    /// * `timestamp` - 更新日時
+    ///
+    /// # 戻り値
+    /// import 用に復元したユーザ情報を返す。
+    ///
+    pub(crate) fn new_import(
+        id: UserId,
+        username: String,
+        password: String,
+        salt: [u8; 16],
+        display_name: String,
+        timestamp: DateTime<Local>,
+    ) -> Self {
+        Self {
+            id,
+            username,
+            password,
+            salt,
+            display_name,
+            timestamp,
+        }
+    }
+
+    ///
     /// ユーザIDへのアクセサ
     ///
     /// # 戻り値
@@ -1306,6 +1544,26 @@ impl UserInfo {
     ///
     pub(crate) fn username(&self) -> String {
         self.username.clone()
+    }
+
+    ///
+    /// ハッシュ化済みパスワードへのアクセサ
+    ///
+    /// # 戻り値
+    /// ハッシュ化済みパスワードを返す。
+    ///
+    pub(crate) fn password(&self) -> String {
+        self.password.clone()
+    }
+
+    ///
+    /// ソルトデータへのアクセサ
+    ///
+    /// # 戻り値
+    /// ソルトデータを返す。
+    ///
+    pub(crate) fn salt(&self) -> [u8; 16] {
+        self.salt
     }
 
     ///

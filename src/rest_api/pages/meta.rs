@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::super::resp_error_json;
-use crate::database::types::{PageId, PageIndex};
+use crate::database::types::{PageId, PageIndex, RenameInfo};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::CACHE_CONTROL_NO_STORE;
 
@@ -214,27 +214,19 @@ pub async fn get(
     revision_info.insert("timestamp".to_string(), json!(timestamp));
     revision_info.insert("username".to_string(), json!(user_name));
 
-    if let Some(rename) = page_source.rename() {
-        if let Some(from) = rename.from() {
-            let link_refs = match serde_json::to_value(rename.link_refs()) {
-                Ok(value) => value,
-                Err(_) => {
-                    return Ok(resp_error_json(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "link refs serialize failed",
-                    ));
-                }
-            };
-
-            revision_info.insert(
-                "rename_info".to_string(),
-                json!({
-                    "from": from,
-                    "to": rename.to(),
-                    "link_refs": link_refs,
-                }),
-            );
+    let rename = page_source.rename();
+    let rename_info = match build_rename_info(&rename) {
+        Ok(rename_info) => rename_info,
+        Err(_) => {
+            return Ok(resp_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "link refs serialize failed",
+            ));
         }
+    };
+
+    if let Some(rename_info) = rename_info {
+        revision_info.insert("rename_info".to_string(), rename_info);
     }
 
     let page_info = json!({
@@ -278,4 +270,106 @@ fn build_path_info(page_index: &PageIndex) -> Value {
         "kind": kind,
         "value": page_index.path(),
     })
+}
+
+///
+/// リネーム情報オブジェクトを構築する
+///
+/// # 引数
+/// * `rename` - リネーム情報
+///
+/// # 戻り値
+/// リネーム情報がある場合はJSON値を返す。
+///
+fn build_rename_info(rename: &RenameInfo) -> Result<Option<Value>, serde_json::Error> {
+    if rename.is_removed_by_migrate() {
+        return Ok(Some(json!({
+            "kind": "removed_by_migrate",
+        })));
+    }
+
+    if !rename.is_active() {
+        return Ok(None);
+    }
+
+    let Some(to) = rename.to() else {
+        return Ok(None);
+    };
+
+    let link_refs = serde_json::to_value(rename.link_refs().unwrap_or_default())?;
+    Ok(Some(json!({
+        "kind": "active",
+        "from": rename.from(),
+        "to": to,
+        "link_refs": link_refs,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::json;
+
+    use super::build_rename_info;
+    use crate::database::types::RenameInfo;
+
+    #[test]
+    fn build_rename_info_returns_active_payload() {
+        let rename = RenameInfo::new(
+            Some("/from".to_string()),
+            "/to".to_string(),
+            BTreeMap::from([("/ref".to_string(), None)]),
+        );
+
+        let value = build_rename_info(&rename)
+            .expect("build active rename info failed")
+            .expect("active rename info missing");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "active",
+                "from": "/from",
+                "to": "/to",
+                "link_refs": {
+                    "/ref": null,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn build_rename_info_returns_active_payload_without_from() {
+        let rename =
+            RenameInfo::new(None, "/to".to_string(), BTreeMap::new());
+
+        let value = build_rename_info(&rename)
+            .expect("build active rename info failed")
+            .expect("active rename info missing");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "active",
+                "from": null,
+                "to": "/to",
+                "link_refs": {},
+            })
+        );
+    }
+
+    #[test]
+    fn build_rename_info_returns_removed_by_migrate_payload() {
+        let value = build_rename_info(&RenameInfo::removed_by_migrate())
+            .expect("build removed rename info failed")
+            .expect("removed rename info missing");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "removed_by_migrate",
+            })
+        );
+    }
 }

@@ -20,10 +20,22 @@ export interface RevisionInfo {
   revision: number;
   timestamp: string;
   username: string;
-  rename_info?: {
-    from?: string;
-    to: string;
-  };
+  rename_info?: RevisionRenameInfo;
+}
+
+export type RevisionRenameInfo =
+  | ActiveRevisionRenameInfo
+  | RemovedByMigrateRevisionRenameInfo;
+
+export interface ActiveRevisionRenameInfo {
+  kind: 'active';
+  from: string | null;
+  to: string;
+  link_refs: Record<string, string | null>;
+}
+
+export interface RemovedByMigrateRevisionRenameInfo {
+  kind: 'removed_by_migrate';
 }
 
 export interface PageMetaResponse {

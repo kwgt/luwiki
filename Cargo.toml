@@ -1,6 +1,6 @@
 [package]
 name = "luwiki"
-version = "0.9.12"
+version = "0.9.13"
 edition = "2024"
 
 [dependencies]
@@ -37,6 +37,7 @@ webbrowser = "1.0.4"
 rust-embed = "8.5.0"
 chrono = { version = "0.4.42", features = ["serde"] }
 x509-parser = "0.16.0"
+zip = "8.2.0"
 
 [dev-dependencies]
 reqwest = { version = "0.11.27", features = ["blocking"] }

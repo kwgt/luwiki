@@ -209,6 +209,51 @@ fn get_page_meta_reflects_lock_state() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
+#[test]
+/// GET: 通常リネーム時に kind 付きの rename_info が返ることを確認する。
+fn get_page_meta_returns_active_rename_info() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/meta-rename", "meta body");
+
+    let response = client
+        .post(&format!("{}/{}/path", base_url, page_id))
+        .query(&[("rename_to", "/meta-renamed")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("rename page failed");
+    assert_eq!(response.status().as_u16(), 204);
+
+    let response = client
+        .get(&format!("{}/{}/meta", base_url, page_id))
+        .query(&[("rev", "2")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get renamed meta failed");
+    assert_eq!(response.status().as_u16(), 200);
+
+    let value: Value = serde_json::from_str(&response.text().expect("read meta body failed"))
+        .expect("parse renamed meta failed");
+    assert_eq!(value["revision_info"]["rename_info"]["kind"], "active");
+    assert_eq!(
+        value["revision_info"]["rename_info"]["from"],
+        "/meta-rename"
+    );
+    assert_eq!(
+        value["revision_info"]["rename_info"]["to"],
+        "/meta-renamed"
+    );
+    assert!(value["revision_info"]["rename_info"]["link_refs"].is_object());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
 ///
 /// テスト用ページを作成する。
 ///
