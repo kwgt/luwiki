@@ -8,6 +8,7 @@ mod common;
 
 use std::fs;
 
+use reqwest::header::AUTHORIZATION;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
@@ -257,6 +258,60 @@ fn put_page_source_creates_new_revision() {
         .expect("get rev=1 after put failed");
     assert_eq!(response.status().as_u16(), 200);
     assert_eq!(response.text().expect("read body failed"), "original body");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT: Bearer read は拒否され、write は更新できることを確認する。
+fn put_page_source_enforces_bearer_read_and_write_scopes() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let read_token = run_create_token(&db_path, &assets_dir, "read");
+    let write_token = run_create_token(&db_path, &assets_dir, "write");
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id =
+        create_page(&client, &base_url, "/put-bearer-scope", "original body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let response = client
+        .put(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", read_token))
+        .header("Content-Type", "text/markdown")
+        .body("read should fail".to_string())
+        .send()
+        .expect("put source with read bearer failed");
+    assert_eq!(response.status().as_u16(), 403);
+    assert_eq!(
+        response.text().expect("read forbidden body failed"),
+        r#"{"reason":"forbidden"}"#
+    );
+
+    let response = client
+        .put(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", write_token))
+        .header("Content-Type", "text/markdown")
+        .body("write should pass".to_string())
+        .send()
+        .expect("put source with write bearer failed");
+    assert_eq!(response.status().as_u16(), 204);
+
+    let response = client
+        .get(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get latest after bearer put failed");
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        response.text().expect("read updated body failed"),
+        "write should pass"
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

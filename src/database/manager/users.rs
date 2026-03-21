@@ -12,7 +12,12 @@ use anyhow::{anyhow, Result};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 
 use super::DatabaseManager;
-use crate::database::schema::{USER_ID_TABLE, USER_INFO_TABLE};
+use crate::database::schema::{
+    BEARER_TOKEN_ID_TABLE,
+    BEARER_TOKEN_TABLE,
+    USER_ID_TABLE,
+    USER_INFO_TABLE,
+};
 use crate::database::types::{UserId, UserInfo};
 
 impl DatabaseManager {
@@ -270,6 +275,31 @@ impl DatabaseManager {
                     return Err(anyhow!("user not found: {}", username));
                 }
             };
+
+            /*
+             * 関連する Bearerトークンを削除する
+             */
+            {
+                let mut token_table = txn.open_table(BEARER_TOKEN_TABLE)?;
+                let mut token_id_table = txn.open_table(BEARER_TOKEN_ID_TABLE)?;
+                let mut targets = Vec::new();
+
+                for entry in token_table.iter()? {
+                    let (token_hash, info) = entry?;
+                    let info = info.value();
+
+                    if info.user_id() != user_id {
+                        continue;
+                    }
+
+                    targets.push((token_hash.value(), info.token_id()));
+                }
+
+                for (token_hash, token_id) in targets {
+                    let _ = token_table.remove(token_hash)?;
+                    let _ = token_id_table.remove(token_id)?;
+                }
+            }
 
             let mut info_table = txn.open_table(USER_INFO_TABLE)?;
             let _ = info_table.remove(user_id)?;

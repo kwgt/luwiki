@@ -6,7 +6,42 @@
 ## 共通事項
 ### 認証
 
-`/api`配下のAPIはすべてBasic認証が必須である。
+`/api`配下のAPIはすべて認証必須である。
+
+認証方式として、`Authorization`ヘッダによる Basic 認証または Bearer 認証を受け付ける。
+
+- Basic 認証は主にブラウザUIからの利用を想定する
+- Bearer 認証は API クライアントおよび将来の MCP サーバ機能からの利用を想定する
+- Bearer 認証では、トークンに紐づくユーザを操作主体として扱う
+
+`Authorization`ヘッダの記述例は以下の通り。
+
+```text
+Authorization: Basic <credentials>
+Authorization: Bearer <token>
+```
+
+Bearer 認証が成功した場合、発行時または直近の期限延長時点から TTL の 1/2 以上が経過していれば、スライディング期限により有効期限を延長する。
+
+有効期限の延長が発生した場合、レスポンスヘッダ `X-Bearer-Expire` に更新後の有効期限（ISO8601, タイムゾーン無し）を設定する。延長が発生しなかった場合、および Basic 認証時は `X-Bearer-Expire` を返さない。
+
+### 認証失敗・認可失敗
+
+認証・認可に関するステータスコードの使い分けは以下の通り。
+
+- 401 Unauthorized
+  - `Authorization`ヘッダが存在しない
+  - Basic 認証の資格情報が不正
+  - Bearer トークンが存在しない、失効済み、期限切れ、または照合に失敗した
+  - 応答ヘッダ `WWW-Authenticate: Basic realm="LuWiki REST API"` を返す
+- 403 Forbidden
+  - 認証済みだが必要スコープを満たさない
+  - 認証済みだが操作条件を満たさない
+    - 例: ロック取得者と異なるユーザによる更新
+- 423 Locked
+  - ロック状態により操作自体が禁止される
+
+Bearer 認証と `X-Lock-Authentication` によるロック解除用トークンの確認は独立に判定する。Bearer 認証済みであっても、ロック対象操作では `X-Lock-Authentication` が別途必要な場合がある。Bearer 認証および Bearer スコープ確認を先に行い、これを満たさない場合はロック認証より前に 401 Unauthorized または 403 Forbidden を返す。
 
 ### エラー時のレスポンス
 リクエストに失敗した場合のレスポンスはJSONで要因を示す情報を返す。この情報は、メッセージ表示に用いることを前提とし、人間による可読性を優先したものとする。
@@ -70,6 +105,11 @@ properties:
 #### 概要
 ドラフトページの作成
 
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+
 #### クエリーパラメータ
   |名称|型|説明|必須|
   |:--|:--|:--|:--|
@@ -106,6 +146,8 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない
   | 400 Bad Request | `path`で指定されたパスのフォーマットが不正<br>リクエストボディが空ではない
   | 409 Conflict | `path`で指定されたページがすでに存在する
 
@@ -119,6 +161,11 @@ properties:
 ### `GET /api/pages?prefix={page_path}[&forward={page_path}][&rewind={page_path}][&limit={number}][&with_deleted={boolean}]`
 #### 概要
 ページ一覧の取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### クエリーパラメータ
   |名称|型|説明|必須|
@@ -215,6 +262,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `prefix`,`forward`,`rewind`で指定されたパスのフォーマットが不正<br>`forward`と`rewind`が同時に指定された
 
 #### 注記
@@ -233,6 +281,11 @@ properties:
 ### `GET /api/pages/deleted?path={page_path}`
 #### 概要
 削除済みページ候補の取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### クエリーパラメータ
   |名称|型|説明|必須|
@@ -258,6 +311,7 @@ items:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `path`で指定されたパスのフォーマットが不正
 
 #### 注記
@@ -267,6 +321,11 @@ items:
 
 <a id="get-template-pages"></a>
 ### `GET /api/pages/template`
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### レスポンス
 リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
@@ -300,6 +359,7 @@ items:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | テンプレート機能が無効化さている場合に返される
 
 #### 注記
@@ -310,6 +370,11 @@ items:
 #### 概要
 ページの検索
 英字を含む検索は大文字小文字を区別しない。
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### クエリーパラメータ
   |名称|型|説明|必須
@@ -387,6 +452,7 @@ maxItems: 100
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `target`で指定された対象リストが不正<br>exprで指定した検索式が不正
 
 #### 注記
@@ -399,6 +465,11 @@ maxItems: 100
 ### `GET /api/pages/{page_id}/source[?rev={revision}]`
 #### 概要
 ページソースの取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -423,6 +494,7 @@ maxItems: 100
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 304 Not Modified | リクエストヘッダ`If-None-Match`が現在の`instance_id`と一致した
   | 400 Bad Request | `rev`で指定されたリビジョン番号のフォーマットが不正
   | 404 Not Found | 指定されたページIDに対応するページが存在しない<br>`rev`で指定されたリビジョンのソースが存在しない<br>ドラフトページに対するリクエスト
@@ -438,6 +510,11 @@ maxItems: 100
 ### `PUT /api/pages/{page_id}/source[?amend={boolean}]`
 #### 概要
 ページソースの更新
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -462,8 +539,9 @@ maxItems: 100
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `amend`に`true`または`false`以外が指定された
-  | 403 Forbidden | 記述者以外が`amend=true`を指定した<br>ロックしたユーザと異なるユーザが更新しようとした<br>リクエストヘッダの`X-Lock-Authentication`による認証に失敗した
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>記述者以外が`amend=true`を指定した<br>ロックしたユーザと異なるユーザが更新しようとした<br>リクエストヘッダの`X-Lock-Authentication`によるロック解除認証に失敗した
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 410 Gone | 削除済みのページを指定した
   | 423 Locked | ロックされているページにリクエストヘッダ`X-Lock-Authentication`なしでリクエストした
@@ -481,6 +559,11 @@ maxItems: 100
 ### `GET /api/pages/{page_id}/meta[?rev={revision}]`
 #### 概要
 ページのメタ情報の取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -620,6 +703,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `rev`で指定されたリビジョン番号のフォーマットが不正
   | 404 Not Found | 指定されたページIDに対応するページが存在しない<br>`rev`で指定されたリビジョンのソースが存在しない
 
@@ -628,6 +712,11 @@ properties:
 ### `GET /api/pages/{page_id}/path`
 #### 概要
 ページパスの取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -657,6 +746,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない
   | 410 Gone | 削除済みのページが指定された
 
@@ -664,6 +754,11 @@ properties:
 ### `GET /api/pages/{page_id}/parent[?recursive={boolean}]`
 #### 概要
 親ページの取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -702,6 +797,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない<br>親ページが存在しない
   | 410 Gone | 削除済みのページが指定された
 
@@ -709,6 +805,11 @@ properties:
 ### `POST /api/pages/{page_id}/path?rename_to={page_path}[&recursive={boolean}]`
 #### 概要
 ページパスの変更(リネーム)
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -727,7 +828,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `rename_to`で指定されたパス文字列のフォーマットが不正<br>`rename_to`と`restore_to`が同時に指定された
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 409 Conflict | `rename_to`で指定されたパスにすでにページが存在する
   | 410 Gone | 削除済みのページが指定された
@@ -740,6 +843,11 @@ properties:
 ### `POST /api/pages/{page_id}/path?restore_to={page_path}[&recursive={boolean}]`
 #### 概要
 ページの復帰
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -758,7 +866,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `restore_to`で指定されたパス文字列のフォーマットが不正<br>`rename_to`と`restore_to`が同時に指定された
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 409 Conflict | `restore_to`で指定されたパスにすでにページが存在する<br>削除済みページではない
   | 423 Locked | ロックされているページを復帰しようとした
@@ -771,6 +881,11 @@ properties:
 ### `GET /api/pages/{page_id}/assets`
 #### 概要
 ページに付随するアセットのメタ情報一覧を返す
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -825,6 +940,7 @@ items:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない
   | 410 Gone | `page_id`で削除済みのページを指定した<br>`file_name`で指定される削除済みのアセットを指定した
 
@@ -833,6 +949,12 @@ items:
 ### `POST /api/pages/{page_id}/assets/{file_name}`
 #### 概要
 アセットのアップロード
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+- ロックされているページへのアップロードでは、必要に応じて `X-Lock-Authentication` によるロック解除認証も必要
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -873,6 +995,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `page_id`で指定されたページIDのフォーマットが不正<br>`file_name`で指定されたファイル名のフォーマットが不正
   | 404 Not Found | `page_id`で指定されたページが存在しない
   | 409 Conflict | `file_name`で指定されたアセットがすでにページ内に存在する
@@ -880,7 +1003,7 @@ properties:
   | 411 Length Required | リクエストヘッダに`Content-Length`が含まれていない
   | 413 Content Too Large | アッセとデータのサイズが大きすぎる
   | 423 Locked | ロックされているページにアップロードしようとした
-  | 403 Forbidden | ロック認証に失敗した<br>ロック取得者と異なるユーザがアップロードしようとした
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>ロック解除認証に失敗した<br>ロック取得者と異なるユーザがアップロードしようとした
 
 #### 注記
   - アセットデータのサイズ制限は10MiBまでとする。10MiBを超えるアセットデータを送信された場合は413を返す
@@ -891,6 +1014,11 @@ properties:
 ### `GET /api/pages/{page_id}/assets/{file_name}`
 #### 概要
 アセットIDによるアセット取得へのリダイレクト
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -909,6 +1037,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `page_id`で指定されたページIDのフォーマットが不正<br>`file_name`で指定されたファイル名のフォーマットが不正
   | 404 Not Found | `page_id`で指定されたページが存在しない<br>`file_name`で指定されるアセットがページに存在しない
   | 410 Gone | `page_id`で削除済みのページを指定した<br>`file_name`で指定される削除済みのアセットを指定した
@@ -917,6 +1046,11 @@ properties:
 ### `POST /api/pages/{page_id}/lock`
 #### 概要
 ページのロック
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -934,6 +1068,8 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない
   | 404 Not Found | `page_id`で指定されたページが存在しない
   | 409 Conflict | `page_id`で指定されたページはすでにロックされている
   | 410 Gone | `page_id`で削除済みのページを指定した
@@ -949,6 +1085,12 @@ properties:
 ### `PUT /api/pages/{page_id}/lock`
 #### 概要
 ページのロック延長
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+- `X-Lock-Authentication` によるロック解除認証が必要
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -973,8 +1115,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない<br>`page_id`で指定されたページはロックされていない(ロックの期限切れを含む)
-  | 403 Forbidden | ロックしたユーザと異なるユーザが延長しようとした<br>リクエストヘッダの`X-Lock-Authentication`による認証に失敗した
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>ロックしたユーザと異なるユーザが延長しようとした<br>リクエストヘッダの`X-Lock-Authentication`によるロック解除認証に失敗した
   | 410 Gone | `page_id`で削除済みのページを指定した
 
 #### 注記
@@ -991,6 +1134,11 @@ properties:
 ### `GET /api/pages/{page_id}/lock`
 #### 概要
 ロック情報の取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -1025,6 +1173,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない<br>`page_id`で指定されたページはロックされていない(ロックの期限切れを含む)
   | 410 Gone | `page_id`で削除済みのページを指定した
 
@@ -1032,6 +1181,12 @@ properties:
 ### `DELETE /api/pages/{page_id}/lock`
 #### 概要
 ページのロック解除
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+- `X-Lock-Authentication` によるロック解除認証が必要
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -1051,8 +1206,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない<br>`page_id`で指定されたページはロックされていない(ロックの期限切れを含む)
-  | 403 Forbidden | ロックしたユーザと異なるユーザが解除しようとした<br>リクエストヘッダの`X-Lock-Authentication`による認証に失敗した
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>ロックしたユーザと異なるユーザが解除しようとした<br>リクエストヘッダの`X-Lock-Authentication`によるロック解除認証に失敗した
   | 410 Gone | `page_id`で削除済みのページを指定した
 
 #### 注記
@@ -1062,6 +1218,11 @@ properties:
 ### `POST /api/pages/{page_id}/revision?rollback_to={rev}`
 #### 概要
 ページソースのロールバック
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -1079,7 +1240,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `rollback_to`で指定されたリビジョン番号のフォーマットが不正<br>`rollback_to`で指定されたリビジョンが存在しない<br>`rollback_to`と`keep_from`が同時に指定された
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 410 Gone | 削除済みのページが指定された
   | 423 Locked | ロックされているページを操作しようとした
@@ -1092,6 +1255,11 @@ properties:
 ### `POST /api/pages/{page_id}/revision?keep_from={rev}`
 #### 概要
 ページソースのコンパクション(指定リビジョンより過去のリビジョンソースの破棄)
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
 
 #### パスエレメント
   - page_id : 操作対象のページID
@@ -1109,7 +1277,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `keep_from`で指定されたリビジョン番号のフォーマットが不正<br>`keep_from`で指定されたリビジョンが存在しない<br>`rollback_to`と`keep_from`が同時に指定された
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 410 Gone | 削除済みのページが指定された
   | 423 Locked | ロックされているページを操作しようとした
@@ -1122,6 +1292,12 @@ properties:
 ### `DELETE /api/pages/{page_id}`
 #### 概要
 ページの削除
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+- ロックされているページの削除では、必要に応じて `X-Lock-Authentication` によるロック解除認証も必要
 
 #### パスエレメント
   - `page_id` : 操作対象のページID
@@ -1146,8 +1322,9 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない
-  | 403 Forbidden | ロックしたユーザと異なるユーザが削除しようとした<br>リクエストヘッダの`X-Lock-Authentication`による認証に失敗した
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>ロックしたユーザと異なるユーザが削除しようとした<br>リクエストヘッダの`X-Lock-Authentication`によるロック解除認証に失敗した
   | 410 Gone | `page_id`で削除済みのページを指定した
   | 423 Locked | ロックされているページにリクエストヘッダ`X-Lock-Authentication`なしでリクエストした<br>配下ページにロック中のページが存在する
 
@@ -1167,6 +1344,12 @@ properties:
 ### `POST /api/assets?path={page_path}&file={file_name}`
 #### 概要
 アセットのアップロード
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+- ロックされているページへのアップロードでは、必要に応じて `X-Lock-Authentication` によるロック解除認証も必要
 
 #### クエリーパラメータ
   |名称|型|説明|必須|
@@ -1208,6 +1391,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | クエリーパラメータ`file`で指定されたファイル名のフォーマットが不正
   | 404 Not Found | クエリーパラメータ`path`で指定されたページが存在しない
   | 409 Conflict | クエリーパラメータ`file`で指定されたアセットがすでにページ内に存在する
@@ -1215,7 +1399,7 @@ properties:
   | 411 Length Required | リクエストヘッダに`Content-Length`が含まれていない
   | 413 Content Too Large | アッセとデータのサイズが大きすぎる
   | 423 Locked | ロックされているページにアップロードしようとした
-  | 403 Forbidden | ロック認証に失敗した<br>ロック取得者と異なるユーザがアップロードしようとした
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>ロック解除認証に失敗した<br>ロック取得者と異なるユーザがアップロードしようとした
 
 #### 注記
   - アセットデータのサイズ制限は10MiBまでとする。10MiBを超えるアセットデータを送信された場合は413を返す
@@ -1226,6 +1410,11 @@ properties:
 ### `GET /api/assets?path={page_path}&file={file_name}`
 #### 概要
 アセットIDによるアセット取得へのリダイレクト
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### クエリーパラメータ
   |名称|型|説明|必須|
@@ -1259,6 +1448,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | クエリーパラメータ`path`で指定されたページIDのフォーマットが不正<br>クエリーパラメータ`file`で指定されたファイル名のフォーマットが不正
   | 404 Not Found | クエリーパラメータ`path`で指定されたページが存在しない<br>クエリーパラメータ`file`で指定されたファイル名のアセットが存在しない
   | 410 Gone | クエリーパラメータ`path`で削除済みのページを指定した<br>クエリーパラメータ`file`で削除済のアセットを指定した
@@ -1268,15 +1458,13 @@ properties:
 #### 概要
 アセットの本体データの取得
 
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
+
 #### パスエレメント
   - `asset_id` : 操作対象のアセットのID
-
-#### リクエストヘッダ
-ロックされているページに紐付くアセットを削除する場合は以下のヘッダを設定する必要がある。
-
-  | ヘッダ名 | 内容
-  |:--|:--
-  | `X-Lock-Authentication` | "token={lock_token}"
 
 #### レスポンス
 リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
@@ -1294,6 +1482,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 304 Not Modified | リクエストヘッダ`If-None-Match`が現在の`instance_id`と一致した
   | 404 Not Found | `asset_id`で指定されたアセットが存在しない
   | 410 Gone | `asset_id`で削除済みアセットを指定した
@@ -1306,6 +1495,11 @@ properties:
 ### `GET /api/assets/{asset_id}/meta`
 #### 概要
 アセットのメタ情報の取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### パスエレメント
   - `asset_id` : 操作対象のアセットのID
@@ -1353,6 +1547,7 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `asset_id`で指定されたアセットが存在しない
   | 410 Gone | `asset_id`で削除済みアセットを指定した
 
@@ -1360,6 +1555,12 @@ properties:
 ### `DELETE /api/assets/{asset_id}`
 #### 概要
 アセットの削除
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `write`
+- ロック対象ページ配下のアセット削除では、必要に応じて `X-Lock-Authentication` によるロック解除認証も必要
 
 #### パスエレメント
   - `asset_id` : 操作対象のアセットのID
@@ -1372,15 +1573,21 @@ properties:
 
   | ステータス | 説明
   |:--|:--
+  | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `asset_id`で指定されたアセットが存在しない
   | 410 Gone | `asset_id`で削除済みのアセットを指定した
   | 423 Locked | ロックされているページのアセットを削除しようとした
-  | 403 Forbidden | ロック認証に失敗した<br>ロック取得者と異なるユーザが削除しようとした
+  | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>ロック解除認証に失敗した<br>ロック取得者と異なるユーザが削除しようとした
 
 <a id="get-users-me"></a>
 ### `GET /api/users/me`
 #### 概要
 自分自身のユーザ情報の取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
 
 #### レスポンス
 リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
@@ -1422,3 +1629,9 @@ properties:
     type: "string"
 
 ```
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 401 Unauthorized | 認証に失敗した

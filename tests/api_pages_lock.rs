@@ -9,6 +9,7 @@ mod common;
 use std::fs;
 use std::sync::Mutex;
 
+use reqwest::header::AUTHORIZATION;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
@@ -192,6 +193,46 @@ fn page_lock_requires_token_on_update_and_delete() {
         .send()
         .expect("lock delete missing token failed");
     assert_eq!(response.status().as_u16(), 403);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn page_lock_put_checks_bearer_auth_before_lock_token() {
+    let _guard = lock_test();
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let read_token = run_create_token(&db_path, &assets_dir, "read");
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/lock-bearer-order", "lock source");
+    let lock_url = format!("{}/{}/lock", base_url, page_id);
+
+    let response = client
+        .put(&lock_url)
+        .header(AUTHORIZATION, "Bearer invalid-token")
+        .send()
+        .expect("lock put with invalid bearer failed");
+    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(
+        response.text().expect("read unauthorized body failed"),
+        r#"{"reason":"unauthorized"}"#
+    );
+
+    let response = client
+        .put(&lock_url)
+        .header(AUTHORIZATION, format!("Bearer {}", read_token))
+        .send()
+        .expect("lock put with read bearer failed");
+    assert_eq!(response.status().as_u16(), 403);
+    assert_eq!(
+        response.text().expect("read forbidden body failed"),
+        r#"{"reason":"forbidden"}"#
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

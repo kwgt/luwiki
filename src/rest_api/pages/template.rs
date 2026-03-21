@@ -11,11 +11,13 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::{header, StatusCode};
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpRequest, HttpResponse, web};
 use serde::Serialize;
 
 use super::super::resp_error_json;
+use crate::database::types::BearerScope;
 use crate::http_server::app_state::AppState;
+use crate::rest_api::require_request_scope;
 
 ///
 /// テンプレート一覧のレスポンスエントリ
@@ -101,8 +103,13 @@ fn extract_template_name(path: &str) -> String {
 /// ページ収集、レスポンス生成の順。
 ///
 pub async fn get(
+    req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * 共有状態取得
      */

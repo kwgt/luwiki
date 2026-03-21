@@ -14,8 +14,14 @@ use actix_web::http::{header, StatusCode};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde_json::json;
 
+use crate::database::types::BearerScope;
 use crate::http_server::app_state::AppState;
-use crate::rest_api::{AuthUser, CACHE_CONTROL_NO_STORE, resp_error_json};
+use crate::rest_api::{
+    AuthContext,
+    CACHE_CONTROL_NO_STORE,
+    require_request_scope,
+    resp_error_json,
+};
 
 ///
 /// GET /api/users/me の実体
@@ -27,11 +33,15 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * 認証済みユーザ名の取得
      */
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(user) => user.user_id().to_string(),
+    let auth_user = match req.extensions().get::<AuthContext>() {
+        Some(context) => context.user_id().to_string(),
         None => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,

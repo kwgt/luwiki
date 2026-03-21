@@ -9,20 +9,23 @@
 //!
 
 mod assets;
+mod auth;
 mod hello;
 mod pages;
 mod users;
 
-use std::sync::{Arc, RwLock};
-
-use actix_web::dev::{HttpServiceFactory, ServiceRequest};
-use actix_web::error::{ErrorInternalServerError, ErrorUnauthorized};
+use actix_web::dev::HttpServiceFactory;
 use actix_web::http::header;
-use actix_web::{HttpMessage, HttpResponse, web};
-use actix_web_httpauth::extractors::basic::{BasicAuth, Config};
+use actix_web::middleware;
+use actix_web::{HttpResponse, web};
+use actix_web_httpauth::extractors::basic::Config;
 use serde_json::json;
 
-use crate::http_server::app_state::AppState;
+pub(crate) use auth::{
+    AuthContext,
+    AuthUser,
+    require_request_scope,
+};
 
 /// ファイル名で禁止する文字
 /// (追加しやすいように集約する)
@@ -30,6 +33,9 @@ const FORBIDDEN_FILE_NAME_CHARS: &[char] = &['/', '\\'];
 
 /// キャッシュを禁止させる場合のCache-Controlヘッダ値
 pub(crate) const CACHE_CONTROL_NO_STORE: &str = "no-store";
+
+/// Basic認証チャレンジで使用するrealm名
+pub(crate) const BASIC_AUTH_REALM: &str = "LuWiki REST API";
 
 /// 条件付きGETを許可する場合のCache-Controlヘッダ値
 pub(crate) const CACHE_CONTROL_REVALIDATE_PRIVATE: &str =
@@ -138,13 +144,6 @@ pub(crate) fn if_none_match_matches(
 }
 
 ///
-/// 認証済みユーザ情報
-///
-pub(crate) struct AuthUser {
-    user_id: String,
-}
-
-///
 /// アセット用ファイル名の妥当性チェック
 ///
 /// # 引数
@@ -183,77 +182,6 @@ pub(crate) fn validate_page_path(path: &str) -> Result<(), &'static str> {
     pages::validate_page_path(path)
 }
 
-impl AuthUser {
-    ///
-    /// 認証済みユーザ情報の生成
-    ///
-    /// # 引数
-    /// * `user_id` - ユーザID
-    ///
-    /// # 戻り値
-    /// 生成したユーザ情報を返す。
-    ///
-    pub(crate) fn new(user_id: String) -> Self {
-        Self { user_id }
-    }
-
-    ///
-    /// ユーザIDへのアクセサ
-    ///
-    /// # 戻り値
-    /// ユーザIDを返す。
-    ///
-    pub(crate) fn user_id(&self) -> &str {
-        &self.user_id
-    }
-}
-
-///
-/// Basic認証の検証
-///
-/// # 引数
-/// * `req` - HTTPリクエスト
-/// * `credentials` - 認証情報
-///
-/// # 戻り値
-/// 認証に成功した場合はリクエストをそのまま返す。
-///
-pub(crate) async fn validate_basic_auth(
-    req: ServiceRequest,
-    credentials: BasicAuth,
-) -> Result<ServiceRequest, (actix_web::Error, ServiceRequest)> {
-    let data = match req.app_data::<web::Data<Arc<RwLock<AppState>>>>() {
-        Some(data) => data.clone(),
-        None => return Err((ErrorInternalServerError("state not found"), req)),
-    };
-
-    let password = match credentials.password() {
-        Some(password) => password.to_owned(),
-        None => return Err((ErrorUnauthorized("unauthorized"), req)),
-    };
-
-    let username = credentials.user_id().to_string();
-
-    let state = match data.read() {
-        Ok(state) => state,
-        Err(_) => {
-            return Err((ErrorInternalServerError("state lock failed"), req));
-        }
-    };
-    let ok = match state.db().verify_user(&username, &password) {
-        Ok(ok) => ok,
-        Err(_) => return Err((ErrorInternalServerError("auth failed"), req)),
-    };
-
-    if !ok {
-        return Err((ErrorUnauthorized("unauthorized"), req));
-    }
-
-    req.extensions_mut().insert(AuthUser::new(username));
-
-    Ok(req)
-}
-
 ///
 /// REST APIエンドポイントの生成
 ///
@@ -264,10 +192,11 @@ pub(crate) fn create_api_scope(
      * APIスコープの初期設定
      */
     web::scope("/api")
-        .app_data(Config::default().realm("LuWiki REST API"))
-        .wrap(actix_web_httpauth::middleware::HttpAuthentication::basic(
-            validate_basic_auth,
+        .app_data(Config::default().realm(BASIC_AUTH_REALM))
+        .wrap(actix_web_httpauth::middleware::HttpAuthentication::with_fn(
+            auth::validate_authorization,
         ))
+        .wrap(middleware::from_fn(auth::append_bearer_expire_header))
         /*
          * 共通・ページ系エンドポイント
          */

@@ -7,6 +7,7 @@
 mod common;
 
 use chrono::DateTime;
+use reqwest::header::AUTHORIZATION;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::fs;
@@ -76,7 +77,10 @@ fn get_page_meta_returns_latest_info() {
         .expect("timestamp missing");
     DateTime::parse_from_rfc3339(timestamp).expect("timestamp parse failed");
 
-    assert!(value["revision_info"].get("rename_info").is_none());
+    assert_eq!(value["revision_info"]["rename_info"]["kind"], "active");
+    assert_eq!(value["revision_info"]["rename_info"]["from"], Value::Null);
+    assert_eq!(value["revision_info"]["rename_info"]["to"], "/meta");
+    assert!(value["revision_info"]["rename_info"]["link_refs"].is_object());
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -169,6 +173,35 @@ fn get_page_meta_requires_auth_and_valid_id() {
         .send()
         .expect("get meta invalid id failed");
     assert_eq!(response.status().as_u16(), 404);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// GET: Bearer read/write の両スコープで参照できることを確認する。
+fn get_page_meta_allows_bearer_read_and_write_scopes() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let read_token = run_create_token(&db_path, &assets_dir, "read");
+    let write_token = run_create_token(&db_path, &assets_dir, "write");
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/meta-bearer", "meta body");
+    let url = format!("{}/{}/meta", base_url, page_id);
+
+    for token in [read_token, write_token] {
+        let response = client
+            .get(&url)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .expect("get meta with bearer failed");
+
+        assert_eq!(response.status().as_u16(), 200);
+    }
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

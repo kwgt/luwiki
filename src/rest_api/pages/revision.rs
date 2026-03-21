@@ -16,9 +16,10 @@ use serde::Deserialize;
 
 use super::super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::PageId;
+use crate::database::types::{BearerScope, PageId};
 use crate::fts;
 use crate::http_server::app_state::AppState;
+use crate::rest_api::require_request_scope;
 
 #[derive(Deserialize)]
 struct RevisionQuery {
@@ -45,6 +46,10 @@ pub async fn post(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */

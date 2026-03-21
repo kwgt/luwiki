@@ -15,6 +15,8 @@ use super::schema::{
     ASSET_GROUP_TABLE,
     ASSET_INFO_TABLE,
     ASSET_LOOKUP_TABLE,
+    BEARER_TOKEN_ID_TABLE,
+    BEARER_TOKEN_TABLE,
     DELETED_PAGE_PATH_TABLE,
     LOCK_INFO_TABLE,
     PAGE_INDEX_TABLE,
@@ -46,6 +48,8 @@ use super::schema::{
 ///  - ASSET_GROUP_TABLE: ページ所属アセット群取得テーブル
 ///  - USER_ID_TABLE: ユーザIDテーブル
 ///  - USER_INFO_TABLE: ユーザ情報テーブル
+///  - BEARER_TOKEN_TABLE: Bearerトークン主テーブル
+///  - BEARER_TOKEN_ID_TABLE: BearerトークンID変換テーブル
 ///
 pub(in crate::database) fn init_database(db: &mut Database) -> Result<()> {
     /*
@@ -115,6 +119,19 @@ pub(in crate::database) fn init_database(db: &mut Database) -> Result<()> {
         let _ = txn
             .open_table(USER_INFO_TABLE)
             .context("create USER_INFO_TABLE")?;
+
+        /*
+         * Bearer関連テーブル作成
+         */
+        // Bearerトークン主テーブル
+        let _ = txn
+            .open_table(BEARER_TOKEN_TABLE)
+            .context("create BEARER_TOKEN_TABLE")?;
+
+        // BearerトークンID変換テーブル
+        let _ = txn
+            .open_table(BEARER_TOKEN_ID_TABLE)
+            .context("create BEARER_TOKEN_ID_TABLE")?;
     }
 
     /*

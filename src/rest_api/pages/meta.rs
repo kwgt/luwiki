@@ -17,9 +17,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::super::resp_error_json;
-use crate::database::types::{PageId, PageIndex, RenameInfo};
+use crate::database::types::{BearerScope, PageId, PageIndex, RenameInfo};
 use crate::http_server::app_state::AppState;
-use crate::rest_api::CACHE_CONTROL_NO_STORE;
+use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
 
 #[derive(Deserialize)]
 struct GetMetaQuery {
@@ -50,6 +50,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */

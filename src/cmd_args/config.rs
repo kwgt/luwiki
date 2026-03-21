@@ -16,18 +16,16 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    default_assets_path,
-    default_db_path,
-    default_fts_index_path,
-    default_log_path,
-    LogLevel,
-};
-use crate::cmd_args::{
     AssetListSortMode,
     FtsSearchTarget,
     LockListSortMode,
     PageListSortMode,
     UserListSortMode,
+    default_assets_path,
+    default_db_path,
+    default_fts_index_path,
+    default_log_path,
+    LogLevel,
 };
 
 const DEFAULT_FRONTEND_UI_FONT: &str = "sans-serif";

@@ -11,6 +11,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Local};
 #[cfg(not(target_family = "windows"))]
 use rpassword::prompt_password;
 
@@ -42,6 +43,43 @@ pub(crate) fn read_password_with_confirm() -> Result<String> {
 
     let use_terminal_input = stdin.is_terminal();
     read_password_with_confirm_from(&mut input, &mut output, use_terminal_input)
+}
+
+///
+/// 確認プロンプトを表示して実行可否を問い合わせる
+///
+/// # 引数
+/// * `prompt` - 表示する確認メッセージ
+///
+/// # 戻り値
+/// 実行を許可する場合は `true` を返す。
+///
+pub(crate) fn confirm_action(prompt: &str) -> Result<bool> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+
+    if !stdin.is_terminal() {
+        return Err(anyhow!(
+            "confirmation required in non-interactive mode; use --yes"
+        ));
+    }
+
+    let mut input = stdin.lock();
+    let mut output = stdout.lock();
+    confirm_action_with_io(prompt, &mut input, &mut output)
+}
+
+///
+/// CLI出力用のタイムスタンプ表示文字列を生成
+///
+/// # 引数
+/// * `timestamp` - 整形対象タイムスタンプ
+///
+/// # 戻り値
+/// ISO8601のタイムゾーン無し表記へ整形した文字列を返す。
+///
+pub(crate) fn format_cli_timestamp(timestamp: DateTime<Local>) -> String {
+    timestamp.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
 ///
@@ -138,6 +176,36 @@ where
     input.read_line(&mut buf)?;
 
     Ok(buf.trim_end_matches(&['\r', '\n'][..]).to_string())
+}
+
+///
+/// 任意の入出力を使って確認可否を問い合わせる
+///
+/// # 引数
+/// * `prompt` - 表示する確認メッセージ
+/// * `input` - 入力ストリーム
+/// * `output` - 出力ストリーム
+///
+/// # 戻り値
+/// 実行を許可する場合は `true` を返す。
+///
+fn confirm_action_with_io<R, W>(
+    prompt: &str,
+    input: &mut R,
+    output: &mut W,
+) -> Result<bool>
+where
+    R: BufRead,
+    W: Write,
+{
+    write!(output, "{} [y/N]: ", prompt)?;
+    output.flush()?;
+
+    let mut buf = String::new();
+    input.read_line(&mut buf)?;
+
+    let answer = buf.trim().to_lowercase();
+    Ok(answer == "y" || answer == "yes")
 }
 
 #[cfg(target_family = "windows")]

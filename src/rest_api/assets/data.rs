@@ -14,11 +14,12 @@ use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, web};
 
 use super::super::resp_error_json;
-use crate::database::types::AssetId;
+use crate::database::types::{AssetId, BearerScope};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::{
     build_etag,
     if_none_match_matches,
+    require_request_scope,
     CACHE_CONTROL_NO_STORE,
     CACHE_CONTROL_REVALIDATE_PRIVATE,
 };
@@ -41,6 +42,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * アセットID解析
      */

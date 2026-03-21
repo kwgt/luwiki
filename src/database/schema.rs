@@ -13,11 +13,14 @@ use redb::{MultimapTableDefinition, TableDefinition};
 use crate::database::types::{
     AssetId,
     AssetInfo,
+    BearerTokenInfo,
     LockInfo,
     LockToken,
     PageId,
     PageIndex,
     PageSource,
+    TokenId,
+    TokenHash,
     UserId,
     UserInfo,
 };
@@ -69,6 +72,18 @@ pub(in crate::database) static USER_ID_TABLE: TableDefinition<String, UserId> =
 pub(in crate::database) static USER_INFO_TABLE:
     TableDefinition<UserId, UserInfo> =
         TableDefinition::new("user_info_table");
+
+/// Bearerトークン主テーブル (照合用ハッシュ値 => Bearerトークン管理情報)
+#[allow(dead_code)]
+pub(in crate::database) static BEARER_TOKEN_TABLE:
+    TableDefinition<TokenHash, BearerTokenInfo> =
+        TableDefinition::new("bearer_token_table");
+
+/// BearerトークンID変換テーブル (トークンID => 照合用ハッシュ値)
+#[allow(dead_code)]
+pub(in crate::database) static BEARER_TOKEN_ID_TABLE:
+    TableDefinition<TokenId, TokenHash> =
+        TableDefinition::new("bearer_token_id_table");
 
 /// ルートページのパス
 pub(in crate::database) const ROOT_PAGE_PATH: &str = "/";

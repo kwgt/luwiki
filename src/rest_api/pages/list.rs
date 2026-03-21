@@ -18,7 +18,9 @@ use serde_json::json;
 
 use super::super::resp_error_json;
 use crate::database::PageListEntry;
+use crate::database::types::BearerScope;
 use crate::http_server::app_state::AppState;
+use crate::rest_api::require_request_scope;
 
 #[derive(Deserialize)]
 struct ListQuery {
@@ -47,6 +49,10 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */

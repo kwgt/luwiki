@@ -15,13 +15,14 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 
 use super::super::resp_error_json;
-use crate::database::types::{LockToken, PageId};
+use crate::database::types::{BearerScope, LockToken, PageId};
 use crate::fts;
 use crate::http_server::app_state::AppState;
-use crate::rest_api::AuthUser;
+use crate::rest_api::AuthContext;
 use crate::rest_api::{
     build_etag,
     if_none_match_matches,
+    require_request_scope,
     CACHE_CONTROL_NO_STORE,
     CACHE_CONTROL_REVALIDATE_PRIVATE,
 };
@@ -62,6 +63,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */
@@ -218,6 +223,10 @@ pub async fn put(
     path: web::Path<String>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */
@@ -291,8 +300,8 @@ pub async fn put(
     /*
      * 認証ユーザ取得
      */
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(user) => user.user_id().to_string(),
+    let auth_user = match req.extensions().get::<AuthContext>() {
+        Some(context) => context.user_id().to_string(),
         None => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,

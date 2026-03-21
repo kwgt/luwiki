@@ -30,8 +30,9 @@ use serde_json::json;
 
 use super::resp_error_json;
 use crate::database::DbError;
+use crate::database::types::BearerScope;
 use crate::http_server::app_state::AppState;
-use crate::rest_api::AuthUser;
+use crate::rest_api::{AuthContext, require_request_scope};
 
 /// ページパスで禁止する文字
 /// (追加しやすいように集約する)
@@ -67,6 +68,10 @@ pub async fn post(
     state: web::Data<Arc<RwLock<AppState>>>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */
@@ -99,8 +104,8 @@ pub async fn post(
     /*
      * 認証ユーザ取得
      */
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(user) => user.user_id().to_string(),
+    let auth_user = match req.extensions().get::<AuthContext>() {
+        Some(context) => context.user_id().to_string(),
         None => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,

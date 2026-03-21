@@ -21,9 +21,13 @@ use serde_json::json;
 
 use super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::LockToken;
+use crate::database::types::{BearerScope, LockToken};
 use crate::http_server::app_state::AppState;
-use crate::rest_api::{AuthUser, CACHE_CONTROL_NO_STORE};
+use crate::rest_api::{
+    AuthContext,
+    CACHE_CONTROL_NO_STORE,
+    require_request_scope,
+};
 
 /// ロック認証ヘッダの名称
 const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
@@ -53,6 +57,10 @@ pub async fn post(
     state: web::Data<Arc<RwLock<AppState>>>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */
@@ -114,8 +122,8 @@ pub async fn post(
     /*
      * 認証ユーザ取得
      */
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(user) => user.user_id().to_string(),
+    let auth_user = match req.extensions().get::<AuthContext>() {
+        Some(context) => context.user_id().to_string(),
         None => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -301,6 +309,10 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * クエリ取得と検証
      */

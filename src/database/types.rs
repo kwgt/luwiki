@@ -9,11 +9,11 @@
 //!
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::ops::{Deref, RangeInclusive};
 
-use anyhow::{Error, Result};
+use anyhow::{Error, Result, anyhow};
 use argon2::password_hash::{PasswordHash, SaltString};
 use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use chrono::{DateTime, Duration, Local};
@@ -21,6 +21,7 @@ use rand_core::{OsRng, RngCore};
 use redb::{Key, TypeName, Value};
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 use ulid::{DecodeError, Ulid};
 
 ///
@@ -214,9 +215,675 @@ pub(crate) type AssetId = Id;
 pub(crate) type UserId = Id;
 
 ///
+/// BearerトークンID型の定義(可読性を向上させるための別名定義)
+///
+#[allow(dead_code)]
+pub(crate) type TokenId = Id;
+
+///
 /// ロック解除トークン型の定義(可読性を向上させるための別名定義)
 ///
 pub(crate) type LockToken = Id;
+
+///
+/// Bearer認証のスコープ種別
+///
+#[allow(dead_code)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+pub(crate) enum BearerScope {
+    /// 参照系操作を表すスコープ
+    #[serde(rename = "read")]
+    Read,
+
+    /// 更新系操作を表すスコープ
+    #[serde(rename = "write")]
+    Write,
+}
+
+#[allow(dead_code)]
+impl BearerScope {
+    ///
+    /// スコープの文字列表現を返す
+    ///
+    /// # 戻り値
+    /// 外部仕様で利用するスコープ名を返す。
+    ///
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+        }
+    }
+}
+
+// Displayトレイトの実装
+impl Display for BearerScope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// TryFromトレイトの実装
+impl TryFrom<&str> for BearerScope {
+    type Error = Error;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "read" => Ok(Self::Read),
+            "write" => Ok(Self::Write),
+            _ => Err(anyhow!("invalid bearer scope: {}", value)),
+        }
+    }
+}
+
+///
+/// Bearer認証のスコープ集合
+///
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct BearerScopeSet {
+    /// 保持しているスコープ集合
+    scopes: BTreeSet<BearerScope>,
+}
+
+#[allow(dead_code)]
+impl BearerScopeSet {
+    ///
+    /// 空のスコープ集合を生成する
+    ///
+    /// # 戻り値
+    /// スコープを持たない集合を返す。
+    ///
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    ///
+    /// 全スコープ相当の集合を生成する
+    ///
+    /// # 戻り値
+    /// 現時点で定義されている全スコープを持つ集合を返す。
+    ///
+    pub(crate) fn all() -> Self {
+        Self::from_iter([BearerScope::Read, BearerScope::Write])
+    }
+
+    ///
+    /// スコープを追加する
+    ///
+    /// # 引数
+    /// * `scope` - 追加するスコープ
+    ///
+    /// # 戻り値
+    /// 追加前に同一スコープが存在しなかった場合は `true` を返す。
+    ///
+    pub(crate) fn insert(&mut self, scope: BearerScope) -> bool {
+        self.scopes.insert(scope)
+    }
+
+    ///
+    /// スコープが明示的に含まれているかを返す
+    ///
+    /// # 引数
+    /// * `scope` - 判定対象のスコープ
+    ///
+    /// # 戻り値
+    /// 集合内に同一スコープが存在する場合は `true` を返す。
+    ///
+    pub(crate) fn contains(&self, scope: BearerScope) -> bool {
+        self.scopes.contains(&scope)
+    }
+
+    ///
+    /// 必要スコープを満たすかを返す
+    ///
+    /// # 引数
+    /// * `required` - 要求されるスコープ
+    ///
+    /// # 戻り値
+    /// 要求スコープを満たす場合は `true` を返す。
+    ///
+    pub(crate) fn allows(&self, required: BearerScope) -> bool {
+        match required {
+            BearerScope::Read => {
+                self.contains(BearerScope::Read) ||
+                    self.contains(BearerScope::Write)
+            }
+            BearerScope::Write => self.contains(BearerScope::Write),
+        }
+    }
+
+    ///
+    /// 保持スコープ数を返す
+    ///
+    /// # 戻り値
+    /// 集合に保持されているスコープ数を返す。
+    ///
+    pub(crate) fn len(&self) -> usize {
+        self.scopes.len()
+    }
+
+    ///
+    /// スコープ集合が空かを返す
+    ///
+    /// # 戻り値
+    /// 集合が空の場合は `true` を返す。
+    ///
+    pub(crate) fn is_empty(&self) -> bool {
+        self.scopes.is_empty()
+    }
+
+    ///
+    /// スコープ列挙子へのイテレータを返す
+    ///
+    /// # 戻り値
+    /// スコープ列挙子への参照を順序付きで返すイテレータを返す。
+    ///
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &BearerScope> {
+        self.scopes.iter()
+    }
+}
+
+// FromIteratorトレイトの実装
+impl FromIterator<BearerScope> for BearerScopeSet {
+    fn from_iter<T: IntoIterator<Item = BearerScope>>(iter: T) -> Self {
+        Self {
+            scopes: iter.into_iter().collect(),
+        }
+    }
+}
+
+///
+/// Bearerトークン管理情報
+///
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct BearerTokenInfo {
+    /// BearerトークンID
+    token_id: TokenId,
+
+    /// 発行対象ユーザID
+    user_id: UserId,
+
+    /// 付与スコープ
+    scopes: BearerScopeSet,
+
+    /// 作成日時
+    created_at: DateTime<Local>,
+
+    /// 最終更新日時
+    updated_at: DateTime<Local>,
+
+    /// トークンTTL
+    ttl: Duration,
+
+    /// 有効期限
+    expire_at: DateTime<Local>,
+
+    /// 失効状態
+    revoked: bool,
+
+    /// 任意のトークン名
+    name: Option<String>,
+}
+
+#[allow(dead_code)]
+impl BearerTokenInfo {
+    ///
+    /// Bearerトークン管理情報を生成する
+    ///
+    /// # 引数
+    /// * `user_id` - 発行対象ユーザID
+    /// * `scopes` - 付与スコープ集合
+    /// * `ttl` - トークンTTL
+    /// * `name` - 任意のトークン名
+    ///
+    /// # 戻り値
+    /// 生成した Bearerトークン管理情報を返す。
+    ///
+    pub(crate) fn new(
+        user_id: UserId,
+        scopes: BearerScopeSet,
+        ttl: Duration,
+        name: Option<String>,
+    ) -> Self {
+        /*
+         * 現在時刻を共通利用する
+         */
+        let now = Local::now();
+
+        /*
+         * Bearerトークン管理情報を構築する
+         */
+        Self {
+            token_id: TokenId::new(),
+            user_id,
+            scopes,
+            created_at: now,
+            updated_at: now,
+            ttl,
+            expire_at: now + ttl,
+            revoked: false,
+            name,
+        }
+    }
+
+    ///
+    /// BearerトークンIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// BearerトークンIDを返す。
+    ///
+    pub(crate) fn token_id(&self) -> TokenId {
+        self.token_id.clone()
+    }
+
+    ///
+    /// 発行対象ユーザIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// 発行対象ユーザIDを返す。
+    ///
+    pub(crate) fn user_id(&self) -> UserId {
+        self.user_id.clone()
+    }
+
+    ///
+    /// 付与スコープ集合へのアクセサ
+    ///
+    /// # 戻り値
+    /// 付与スコープ集合を返す。
+    ///
+    pub(crate) fn scopes(&self) -> BearerScopeSet {
+        self.scopes.clone()
+    }
+
+    ///
+    /// 作成日時へのアクセサ
+    ///
+    /// # 戻り値
+    /// 作成日時を返す。
+    ///
+    pub(crate) fn created_at(&self) -> DateTime<Local> {
+        self.created_at
+    }
+
+    ///
+    /// 最終更新日時へのアクセサ
+    ///
+    /// # 戻り値
+    /// 最終更新日時を返す。
+    ///
+    pub(crate) fn updated_at(&self) -> DateTime<Local> {
+        self.updated_at
+    }
+
+    ///
+    /// TTLへのアクセサ
+    ///
+    /// # 戻り値
+    /// TTLを返す。
+    ///
+    pub(crate) fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    ///
+    /// 有効期限へのアクセサ
+    ///
+    /// # 戻り値
+    /// 有効期限を返す。
+    ///
+    pub(crate) fn expire_at(&self) -> DateTime<Local> {
+        self.expire_at
+    }
+
+    ///
+    /// 失効状態へのアクセサ
+    ///
+    /// # 戻り値
+    /// 失効済みの場合は `true` を返す。
+    ///
+    pub(crate) fn revoked(&self) -> bool {
+        self.revoked
+    }
+
+    ///
+    /// 任意名へのアクセサ
+    ///
+    /// # 戻り値
+    /// 任意名を返す。
+    ///
+    pub(crate) fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+
+    ///
+    /// TTL延長を反映する
+    ///
+    /// # 引数
+    /// * `now` - 延長基準時刻
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    pub(crate) fn extend_expire_at(&mut self, now: DateTime<Local>) {
+        self.expire_at = now + self.ttl;
+        self.updated_at = now;
+    }
+
+    ///
+    /// 失効状態を反映する
+    ///
+    /// # 引数
+    /// * `updated_at` - 更新時刻
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    pub(crate) fn revoke(&mut self, updated_at: DateTime<Local>) {
+        self.revoked = true;
+        self.updated_at = updated_at;
+    }
+
+    ///
+    /// テスト用に日時項目を上書きする
+    ///
+    /// # 引数
+    /// * `created_at` - 作成日時
+    /// * `updated_at` - 最終更新日時
+    /// * `expire_at` - 有効期限
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn overwrite_timestamps_for_test(
+        &mut self,
+        created_at: DateTime<Local>,
+        updated_at: DateTime<Local>,
+        expire_at: DateTime<Local>,
+    ) {
+        self.created_at = created_at;
+        self.updated_at = updated_at;
+        self.expire_at = expire_at;
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+impl BearerTokenInfo {
+    ///
+    /// テスト用の Bearerトークン管理情報を生成する
+    ///
+    /// # 引数
+    /// * `token_id` - BearerトークンID
+    /// * `user_id` - 発行対象ユーザID
+    /// * `scopes` - 付与スコープ集合
+    /// * `created_at` - 作成日時
+    /// * `updated_at` - 最終更新日時
+    /// * `ttl` - TTL
+    /// * `expire_at` - 有効期限
+    /// * `revoked` - 失効状態
+    /// * `name` - 任意名
+    ///
+    /// # 戻り値
+    /// テスト用の Bearerトークン管理情報を返す。
+    ///
+    pub(crate) fn new_for_test(
+        token_id: TokenId,
+        user_id: UserId,
+        scopes: BearerScopeSet,
+        created_at: DateTime<Local>,
+        updated_at: DateTime<Local>,
+        ttl: Duration,
+        expire_at: DateTime<Local>,
+        revoked: bool,
+        name: Option<String>,
+    ) -> Self {
+        Self {
+            token_id,
+            user_id,
+            scopes,
+            created_at,
+            updated_at,
+            ttl,
+            expire_at,
+            revoked,
+            name,
+        }
+    }
+}
+
+// Valueトレイトの実装
+impl Value for BearerTokenInfo {
+    type SelfType<'a> = BearerTokenInfo;
+    type AsBytes<'a> = Vec<u8>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("BearerTokenInfo")
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'b,
+    {
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
+    }
+}
+
+///
+/// Bearerトークン平文
+///
+/// # 注記
+/// 既定の `Display` / `Debug` は伏字化し、CLI の明示出力など
+/// 必要な箇所だけが平文へアクセスする。
+///
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct BearerTokenPlaintext(String);
+
+#[allow(dead_code)]
+impl BearerTokenPlaintext {
+    ///
+    /// Bearerトークン平文を生成する
+    ///
+    /// # 引数
+    /// * `value` - 保持する平文文字列
+    ///
+    /// # 戻り値
+    /// Bearerトークン平文オブジェクトを返す。
+    ///
+    pub(crate) fn new<S>(value: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self(value.into())
+    }
+
+    ///
+    /// 平文文字列へのアクセサ
+    ///
+    /// # 戻り値
+    /// Bearerトークン平文を返す。
+    ///
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for BearerTokenPlaintext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted bearer token]")
+    }
+}
+
+impl std::fmt::Debug for BearerTokenPlaintext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted bearer token]")
+    }
+}
+
+///
+/// Bearerトークン照合用ハッシュ値
+///
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub(crate) struct TokenHash([u8; 32]);
+
+#[allow(dead_code)]
+impl TokenHash {
+    ///
+    /// トークン平文から照合用ハッシュ値を生成する
+    ///
+    /// # 引数
+    /// * `token` - Bearerトークン平文
+    ///
+    /// # 戻り値
+    /// SHA-256 で計算した照合用ハッシュ値を返す。
+    ///
+    pub(crate) fn from_token(token: &str) -> Self {
+        let digest = Sha256::digest(token.as_bytes());
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(digest.as_slice());
+        Self(bytes)
+    }
+
+    ///
+    /// 生バイト列表現へのアクセサ
+    ///
+    /// # 戻り値
+    /// 32 バイト固定長のハッシュ値を返す。
+    ///
+    pub(crate) fn to_bytes(&self) -> [u8; 32] {
+        self.0
+    }
+
+    ///
+    /// 16進文字列へ変換する
+    ///
+    /// # 戻り値
+    /// 小文字16進のハッシュ文字列を返す。
+    ///
+    pub(crate) fn to_hex(&self) -> String {
+        self.0.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+}
+
+// Fromトレイトの実装
+impl From<[u8; 32]> for TokenHash {
+    fn from(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+}
+
+// Displayトレイトの実装
+impl Display for TokenHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_hex())
+    }
+}
+
+// Valueトレイトの実装
+impl Value for TokenHash {
+    type SelfType<'a> = TokenHash;
+    type AsBytes<'a> = [u8; 32];
+
+    fn fixed_width() -> Option<usize> {
+        Some(32)
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("TokenHash")
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'b,
+    {
+        value.to_bytes()
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(data);
+        Self(bytes)
+    }
+}
+
+// Keyトレイトの実装
+impl Key for TokenHash {
+    fn compare(a: &[u8], b: &[u8]) -> Ordering {
+        a.cmp(b)
+    }
+}
+
+// Serializeトレイトの実装
+impl Serialize for TokenHash {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_hex())
+        } else {
+            serializer.serialize_bytes(&self.0)
+        }
+    }
+}
+
+// Deserializeトレイトの実装
+impl<'de> Deserialize<'de> for TokenHash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let string = String::deserialize(deserializer)?;
+            if string.len() != 64 {
+                return Err(de::Error::custom("invalid token hash length"));
+            }
+
+            let mut bytes = [0u8; 32];
+            for (index, chunk) in string.as_bytes().chunks(2).enumerate() {
+                let text = std::str::from_utf8(chunk)
+                    .map_err(de::Error::custom)?;
+                bytes[index] = u8::from_str_radix(text, 16)
+                    .map_err(de::Error::custom)?;
+            }
+
+            Ok(Self(bytes))
+        } else {
+            Ok(Self(<[u8; 32]>::deserialize(deserializer)?))
+        }
+    }
+}
 
 ///
 /// ページインデックス管理構造体

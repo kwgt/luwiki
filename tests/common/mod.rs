@@ -142,6 +142,33 @@ pub fn reserve_port() -> u16 {
 ///
 #[allow(dead_code)]
 pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
+    run_add_user_with_credentials(
+        db_path,
+        assets_dir,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    );
+}
+
+///
+/// 任意の資格情報でテスト用ユーザを追加する
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `user_name` - ユーザ名
+/// * `password` - パスワード
+///
+/// # 戻り値
+/// なし
+///
+#[allow(dead_code)]
+pub fn run_add_user_with_credentials(
+    db_path: &Path,
+    assets_dir: &Path,
+    user_name: &str,
+    password: &str,
+) {
     /*
      * CLI起動
      */
@@ -159,7 +186,7 @@ pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
         .arg(fts_index)
         .arg("user")
         .arg("add")
-        .arg(TEST_USERNAME)
+        .arg(user_name)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -171,8 +198,8 @@ pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
      */
     {
         let stdin = child.stdin.as_mut().expect("stdin missing");
-        writeln!(stdin, "{}", TEST_PASSWORD).expect("write password failed");
-        writeln!(stdin, "{}", TEST_PASSWORD).expect("write confirm failed");
+        writeln!(stdin, "{}", password).expect("write password failed");
+        writeln!(stdin, "{}", password).expect("write confirm failed");
     }
 
     /*
@@ -180,6 +207,65 @@ pub fn run_add_user(db_path: &Path, assets_dir: &Path) {
      */
     let status = child.wait().expect("wait add_user failed");
     assert!(status.success());
+}
+
+///
+/// テスト用 Bearer トークンを発行する
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `scope` - `token create --scope` に渡す文字列
+///
+/// # 戻り値
+/// 発行された Bearer トークン平文
+///
+#[allow(dead_code)]
+pub fn run_create_token(
+    db_path: &Path,
+    assets_dir: &Path,
+    scope: &str,
+) -> String {
+    /*
+     * CLI起動
+     */
+    let exe = test_binary_path();
+    let base_dir = db_path.parent().expect("db_path parent missing");
+    let fts_index = fts_index_path(db_path);
+    let output = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
+        .arg("--db-path")
+        .arg(db_path)
+        .arg("--assets-path")
+        .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index)
+        .arg("token")
+        .arg("create")
+        .arg("--scope")
+        .arg(scope)
+        .arg(TEST_USERNAME)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn token create failed");
+
+    /*
+     * 実行結果の確認
+     */
+    assert!(
+        output.status.success(),
+        "token create failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout =
+        String::from_utf8(output.stdout).expect("token create stdout decode failed");
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("token: "))
+        .map(str::to_string)
+        .expect("created token missing")
 }
 
 ///

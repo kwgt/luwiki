@@ -34,6 +34,7 @@
 - マクロ仕様は `MACRO_SPECS.md` に記載されています。
 - エクスポートデータの仕様は `EXPORT_DATA_SPEC.md` に記載されています。
 - エクスポート／インポートの設計内容は `EXPORT_IMPORT_DESIGN.md` に記載されています。
+- Bearer認証の設計内容は `BEARER_AUTH_DESIGN.md` に記載されています。
 
 ---
 

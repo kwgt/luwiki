@@ -28,6 +28,7 @@ use super::schema::{
 use super::types::{AssetId, PageId};
 
 pub(crate) mod assets;
+pub(crate) mod bearer_tokens;
 pub(crate) mod export_import;
 pub(crate) mod locks;
 pub(crate) mod pages_read;

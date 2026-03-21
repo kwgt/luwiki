@@ -15,9 +15,9 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 
 use super::super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::AssetId;
+use crate::database::types::{AssetId, BearerScope};
 use crate::http_server::app_state::AppState;
-use crate::rest_api::AuthUser;
+use crate::rest_api::{AuthContext, require_request_scope};
 
 /// ロック認証ヘッダの名称
 const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
@@ -40,6 +40,10 @@ pub async fn delete(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
+        return Ok(resp);
+    }
+
     /*
      * アセットID解析
      */
@@ -119,8 +123,8 @@ pub async fn delete(
                     ));
                 }
 
-                let auth_user = match req.extensions().get::<AuthUser>() {
-                    Some(user) => user.user_id().to_string(),
+                let auth_user = match req.extensions().get::<AuthContext>() {
+                    Some(context) => context.user_id().to_string(),
                     None => {
                         return Ok(resp_error_json(
                             StatusCode::INTERNAL_SERVER_ERROR,

@@ -11,14 +11,14 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::{StatusCode, header};
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::SecondsFormat;
 use serde_json::json;
 
 use super::super::resp_error_json;
-use crate::database::types::AssetId;
+use crate::database::types::{AssetId, BearerScope};
 use crate::http_server::app_state::AppState;
-use crate::rest_api::CACHE_CONTROL_NO_STORE;
+use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
 
 ///
 /// GET /api/assets/{asset_id}/meta の実体
@@ -34,9 +34,14 @@ use crate::rest_api::CACHE_CONTROL_NO_STORE;
 /// actix-webのレスポンスオブジェクト
 ///
 pub async fn get(
+    req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * アセットID解析
      */

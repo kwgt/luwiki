@@ -5,18 +5,26 @@ info:
   description: >
     Wiki システム用 REST API。
     ページ管理、アセット管理、ページロック（TTL/トークン）を提供する。
+    認証方式として Basic 認証および Bearer 認証を受け付ける。
+    Bearer 認証成功時にスライディング期限延長が発生した場合は、
+    `X-Bearer-Expire` ヘッダで更新後の有効期限を返す。
 
 servers:
   - url: /api
 
 security:
   - basicAuth: []
+  - bearerAuth: []
 
 components:
   securitySchemes:
     basicAuth:
       type: http
       scheme: basic
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
 
   parameters:
     PageId:
@@ -77,10 +85,24 @@ components:
         timestamp: { type: string }
         username: { type: string }
 
+  responses:
+    Unauthorized:
+      description: 認証に失敗した
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: 認証済みだが必要スコープまたは操作条件を満たさない
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
 paths:
   /pages:
     post:
       summary: ページの作成
+      description: Bearer 認証時は `write` スコープが必要
+      x-required-scope: [write]
       parameters:
         - name: path
           in: query
@@ -95,6 +117,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IdResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: パス不正
           content:
@@ -109,6 +135,8 @@ paths:
   /pages/{page_id}/source:
     get:
       summary: ページソース取得
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: rev
@@ -128,6 +156,10 @@ paths:
           headers:
             Cache-Control: { schema: { type: string } }
             ETag: { schema: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: rev 不正
           content:
@@ -146,6 +178,8 @@ paths:
 
     put:
       summary: ページソース更新
+      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: amend
@@ -160,6 +194,8 @@ paths:
       responses:
         "204":
           description: 更新成功
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "400":
           description: amend 不正
           content:
@@ -189,6 +225,8 @@ paths:
   /pages/{page_id}/meta:
     get:
       summary: ページメタ情報取得
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: rev
@@ -203,6 +241,10 @@ paths:
             application/json:
               schema:
                 type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: rev 不正
           content:
@@ -222,6 +264,8 @@ paths:
   /pages/{page_id}/path:
     get:
       summary: ページパス取得
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/PageId"
       responses:
@@ -232,6 +276,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PagePath" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: ページ不存在
           content:
@@ -239,7 +287,8 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       summary: ページパス更新
-      description: rename_to または restore_to のいずれかを指定する
+      description: rename_to または restore_to のいずれかを指定する。Bearer 認証時は `write` スコープが必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: rename_to
@@ -257,6 +306,10 @@ paths:
       responses:
         "204":
           description: リネーム成功
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: パス不正
           content:
@@ -286,6 +339,8 @@ paths:
   /pages/{page_id}/assets:
     get:
       summary: ページ配下アセット一覧
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/PageId"
       responses:
@@ -298,6 +353,10 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/AssetMeta" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: ページ不存在
           content:
@@ -307,6 +366,8 @@ paths:
   /pages/{page_id}/assets/{file_name}:
     post:
       summary: アセットアップロード（ページ指定）
+      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: file_name
@@ -329,6 +390,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IdResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: パラメータ不正
           content:
@@ -352,6 +417,8 @@ paths:
 
     get:
       summary: アセット取得リダイレクト（ページ指定）
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: file_name
@@ -363,6 +430,10 @@ paths:
           description: リダイレクト
           headers:
             Location: { schema: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: パラメータ不正
           content:
@@ -382,6 +453,8 @@ paths:
   /pages/{page_id}/lock:
     post:
       summary: ページロック取得
+      description: Bearer 認証時は `write` スコープが必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
       responses:
@@ -389,6 +462,10 @@ paths:
           description: ロック成功
           headers:
             X-Page-Lock: { schema: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: ページ不存在
           content:
@@ -407,6 +484,8 @@ paths:
 
     put:
       summary: ページロック延長
+      description: Bearer 認証時は `write` スコープが必要。`X-Lock-Authentication` が必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - $ref: "#/components/parameters/LockAuthHeader"
@@ -415,6 +494,8 @@ paths:
           description: 延長成功
           headers:
             X-Page-Lock: { schema: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           description: トークン不正
           content:
@@ -433,6 +514,8 @@ paths:
 
     get:
       summary: ロック状態取得
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/PageId"
       responses:
@@ -443,6 +526,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LockInfo" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: ロックなし/ページ不存在
           content:
@@ -456,12 +543,16 @@ paths:
 
     delete:
       summary: ページロック解除
+      description: Bearer 認証時は `write` スコープが必要。`X-Lock-Authentication` が必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - $ref: "#/components/parameters/LockAuthHeader"
       responses:
         "204":
           description: 解除成功
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           description: トークン不正
           content:
@@ -481,12 +572,16 @@ paths:
   /pages/{page_id}:
     delete:
       summary: ページ削除
+      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - $ref: "#/components/parameters/LockAuthHeader"
       responses:
         "204":
           description: 削除成功
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           description: トークン不正
           content:
@@ -511,6 +606,8 @@ paths:
   /assets:
     post:
       summary: アセットアップロード（パス指定）
+      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [write]
       parameters:
         - name: path
           in: query
@@ -536,6 +633,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/IdResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: パラメータ不正
           content:
@@ -559,6 +660,8 @@ paths:
 
     get:
       summary: アセット取得リダイレクト（パス指定）
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - name: path
           in: query
@@ -573,6 +676,10 @@ paths:
           description: リダイレクト
           headers:
             Location: { schema: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           description: パラメータ不正
           content:
@@ -592,6 +699,8 @@ paths:
   /assets/{asset_id}/data:
     get:
       summary: アセット本体取得
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/AssetId"
       responses:
@@ -611,6 +720,10 @@ paths:
           headers:
             Cache-Control: { schema: { type: string } }
             ETag: { schema: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: アセット不存在
           content:
@@ -625,6 +738,8 @@ paths:
   /assets/{asset_id}/meta:
     get:
       summary: アセットメタ取得
+      description: Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
       parameters:
         - $ref: "#/components/parameters/AssetId"
       responses:
@@ -635,6 +750,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AssetMeta" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: アセット不存在
           content:
@@ -649,11 +768,17 @@ paths:
   /assets/{asset_id}:
     delete:
       summary: アセット削除
+      description: Bearer 認証時は `write` スコープが必要。ロック対象ページ配下では `X-Lock-Authentication` も必要
+      x-required-scope: [write]
       parameters:
         - $ref: "#/components/parameters/AssetId"
       responses:
         "204":
           description: 削除成功
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           description: アセット不存在
           content:
@@ -664,3 +789,28 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /users/me:
+    get:
+      summary: 自分自身のユーザ情報取得
+      description: Basic 認証または Bearer 認証で利用できる。Bearer 認証時は `read` スコープが必要
+      x-required-scope: [read]
+      responses:
+        "200":
+          description: ユーザ情報
+          headers:
+            Cache-Control: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, username, display_name, timestamp]
+                properties:
+                  id: { type: string }
+                  username: { type: string }
+                  display_name: { type: string }
+                  timestamp: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"

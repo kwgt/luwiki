@@ -17,8 +17,9 @@ use serde_json::json;
 
 use super::super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::PageId;
+use crate::database::types::{BearerScope, PageId};
 use crate::http_server::app_state::AppState;
+use crate::rest_api::require_request_scope;
 
 #[derive(Deserialize)]
 struct ParentQuery {
@@ -44,6 +45,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * ページID解析
      */

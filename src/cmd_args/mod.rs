@@ -9,17 +9,24 @@
 //!
 
 mod config;
+mod export;
+mod fts;
+mod asset;
+mod import;
+mod lock;
 mod logger;
+mod page;
+mod run;
+mod token;
+mod user;
 
-use std::fs;
 use std::io::{BufRead, self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 use anyhow::{anyhow, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use directories::BaseDirs;
-use pulldown_cmark::Parser as MarkdownParser;
 use serde::{Deserialize, Serialize};
 
 use crate::command::{
@@ -27,14 +34,68 @@ use crate::command::{
     asset_undelete, commands, export as export_command, fts_merge,
     fts_rebuild, fts_search, help_all, import as import_command,
     lock_delete, lock_list, page_add, page_delete, page_list, page_move_to,
-    page_undelete, page_unlock, run, user_add, user_delete, user_edit,
-    user_list, CommandContext,
+    page_undelete, page_unlock, run as run_command, token_create,
+    token_list, token_purge, token_revoke,
+    user_add, user_delete, user_edit, user_list, CommandContext,
 };
 use crate::database::DatabaseManager;
-use crate::database::types::{AssetId, PageId};
-use crate::rest_api::{validate_asset_file_name, validate_page_path};
 use config::Config;
+pub(crate) use asset::{
+    AssetAddOpts,
+    AssetCommand,
+    AssetDeleteOpts,
+    AssetListOpts,
+    AssetListSortMode,
+    AssetMoveToOpts,
+    AssetPurgeOpts,
+    AssetSubCommand,
+    AssetUndeleteOpts,
+};
 pub(crate) use config::FrontendConfig;
+pub(crate) use export::ExportOpts;
+pub(crate) use fts::{
+    FtsCommand,
+    FtsSearchOpts,
+    FtsSearchTarget,
+    FtsSubCommand,
+};
+pub(crate) use import::ImportOpts;
+pub(crate) use lock::{
+    LockCommand,
+    LockDeleteOpts,
+    LockListOpts,
+    LockListSortMode,
+    LockSubCommand,
+};
+pub(crate) use page::{
+    PageAddOpts,
+    PageCommand,
+    PageDeleteOpts,
+    PageListOpts,
+    PageListSortMode,
+    PageMoveToOpts,
+    PageSubCommand,
+    PageUndeleteOpts,
+    PageUnlockOpts,
+};
+pub(crate) use run::RunOpts;
+pub(crate) use token::{
+    TokenCommand,
+    TokenCreateOpts,
+    TokenListOpts,
+    TokenPurgeOpts,
+    TokenRevokeOpts,
+    TokenSubCommand,
+};
+pub(crate) use user::{
+    UserAddOpts,
+    UserCommand,
+    UserDeleteOpts,
+    UserEditOpts,
+    UserListOpts,
+    UserListSortMode,
+    UserSubCommand,
+};
 
 /// デフォルトのコンフィギュレーションパス
 static DEFAULT_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -563,45 +624,11 @@ impl Options {
                     }
                 }
 
-                // コマンド毎のオプション情報へもコンフィギュレーションの内容を
-                // 反映する。
-                let opts: Option<&mut dyn ApplyConfig> =
-                    match &mut self.command {
-                    Some(Command::Run(opts)) => Some(opts),
-                    Some(Command::User(user)) => match &mut user.subcommand {
-                        UserSubCommand::List(opts) => Some(opts),
-                        _ => None,
-                    },
-                    Some(Command::Page(page)) => match &mut page.subcommand {
-                        PageSubCommand::Add(opts) => Some(opts),
-                        PageSubCommand::Delete(_) => None,
-                        PageSubCommand::List(opts) => Some(opts),
-                        PageSubCommand::MoveTo(_) => None,
-                        PageSubCommand::Undelete(opts) => Some(opts),
-                        PageSubCommand::Unlock(_) => None,
-                    },
-                    Some(Command::Lock(lock)) => match &mut lock.subcommand {
-                        LockSubCommand::List(opts) => Some(opts),
-                        _ => None,
-                    },
-                    Some(Command::Asset(asset)) => match &mut asset.subcommand {
-                        AssetSubCommand::Add(opts) => Some(opts),
-                        AssetSubCommand::List(opts) => Some(opts),
-                        AssetSubCommand::Delete(_) => None,
-                        AssetSubCommand::Purge(_) => None,
-                        AssetSubCommand::Undelete(_) => None,
-                        AssetSubCommand::MoveTo(_) => None,
-                    },
-                    Some(Command::Fts(fts)) => match &mut fts.subcommand {
-                        FtsSubCommand::Search(opts) => Some(opts),
-                        _ => None,
-                    },
-                    Some(Command::Export(_)) => None,
-                    Some(Command::Import(_)) => None,
-                    _ => None,
-                };
-
-                if let Some(opts) = opts {
+                if let Some(opts) = self
+                    .command
+                    .as_mut()
+                    .and_then(Command::apply_config_target_mut)
+                {
                     opts.apply_config(&config);
                 }
 
@@ -636,48 +663,12 @@ impl Options {
         /*
          * サブコマンド固有オプションの検証
          */
-        if let Some(command) = &mut self.command {
-            let opts: Option<&mut dyn Validate> = match command {
-                Command::Run(opts) => Some(opts),
-                Command::User(user) => match &mut user.subcommand {
-                    UserSubCommand::Delete(opts) => Some(opts),
-                    UserSubCommand::Edit(opts) => Some(opts),
-                    UserSubCommand::List(opts) => Some(opts),
-                    _ => None,
-                },
-                Command::Page(page) => match &mut page.subcommand {
-                    PageSubCommand::Add(opts) => Some(opts),
-                    PageSubCommand::Delete(opts) => Some(opts),
-                    PageSubCommand::List(opts) => Some(opts),
-                    PageSubCommand::MoveTo(opts) => Some(opts),
-                    PageSubCommand::Undelete(opts) => Some(opts),
-                    PageSubCommand::Unlock(opts) => Some(opts),
-                },
-                Command::Lock(lock) => match &mut lock.subcommand {
-                    LockSubCommand::List(opts) => Some(opts),
-                    _ => None,
-                },
-                Command::Asset(asset) => match &mut asset.subcommand {
-                    AssetSubCommand::Add(opts) => Some(opts),
-                    AssetSubCommand::List(opts) => Some(opts),
-                    AssetSubCommand::Delete(opts) => Some(opts),
-                    AssetSubCommand::Purge(opts) => Some(opts),
-                    AssetSubCommand::Undelete(opts) => Some(opts),
-                    AssetSubCommand::MoveTo(opts) => Some(opts),
-                }
-                Command::Fts(fts) => match &mut fts.subcommand {
-                    FtsSubCommand::Search(opts) => Some(opts),
-                    _ => None,
-                },
-                Command::Export(opts) => Some(opts),
-                Command::Import(opts) => Some(opts),
-                Command::Commands => None,
-                Command::HelpAll => None,
-            };
-
-            if let Some(opts) = opts {
+        if let Some(opts) = self
+            .command
+            .as_mut()
+            .and_then(Command::validate_target_mut)
+        {
                 opts.validate()?;
-            }
         }
 
         Ok(())
@@ -725,52 +716,13 @@ impl Options {
 
         // サブコマンドが指定されており、そのサブコマンドがオプションを持つなら
         // そのオプションも表示する。
-        if let Some(command) = &self.command {
-            /*
-             * サブコマンドオプションを表示
-             */
-            let opts: Option<&dyn ShowOptions> = match command {
-                Command::Run(opts) => Some(opts),
-                Command::User(user) => match &user.subcommand {
-                    UserSubCommand::Add(opts) => Some(opts),
-                    UserSubCommand::Delete(opts) => Some(opts),
-                    UserSubCommand::Edit(opts) => Some(opts),
-                    UserSubCommand::List(opts) => Some(opts),
-                },
-                Command::Page(page) => match &page.subcommand {
-                    PageSubCommand::Add(opts) => Some(opts),
-                    PageSubCommand::Delete(opts) => Some(opts),
-                    PageSubCommand::List(opts) => Some(opts),
-                    PageSubCommand::MoveTo(opts) => Some(opts),
-                    PageSubCommand::Undelete(opts) => Some(opts),
-                    PageSubCommand::Unlock(opts) => Some(opts),
-                },
-                Command::Lock(lock) => match &lock.subcommand {
-                    LockSubCommand::List(opts) => Some(opts),
-                    LockSubCommand::Delete(opts) => Some(opts),
-                },
-                Command::Asset(asset) => match &asset.subcommand {
-                    AssetSubCommand::Add(opts) => Some(opts),
-                    AssetSubCommand::List(opts) => Some(opts),
-                    AssetSubCommand::Delete(opts) => Some(opts),
-                    AssetSubCommand::Purge(opts) => Some(opts),
-                    AssetSubCommand::Undelete(opts) => Some(opts),
-                    AssetSubCommand::MoveTo(opts) => Some(opts),
-                },
-                Command::Fts(fts) => match &fts.subcommand {
-                    FtsSubCommand::Search(opts) => Some(opts),
-                    _ => None,
-                },
-                Command::Export(opts) => Some(opts),
-                Command::Import(opts) => Some(opts),
-                Command::Commands => None,
-                Command::HelpAll => None,
-            };
-
-            if let Some(opts) = opts {
+        if let Some(opts) = self
+            .command
+            .as_ref()
+            .and_then(Command::show_options_target)
+        {
                 println!("");
                 opts.show_options();
-            }
         }
     }
 
@@ -781,87 +733,10 @@ impl Options {
         /*
          * サブコマンドに応じた実行コンテキストを構築
          */
-        match &self.command {
-            Some(Command::Run(opts)) => run::build_context(self, opts),
-            Some(Command::User(user)) => match &user.subcommand {
-                UserSubCommand::Add(opts) => {
-                    user_add::build_context(self, opts)
-                }
-                UserSubCommand::Delete(opts) => {
-                    user_delete::build_context(self, opts)
-                }
-                UserSubCommand::Edit(opts) => {
-                    user_edit::build_context(self, opts)
-                }
-                UserSubCommand::List(opts) => {
-                    user_list::build_context(self, opts)
-                }
-            },
-            Some(Command::Page(page)) => match &page.subcommand {
-                PageSubCommand::Add(opts) => {
-                    page_add::build_context(self, opts)
-                }
-                PageSubCommand::Delete(opts) => {
-                    page_delete::build_context(self, opts)
-                }
-                PageSubCommand::List(opts) => {
-                    page_list::build_context(self, opts)
-                }
-                PageSubCommand::MoveTo(opts) => {
-                    page_move_to::build_context(self, opts)
-                }
-                PageSubCommand::Undelete(opts) => {
-                    page_undelete::build_context(self, opts)
-                }
-                PageSubCommand::Unlock(opts) => {
-                    page_unlock::build_context(self, opts)
-                }
-            },
-            Some(Command::Lock(lock)) => match &lock.subcommand {
-                LockSubCommand::List(opts) => {
-                    lock_list::build_context(self, opts)
-                }
-                LockSubCommand::Delete(opts) => {
-                    lock_delete::build_context(self, opts)
-                }
-            },
-            Some(Command::Asset(asset)) => match &asset.subcommand {
-                AssetSubCommand::Add(opts) => {
-                    asset_add::build_context(self, opts)
-                }
-                AssetSubCommand::List(opts) => {
-                    asset_list::build_context(self, opts)
-                }
-                AssetSubCommand::Delete(opts) => {
-                    asset_delete::build_context(self, opts)
-                }
-                AssetSubCommand::Purge(opts) => {
-                    asset_purge::build_context(self, opts)
-                }
-                AssetSubCommand::Undelete(opts) => {
-                    asset_undelete::build_context(self, opts)
-                }
-                AssetSubCommand::MoveTo(opts) => {
-                    asset_move_to::build_context(self, opts)
-                }
-            },
-            Some(Command::Fts(fts)) => match &fts.subcommand {
-                FtsSubCommand::Rebuild => fts_rebuild::build_context(self),
-                FtsSubCommand::Merge => fts_merge::build_context(self),
-                FtsSubCommand::Search(opts) => {
-                    fts_search::build_context(self, opts)
-                }
-            },
-            Some(Command::Export(opts)) => {
-                export_command::build_context(self, opts)
-            }
-            Some(Command::Import(opts)) => {
-                import_command::build_context(self, opts)
-            }
-            Some(Command::Commands) => commands::build_context(self),
-            Some(Command::HelpAll) => help_all::build_context(self),
-            None => Err(anyhow!("command not specified")),
-        }
+        self.command
+            .as_ref()
+            .map(|command| command.build_context(self))
+            .unwrap_or_else(|| Err(anyhow!("command not specified")))
     }
 }
 
@@ -872,7 +747,7 @@ impl Options {
 enum Command {
     /// サーバの起動
     #[command(name = "run", alias = "r")]
-    Run(RunOpts),
+    Run(run::RunOpts),
 
     /// ユーザ管理コマンド一覧の表示
     #[command(name = "user", alias = "u")]
@@ -894,13 +769,17 @@ enum Command {
     #[command(name = "fts", alias = "f", alias = "index")]
     Fts(FtsCommand),
 
+    /// Bearerトークン管理コマンド一覧の表示
+    #[command(name = "token", alias = "t")]
+    Token(TokenCommand),
+
     /// バックアップ／マイグレート用データのエクスポート
     #[command(name = "export", alias = "e")]
-    Export(ExportOpts),
+    Export(export::ExportOpts),
 
     /// エクスポートデータのインポート
     #[command(name = "import", alias = "i")]
-    Import(ImportOpts),
+    Import(import::ImportOpts),
 
     /// サブコマンド一覧の表示
     #[command(name = "commands")]
@@ -911,2279 +790,313 @@ enum Command {
     HelpAll,
 }
 
-#[derive(Clone, Args, Debug)]
-pub(crate) struct UserCommand {
-    #[command(subcommand)]
-    subcommand: UserSubCommand,
-}
-
-#[derive(Clone, Debug, Subcommand)]
-enum UserSubCommand {
-    /// ユーザ追加コマンド
-    #[command(name = "add", alias = "a")]
-    Add(UserAddOpts),
-
-    /// ユーザ情報の削除
-    #[command(name = "delete", alias = "d", alias = "del")]
-    Delete(UserDeleteOpts),
-
-    /// ユーザ情報の変更
-    #[command(name = "edit", alias = "e", alias = "ed")]
-    Edit(UserEditOpts),
-
-    /// ユーザ情報の一覧表示
-    #[command(name = "list", alias = "l", alias = "ls")]
-    List(UserListOpts)
-}
-
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageCommand {
-    #[command(subcommand)]
-    subcommand: PageSubCommand,
-}
-
-#[derive(Clone, Args, Debug)]
-pub(crate) struct LockCommand {
-    #[command(subcommand)]
-    subcommand: LockSubCommand,
-}
-
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetCommand {
-    #[command(subcommand)]
-    subcommand: AssetSubCommand,
-}
-
-#[derive(Clone, Args, Debug)]
-pub(crate) struct FtsCommand {
-    #[command(subcommand)]
-    subcommand: FtsSubCommand,
-}
-
-///
-/// サブコマンドexportのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct ExportOpts {
-    /// migrate export 対象のサブツリー
-    #[arg(short = 's', long = "subtree", value_name = "PREFIX")]
-    subtree: Option<String>,
-
-    /// リハーサルモード
-    #[arg(short = 'd', long = "dry-run")]
-    dry_run: bool,
-
-    /// ZIP パスワード
-    #[arg(short = 'p', long = "password", value_name = "PASSWORD")]
-    password: Option<String>,
-
-    /// 確認プロンプトを省略
-    #[arg(short = 'y', long = "yes")]
-    yes: bool,
-
-    /// strict-mode
-    #[arg(short = 'S', long = "strict-mode")]
-    strict_mode: bool,
-
-    /// 出力先 ZIP パス、"-" は標準出力
-    #[arg()]
-    output: String,
-}
-
-impl ExportOpts {
+impl Command {
     ///
-    /// サブツリー指定へのアクセサ
+    /// 設定反映対象のサブコマンドオプションを返す
     ///
-    pub(crate) fn subtree(&self) -> Option<String> {
-        self.subtree.clone()
-    }
-
-    ///
-    /// dry-run 指定へのアクセサ
-    ///
-    pub(crate) fn is_dry_run(&self) -> bool {
-        self.dry_run
-    }
-
-    ///
-    /// パスワード指定へのアクセサ
-    ///
-    pub(crate) fn password(&self) -> Option<String> {
-        self.password.clone()
-    }
-
-    ///
-    /// 確認省略指定へのアクセサ
-    ///
-    pub(crate) fn is_yes(&self) -> bool {
-        self.yes
-    }
-
-    ///
-    /// strict-mode 指定へのアクセサ
-    ///
-    pub(crate) fn is_strict_mode(&self) -> bool {
-        self.strict_mode
-    }
-
-    ///
-    /// 出力先へのアクセサ
-    ///
-    pub(crate) fn output(&self) -> String {
-        self.output.clone()
-    }
-}
-
-impl ShowOptions for ExportOpts {
-    fn show_options(&self) {
-        println!("export command options");
-        println!(
-            "   subtree:     {}",
-            self.subtree.as_deref().unwrap_or("(none)")
-        );
-        println!("   dry_run:     {}", self.is_dry_run());
-        println!("   password:    {}", self.password.is_some());
-        println!("   yes:         {}", self.is_yes());
-        println!("   strict_mode: {}", self.is_strict_mode());
-        println!("   output:      {}", self.output());
-    }
-}
-
-///
-/// サブコマンドimportのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct ImportOpts {
-    /// migrate import 先のプレフィクス
-    #[arg(short = 'm', long = "migrate", value_name = "PREFIX")]
-    migrate: Option<String>,
-
-    /// ユーザマッピング
-    #[arg(short = 'u', long = "user-map", value_name = "MAPPING")]
-    user_map: Vec<String>,
-
-    /// 編集者一覧のみを表示
-    #[arg(short = 'l', long = "user-list")]
-    user_list: bool,
-
-    /// リハーサルモード
-    #[arg(short = 'd', long = "dry-run")]
-    dry_run: bool,
-
-    /// 破損リンクを about:invalid へ置換
-    #[arg(short = 'f', long = "fix-broken-link")]
-    fix_broken_link: bool,
-
-    /// 確認プロンプトを省略
-    #[arg(short = 'y', long = "yes")]
-    yes: bool,
-
-    /// ZIP パスワード
-    #[arg(short = 'p', long = "password", value_name = "PASSWORD")]
-    password: Option<String>,
-
-    /// strict-mode
-    #[arg(short = 'S', long = "strict-mode")]
-    strict_mode: bool,
-
-    /// 入力 ZIP パス、"-" は標準入力
-    #[arg()]
-    input: String,
-}
-
-impl ImportOpts {
-    ///
-    /// migrate import 先へのアクセサ
-    ///
-    pub(crate) fn migrate(&self) -> Option<String> {
-        self.migrate.clone()
-    }
-
-    ///
-    /// ユーザマッピングへのアクセサ
-    ///
-    pub(crate) fn user_map(&self) -> Vec<String> {
-        self.user_map.clone()
-    }
-
-    ///
-    /// ユーザ一覧表示指定へのアクセサ
-    ///
-    pub(crate) fn is_user_list(&self) -> bool {
-        self.user_list
-    }
-
-    ///
-    /// dry-run 指定へのアクセサ
-    ///
-    pub(crate) fn is_dry_run(&self) -> bool {
-        self.dry_run
-    }
-
-    ///
-    /// 破損リンク修正指定へのアクセサ
-    ///
-    pub(crate) fn is_fix_broken_link(&self) -> bool {
-        self.fix_broken_link
-    }
-
-    ///
-    /// 確認省略指定へのアクセサ
-    ///
-    pub(crate) fn is_yes(&self) -> bool {
-        self.yes
-    }
-
-    ///
-    /// パスワード指定へのアクセサ
-    ///
-    pub(crate) fn password(&self) -> Option<String> {
-        self.password.clone()
-    }
-
-    ///
-    /// strict-mode 指定へのアクセサ
-    ///
-    pub(crate) fn is_strict_mode(&self) -> bool {
-        self.strict_mode
-    }
-
-    ///
-    /// 入力元へのアクセサ
-    ///
-    pub(crate) fn input(&self) -> String {
-        self.input.clone()
-    }
-}
-
-impl ShowOptions for ImportOpts {
-    fn show_options(&self) {
-        println!("import command options");
-        println!(
-            "   migrate:         {}",
-            self.migrate.as_deref().unwrap_or("(none)")
-        );
-        println!("   user_map:        {:?}", self.user_map());
-        println!("   user_list:       {}", self.is_user_list());
-        println!("   dry_run:         {}", self.is_dry_run());
-        println!(
-            "   fix_broken_link: {}",
-            self.is_fix_broken_link()
-        );
-        println!("   yes:             {}", self.is_yes());
-        println!("   password:        {}", self.password.is_some());
-        println!("   strict_mode:     {}", self.is_strict_mode());
-        println!("   input:           {}", self.input());
-    }
-}
-
-#[derive(Clone, Debug, Subcommand)]
-enum PageSubCommand {
-    /// ページの追加
-    #[command(name = "add", alias = "a")]
-    Add(PageAddOpts),
-
-    /// ページの削除
-    #[command(name = "delete", alias = "d", alias = "del")]
-    Delete(PageDeleteOpts),
-
-    /// ページのロック解除
-    #[command(name = "unlock", alias = "ul")]
-    Unlock(PageUnlockOpts),
-
-    /// ページの移動
-    #[command(name = "move_to", alias = "m", alias = "mv")]
-    MoveTo(PageMoveToOpts),
-
-    /// ページの回復
-    #[command(name = "undelete", alias = "ud")]
-    Undelete(PageUndeleteOpts),
-
-    /// ページ情報の一覧表示
-    #[command(name = "list", alias = "l", alias = "ls")]
-    List(PageListOpts),
-}
-
-#[derive(Clone, Debug, Subcommand)]
-enum LockSubCommand {
-    /// ロック情報の一覧表示
-    #[command(name = "list", alias = "l", alias = "ls")]
-    List(LockListOpts),
-
-    /// ロック情報の削除
-    #[command(name = "delete", alias = "d", alias = "del")]
-    Delete(LockDeleteOpts),
-}
-
-#[derive(Clone, Debug, Subcommand)]
-enum AssetSubCommand {
-    /// アセットの追加
-    #[command(name = "add", alias = "a")]
-    Add(AssetAddOpts),
-
-    /// アセット一覧の表示
-    #[command(name = "list", alias = "l", alias = "ls")]
-    List(AssetListOpts),
-
-    /// アセットの削除
-    #[command(name = "delete", alias = "d", alias = "del")]
-    Delete(AssetDeleteOpts),
-
-    /// アセット削除のパージ
-    #[command(name = "purge", alias = "p")]
-    Purge(AssetPurgeOpts),
-
-    /// アセットの回復
-    #[command(name = "undelete", alias = "ud")]
-    Undelete(AssetUndeleteOpts),
-
-    /// アセットの移動
-    #[command(name = "move_to", alias = "m", alias = "mv")]
-    MoveTo(AssetMoveToOpts),
-}
-
-#[derive(Clone, Debug, Subcommand)]
-enum FtsSubCommand {
-    /// 全文検索インデックスの再構築
-    #[command(name = "rebuild", alias = "r")]
-    Rebuild,
-
-    /// 全文検索インデックスのマージ
-    #[command(name = "merge", alias = "m")]
-    Merge,
-
-    /// 全文検索
-    #[command(name = "search", alias = "s")]
-    Search(FtsSearchOpts),
-}
-
-///
-/// サブコマンドrunのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct RunOpts {
-    /// バインド先のアドレス
-    #[arg(short = 'b', long = "open-browser", help = "ブラウザを起動する")]
-    open_browser: bool,
-
-    /// TLSでの通信を有効にする
-    #[arg(short = 'T', long = "tls")]
-    use_tls: bool,
-
-    /// TLS用のサーバ証明書ファイルのパス
-    #[arg(short = 'C', long = "cert", value_name = "FILE")]
-    cert_path: Option<PathBuf>,
-
-    /// サーバのバインド先
-    #[arg()]
-    bind_addr: Option<String>,
-
-    /// サーバのバインド先ポート
-    #[arg(skip)]
-    bind_port: Option<u16>,
-}
-
-impl RunOpts {
-    ///
-    /// 検索キーへのアクセサ
-    ///
-    /// # 戻り値
-    /// キー文字列を返す
-    ///
-    pub(crate) fn is_browser_open(&self) -> bool {
-        self.open_browser
-    }
-
-    ///
-    /// TLS有効フラグへのアクセサ
-    ///
-    /// # 戻り値
-    /// TLSが有効ならtrueを返す。
-    ///
-    pub(crate) fn use_tls(&self) -> bool {
-        self.use_tls
-    }
-
-    ///
-    /// サーバ証明書ファイルのパスへのアクセサ
-    ///
-    /// # 戻り値
-    /// オプションで指定された証明書パスを返す。未指定の場合はデフォルトのパス
-    /// を返す。
-    ///
-    pub(crate) fn cert_path(&self) -> PathBuf {
-        if let Some(path) = &self.cert_path {
-            path.clone()
-        } else {
-            default_cert_path()
+    fn apply_config_target_mut(&mut self) -> Option<&mut dyn ApplyConfig> {
+        match self {
+            Self::Run(opts) => Some(opts),
+            Self::User(user) => match &mut user.subcommand {
+                UserSubCommand::List(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Page(page) => match &mut page.subcommand {
+                PageSubCommand::Add(opts) => Some(opts),
+                PageSubCommand::List(opts) => Some(opts),
+                PageSubCommand::Undelete(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Lock(lock) => match &mut lock.subcommand {
+                LockSubCommand::List(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Asset(asset) => match &mut asset.subcommand {
+                AssetSubCommand::Add(opts) => Some(opts),
+                AssetSubCommand::List(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Fts(fts) => match &mut fts.subcommand {
+                FtsSubCommand::Search(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Token(token) => match &mut token.subcommand {
+                TokenSubCommand::Create(opts) => Some(opts),
+                TokenSubCommand::Revoke(opts) => Some(opts),
+                TokenSubCommand::Purge(opts) => Some(opts),
+                TokenSubCommand::List(opts) => Some(opts),
+            },
+            Self::Export(_) => None,
+            Self::Import(_) => None,
+            Self::Commands => None,
+            Self::HelpAll => None,
         }
     }
 
     ///
-    /// サーバ証明書パスの明示指定フラグへのアクセサ
+    /// 検証対象のサブコマンドオプションを返す
     ///
-    /// # 戻り値
-    /// 証明書パスが明示指定されている場合はtrueを返す。
-    ///
-    pub(crate) fn is_cert_path_explicit(&self) -> bool {
-        self.cert_path.is_some()
-    }
-
-    ///
-    /// バインド先のアドレスへのアクセサ
-    ///
-    pub(crate) fn bind_addr(&self) -> String {
-        if let Some(addr) = &self.bind_addr {
-            addr.clone()
-        } else {
-            "0.0.0.0".to_string()
+    fn validate_target_mut(&mut self) -> Option<&mut dyn Validate> {
+        match self {
+            Self::Run(opts) => Some(opts),
+            Self::User(user) => match &mut user.subcommand {
+                UserSubCommand::Delete(opts) => Some(opts),
+                UserSubCommand::Edit(opts) => Some(opts),
+                UserSubCommand::List(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Page(page) => match &mut page.subcommand {
+                PageSubCommand::Add(opts) => Some(opts),
+                PageSubCommand::Delete(opts) => Some(opts),
+                PageSubCommand::List(opts) => Some(opts),
+                PageSubCommand::MoveTo(opts) => Some(opts),
+                PageSubCommand::Undelete(opts) => Some(opts),
+                PageSubCommand::Unlock(opts) => Some(opts),
+            },
+            Self::Lock(lock) => match &mut lock.subcommand {
+                LockSubCommand::List(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Asset(asset) => match &mut asset.subcommand {
+                AssetSubCommand::Add(opts) => Some(opts),
+                AssetSubCommand::List(opts) => Some(opts),
+                AssetSubCommand::Delete(opts) => Some(opts),
+                AssetSubCommand::Purge(opts) => Some(opts),
+                AssetSubCommand::Undelete(opts) => Some(opts),
+                AssetSubCommand::MoveTo(opts) => Some(opts),
+            },
+            Self::Fts(fts) => match &mut fts.subcommand {
+                FtsSubCommand::Search(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Token(token) => match &mut token.subcommand {
+                TokenSubCommand::Create(opts) => Some(opts),
+                TokenSubCommand::Revoke(_) => None,
+                TokenSubCommand::Purge(_) => None,
+                TokenSubCommand::List(_) => None,
+            },
+            Self::Export(opts) => Some(opts),
+            Self::Import(opts) => Some(opts),
+            Self::Commands => None,
+            Self::HelpAll => None,
         }
     }
 
     ///
-    /// バインド先のポート番号へのアクセサ
+    /// 表示対象のサブコマンドオプションを返す
     ///
-    pub(crate) fn bind_port(&self) -> u16 {
-        if let Some(port) = self.bind_port {
-            port
-        } else {
-            8080
+    fn show_options_target(&self) -> Option<&dyn ShowOptions> {
+        match self {
+            Self::Run(opts) => Some(opts),
+            Self::User(user) => match &user.subcommand {
+                UserSubCommand::Add(opts) => Some(opts),
+                UserSubCommand::Delete(opts) => Some(opts),
+                UserSubCommand::Edit(opts) => Some(opts),
+                UserSubCommand::List(opts) => Some(opts),
+            },
+            Self::Page(page) => match &page.subcommand {
+                PageSubCommand::Add(opts) => Some(opts),
+                PageSubCommand::Delete(opts) => Some(opts),
+                PageSubCommand::List(opts) => Some(opts),
+                PageSubCommand::MoveTo(opts) => Some(opts),
+                PageSubCommand::Undelete(opts) => Some(opts),
+                PageSubCommand::Unlock(opts) => Some(opts),
+            },
+            Self::Lock(lock) => match &lock.subcommand {
+                LockSubCommand::List(opts) => Some(opts),
+                LockSubCommand::Delete(opts) => Some(opts),
+            },
+            Self::Asset(asset) => match &asset.subcommand {
+                AssetSubCommand::Add(opts) => Some(opts),
+                AssetSubCommand::List(opts) => Some(opts),
+                AssetSubCommand::Delete(opts) => Some(opts),
+                AssetSubCommand::Purge(opts) => Some(opts),
+                AssetSubCommand::Undelete(opts) => Some(opts),
+                AssetSubCommand::MoveTo(opts) => Some(opts),
+            },
+            Self::Fts(fts) => match &fts.subcommand {
+                FtsSubCommand::Search(opts) => Some(opts),
+                _ => None,
+            },
+            Self::Token(token) => match &token.subcommand {
+                TokenSubCommand::Create(opts) => Some(opts),
+                TokenSubCommand::Revoke(opts) => Some(opts),
+                TokenSubCommand::Purge(opts) => Some(opts),
+                TokenSubCommand::List(opts) => Some(opts),
+            },
+            Self::Export(opts) => Some(opts),
+            Self::Import(opts) => Some(opts),
+            Self::Commands => None,
+            Self::HelpAll => None,
         }
     }
-}
 
-// Validateトレイトの実装
-impl Validate for RunOpts {
     ///
-    /// run サブコマンドのオプション整合性を検証
+    /// サブコマンドに応じた実行コンテキストを構築する
     ///
-    /// # 戻り値
-    /// 矛盾がなければ `Ok(())`
-    ///
-    fn validate(&mut self) -> Result<()> {
-        /*
-         * bindアドレスからポート指定を補完し整合性を確認
-         */
-        if let Some(value) = &self.bind_addr {
-            let (addr, port) = parse_bind_value(value)?;
+    fn build_context(&self, opts: &Options) -> Result<Box<dyn CommandContext>> {
+        match self {
+            Self::Run(sub_opts) => run_command::build_context(opts, sub_opts),
+            Self::User(user) => match &user.subcommand {
+                UserSubCommand::Add(sub_opts) => {
+                    user_add::build_context(opts, sub_opts)
+                }
+                UserSubCommand::Delete(sub_opts) => {
+                    user_delete::build_context(opts, sub_opts)
+                }
+                UserSubCommand::Edit(sub_opts) => {
+                    user_edit::build_context(opts, sub_opts)
+                }
+                UserSubCommand::List(sub_opts) => {
+                    user_list::build_context(opts, sub_opts)
+                }
+            },
+            Self::Page(page) => match &page.subcommand {
+                PageSubCommand::Add(sub_opts) => {
+                    page_add::build_context(opts, sub_opts)
+                }
+                PageSubCommand::Delete(sub_opts) => {
+                    page_delete::build_context(opts, sub_opts)
+                }
+                PageSubCommand::List(sub_opts) => {
+                    page_list::build_context(opts, sub_opts)
+                }
+                PageSubCommand::MoveTo(sub_opts) => {
+                    page_move_to::build_context(opts, sub_opts)
+                }
+                PageSubCommand::Undelete(sub_opts) => {
+                    page_undelete::build_context(opts, sub_opts)
+                }
+                PageSubCommand::Unlock(sub_opts) => {
+                    page_unlock::build_context(opts, sub_opts)
+                }
+            },
+            Self::Lock(lock) => match &lock.subcommand {
+                LockSubCommand::List(sub_opts) => {
+                    lock_list::build_context(opts, sub_opts)
+                }
+                LockSubCommand::Delete(sub_opts) => {
+                    lock_delete::build_context(opts, sub_opts)
+                }
+            },
+            Self::Asset(asset) => match &asset.subcommand {
+                AssetSubCommand::Add(sub_opts) => {
+                    asset_add::build_context(opts, sub_opts)
+                }
+                AssetSubCommand::List(sub_opts) => {
+                    asset_list::build_context(opts, sub_opts)
+                }
+                AssetSubCommand::Delete(sub_opts) => {
+                    asset_delete::build_context(opts, sub_opts)
+                }
+                AssetSubCommand::Purge(sub_opts) => {
+                    asset_purge::build_context(opts, sub_opts)
+                }
+                AssetSubCommand::Undelete(sub_opts) => {
+                    asset_undelete::build_context(opts, sub_opts)
+                }
+                AssetSubCommand::MoveTo(sub_opts) => {
+                    asset_move_to::build_context(opts, sub_opts)
+                }
+            },
+            Self::Fts(fts) => match &fts.subcommand {
+                FtsSubCommand::Rebuild => fts_rebuild::build_context(opts),
+                FtsSubCommand::Merge => fts_merge::build_context(opts),
+                FtsSubCommand::Search(sub_opts) => {
+                    fts_search::build_context(opts, sub_opts)
+                }
+            },
+            Self::Token(token) => match &token.subcommand {
+                TokenSubCommand::Create(sub_opts) => {
+                    token_create::build_context(opts, sub_opts)
+                }
+                TokenSubCommand::Revoke(sub_opts) => {
+                    token_revoke::build_context(opts, sub_opts)
+                }
+                TokenSubCommand::Purge(sub_opts) => {
+                    token_purge::build_context(opts, sub_opts)
+                }
+                TokenSubCommand::List(sub_opts) => {
+                    token_list::build_context(opts, sub_opts)
+                }
+            },
+            Self::Export(sub_opts) => {
+                export_command::build_context(opts, sub_opts)
+            }
+            Self::Import(sub_opts) => {
+                import_command::build_context(opts, sub_opts)
+            }
+            Self::Commands => commands::build_context(opts),
+            Self::HelpAll => help_all::build_context(opts),
+        }
+    }
 
-            if let Some(current_port) = self.bind_port {
-                if let Some(parsed_port) = port {
-                    if current_port != parsed_port {
-                        return Err(anyhow!(
-                            "bind port is inconsistent: {} vs {}",
-                            current_port,
-                            parsed_port
-                        ));
+    ///
+    /// サブコマンド固有の設定内容を `Config` へ保存する
+    ///
+    fn save_config(&self, config: &mut Config) {
+        match self {
+            Self::Run(opts) => {
+                config.set_run_bind_addr(opts.bind_addr());
+                config.set_run_bind_port(opts.bind_port());
+                config.set_run_use_tls(opts.use_tls());
+                config.set_run_server_cert(opts.cert_path());
+            }
+            Self::User(user) => {
+                if let UserSubCommand::List(opts) = &user.subcommand {
+                    config.set_user_list_sort_mode(opts.sort_mode());
+                    config.set_user_list_reverse_sort(opts.is_reverse_sort());
+                }
+            }
+            Self::Page(page) => match &page.subcommand {
+                PageSubCommand::Add(opts) => {
+                    if let Some(user_name) = opts.raw_user_name() {
+                        config.set_page_add_default_user(user_name);
                     }
                 }
-            }
-
-            self.bind_addr = Some(addr);
-            if self.bind_port.is_none() {
-                self.bind_port = port;
-            }
-        }
-
-        /*
-         * 検証結果を返却
-         */
-        Ok(())
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for RunOpts {
-    ///
-    /// run サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        /*
-         * bind関連の設定を解決
-         */
-        if let Some(value) = &self.bind_addr {
-            if self.bind_port.is_none() {
-                if let Ok((addr, port)) = parse_bind_value(value) {
-                    self.bind_addr = Some(addr);
-                    self.bind_port = port;
+                PageSubCommand::List(opts) => {
+                    config.set_page_list_sort_mode(opts.sort_mode());
+                    config.set_page_list_reverse_sort(opts.is_reverse_sort());
+                    config.set_page_list_long_info(opts.is_long_info());
+                }
+                PageSubCommand::Undelete(opts) => {
+                    config.set_page_undelete_with_assets(!opts.is_without_assets());
+                }
+                _ => {}
+            },
+            Self::Lock(lock) => {
+                if let LockSubCommand::List(opts) = &lock.subcommand {
+                    config.set_lock_list_sort_mode(opts.sort_mode());
+                    config.set_lock_list_reverse_sort(opts.is_reverse_sort());
+                    config.set_lock_list_long_info(opts.is_long_info());
                 }
             }
-        } else if let Some(addr) = config.run_bind_addr() {
-            self.bind_addr = Some(addr);
-        }
-
-        if self.bind_port.is_none() {
-            if let Some(port) = config.run_bind_port() {
-                self.bind_port = Some(port);
-            }
-        }
-
-        /*
-         * TLS関連の設定を補完
-         */
-        if !self.use_tls {
-            if let Some(use_tls) = config.use_tls() {
-                self.use_tls = use_tls;
-            }
-        }
-
-        if self.cert_path.is_none() {
-            if let Some(path) = config.server_cert() {
-                self.cert_path = Some(path);
-            }
-        }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for UserListOpts {
-    ///
-    /// user list サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        /*
-         * ソート設定を未指定項目へ補完
-         */
-        if self.sort_by.is_none() {
-            if let Some(mode) = config.user_list_sort_mode() {
-                self.sort_by = Some(mode);
-            }
-        }
-
-        if !self.reverse_sort {
-            if let Some(reverse) = config.user_list_reverse_sort() {
-                self.reverse_sort = reverse;
-            }
-        }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for PageListOpts {
-    ///
-    /// page list サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        /*
-         * ソート設定を未指定項目へ補完
-         */
-        if self.sort_by.is_none() {
-            if let Some(mode) = config.page_list_sort_mode() {
-                self.sort_by = Some(mode);
-            }
-        }
-
-        if !self.reverse_sort {
-            if let Some(reverse) = config.page_list_reverse_sort() {
-                self.reverse_sort = reverse;
-            }
-        }
-
-        if !self.long_info {
-            if let Some(long_info) = config.page_list_long_info() {
-                self.long_info = long_info;
-            }
-        }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for PageAddOpts {
-    ///
-    /// page add サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        if self.user_name.is_none() {
-            if let Some(user_name) = config.page_add_default_user() {
-                self.user_name = Some(user_name);
-            }
-        }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for PageUndeleteOpts {
-    ///
-    /// page undelete サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        /*
-         * アセット復旧の既定値を補完
-         */
-        if !self.without_assets {
-            if let Some(with_assets) = config.page_undelete_with_assets() {
-                if !with_assets {
-                    self.without_assets = true;
+            Self::Asset(asset) => match &asset.subcommand {
+                AssetSubCommand::Add(opts) => {
+                    if let Some(user_name) = opts.raw_user_name() {
+                        config.set_asset_add_default_user(user_name);
+                    }
+                }
+                AssetSubCommand::List(opts) => {
+                    config.set_asset_list_sort_mode(opts.sort_mode());
+                    config.set_asset_list_reverse_sort(opts.is_reverse_sort());
+                    config.set_asset_list_long_info(opts.is_long_info());
+                }
+                _ => {}
+            },
+            Self::Fts(fts) => {
+                if let FtsSubCommand::Search(opts) = &fts.subcommand {
+                    config.set_fts_search_target(opts.target());
+                    config.set_fts_search_with_deleted(opts.with_deleted());
+                    config.set_fts_search_all_revision(opts.all_revision());
                 }
             }
+            Self::Token(_) => {}
+            Self::Export(_) => {}
+            Self::Import(_) => {}
+            Self::Commands => {}
+            Self::HelpAll => {}
         }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for AssetAddOpts {
-    ///
-    /// asset add サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        if self.user_name.is_none() {
-            if let Some(user_name) = config.asset_add_default_user() {
-                self.user_name = Some(user_name);
-            }
-        }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for AssetListOpts {
-    ///
-    /// asset list サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        /*
-         * ソート設定を未指定項目へ補完
-         */
-        if self.sort_by.is_none() {
-            if let Some(mode) = config.asset_list_sort_mode() {
-                self.sort_by = Some(mode);
-            }
-        }
-
-        if !self.reverse_sort {
-            if let Some(reverse) = config.asset_list_reverse_sort() {
-                self.reverse_sort = reverse;
-            }
-        }
-
-        if !self.long_info {
-            if let Some(long_info) = config.asset_list_long_info() {
-                self.long_info = long_info;
-            }
-        }
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for LockListOpts {
-    ///
-    /// lock list サブコマンドへ設定ファイルの値を反映
-    ///
-    /// # 引数
-    /// * `config` - 読み込み済み設定
-    ///
-    fn apply_config(&mut self, config: &Config) {
-        /*
-         * ソート設定を未指定項目へ補完
-         */
-        if self.sort_by.is_none() {
-            if let Some(mode) = config.lock_list_sort_mode() {
-                self.sort_by = Some(mode);
-            }
-        }
-
-        if !self.reverse_sort {
-            if let Some(reverse) = config.lock_list_reverse_sort() {
-                self.reverse_sort = reverse;
-            }
-        }
-
-        if !self.long_info {
-            if let Some(long_info) = config.lock_list_long_info() {
-                self.long_info = long_info;
-            }
-        }
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for UserListOpts {
-    fn validate(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for PageListOpts {
-    fn validate(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for PageAddOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.user_name.is_none() {
-            return Err(anyhow!("user name is required"));
-        }
-
-        let path = &self.file_path;
-        if !path.exists() {
-            return Err(anyhow!("{} is not exists", path.display()));
-        }
-
-        if !path.is_file() {
-            return Err(anyhow!("{} is not file", path.display()));
-        }
-
-        let extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("");
-        if !extension.eq_ignore_ascii_case("md") {
-            return Err(anyhow!("file extension must be .md"));
-        }
-
-        if let Err(message) = validate_page_path(&self.page_path) {
-            return Err(anyhow!("invalid page path: {}", message));
-        }
-
-        let source = fs::read_to_string(path)?;
-        let parser = MarkdownParser::new(&source);
-        for _ in parser {
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for PageMoveToOpts {
-    fn validate(&mut self) -> Result<()> {
-        if let Err(message) = validate_page_path(&self.dst_path) {
-            return Err(anyhow!("invalid page path: {}", message));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for PageUndeleteOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.target.trim().is_empty() {
-            return Err(anyhow!("page id is empty"));
-        }
-
-        if PageId::from_string(&self.target).is_err() {
-            return Err(anyhow!("invalid page id"));
-        }
-
-        if let Err(message) = validate_page_path(&self.restore_to) {
-            return Err(anyhow!("invalid page path: {}", message));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for PageDeleteOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.target.trim().is_empty() {
-            return Err(anyhow!("page id or path is empty"));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for PageUnlockOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.target.trim().is_empty() {
-            return Err(anyhow!("page id or path is empty"));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for AssetAddOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.user_name.is_none() {
-            return Err(anyhow!("user name is required"));
-        }
-
-        let path = &self.file_path;
-        if !path.exists() {
-            return Err(anyhow!("{} is not exists", path.display()));
-        }
-
-        if !path.is_file() {
-            return Err(anyhow!("{} is not file", path.display()));
-        }
-
-        fs::metadata(path)?;
-
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| anyhow!("file name is invalid"))?;
-        if let Err(message) = validate_asset_file_name(file_name) {
-            return Err(anyhow!("invalid file name: {}", message));
-        }
-
-        if let Ok(_) = PageId::from_string(&self.target) {
-            return Ok(());
-        }
-
-        if let Err(message) = validate_page_path(&self.target) {
-            return Err(anyhow!("invalid page path: {}", message));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for AssetListOpts {
-    fn validate(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for AssetDeleteOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.target.trim().is_empty() {
-            return Err(anyhow!("asset id or path is empty"));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for AssetPurgeOpts {
-    fn validate(&mut self) -> Result<()> {
-        if let Some(target) = &self.target {
-            if target.trim().is_empty() {
-                return Err(anyhow!("page id or path is empty"));
-            }
-
-            if PageId::from_string(target).is_ok() {
-                return Ok(());
-            }
-
-            if let Err(message) = validate_page_path(target) {
-                return Err(anyhow!("invalid page path: {}", message));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for AssetUndeleteOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.target.trim().is_empty() {
-            return Err(anyhow!("asset id is empty"));
-        }
-
-        if AssetId::from_string(&self.target).is_err() {
-            return Err(anyhow!("invalid asset id"));
-        }
-
-        if let Some(name) = &self.rename_to {
-            if let Err(message) = validate_asset_file_name(name) {
-                return Err(anyhow!("invalid file name: {}", message));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for AssetMoveToOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.asset_id.trim().is_empty() {
-            return Err(anyhow!("asset id is empty"));
-        }
-
-        if AssetId::from_string(&self.asset_id).is_err() {
-            return Err(anyhow!("invalid asset id"));
-        }
-
-        if let Ok(_) = PageId::from_string(&self.dst_target) {
-            return Ok(());
-        }
-
-        if let Err(message) = validate_page_path(&self.dst_target) {
-            return Err(anyhow!("invalid page path: {}", message));
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for LockListOpts {
-    fn validate(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for ExportOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.output.trim().is_empty() {
-            return Err(anyhow!("output path is empty"));
-        }
-
-        if let Some(subtree) = self.subtree.as_deref() {
-            if let Err(message) = validate_page_path(subtree) {
-                return Err(anyhow!("invalid page path: {}", message));
-            }
-
-            if subtree == "/" {
-                return Err(anyhow!("--subtree / is not allowed"));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for ImportOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.input.trim().is_empty() {
-            return Err(anyhow!("input path is empty"));
-        }
-
-        if let Some(prefix) = self.migrate.as_deref() {
-            if let Err(message) = validate_page_path(prefix) {
-                return Err(anyhow!("invalid page path: {}", message));
-            }
-        }
-
-        if self.fix_broken_link && self.migrate.is_none() {
-            return Err(anyhow!(
-                "--fix-broken-link requires --migrate"
-            ));
-        }
-
-        for mapping in &self.user_map {
-            if mapping.trim().is_empty() {
-                return Err(anyhow!("user mapping is empty"));
-            }
-
-            let Some((src, dst)) = mapping.split_once('=') else {
-                return Err(anyhow!(
-                    "invalid user mapping: {}",
-                    mapping
-                ));
-            };
-
-            if src.trim().is_empty() || dst.trim().is_empty() {
-                return Err(anyhow!(
-                    "invalid user mapping: {}",
-                    mapping
-                ));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for UserDeleteOpts {
-    fn validate(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for UserEditOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.display_name.is_none() && !self.password {
-            return Err(anyhow!("no update options specified"));
-        }
-
-        Ok(())
-    }
-}
-
-///
-/// BIND-ADDR[:PORT]形式の値を解析する
-///
-/// # 概要
-/// IPv6の`[ADDR]:PORT`形式、`ADDR:PORT`形式、`ADDR`のみの形式を解析し、
-/// バインド先のアドレスとポートを返す。
-///
-/// # 引数
-/// * `value` - 解析対象の文字列
-///
-/// # 戻り値
-/// 解析に成功した場合は`(bind_addr, bind_port)`を返す。ポートが指定されて
-/// いない場合は`None`を返す。
-///
-fn parse_bind_value(value: &str) -> Result<(String, Option<u16>)> {
-    /*
-     * 入力の事前チェック
-     */
-    if value.is_empty() {
-        return Err(anyhow!("bind address is empty"));
-    }
-
-    /*
-     * IPv6角括弧形式の解析
-     */
-    if let Some(rest) = value.strip_prefix('[') {
-        let close_pos = rest.find(']')
-            .ok_or_else(|| anyhow!("invalid bind address: {}", value))?;
-        let addr = &rest[..close_pos];
-        if addr.is_empty() {
-            return Err(anyhow!("bind address is empty"));
-        }
-
-        let tail = &rest[close_pos + 1..];
-        if tail.is_empty() {
-            return Ok((addr.to_string(), None));
-        }
-
-        if let Some(port_str) = tail.strip_prefix(':') {
-            if port_str.is_empty() {
-                return Err(anyhow!("bind port is empty"));
-            }
-
-            return Ok((addr.to_string(), Some(port_str.parse()?)));
-        }
-
-        return Err(anyhow!("invalid bind address: {}", value));
-    }
-
-    /*
-     * IPv4/ホスト名形式の解析
-     */
-    let colon_count = value.matches(':').count();
-    if colon_count == 0 {
-        return Ok((value.to_string(), None));
-    }
-
-    if colon_count == 1 {
-        let mut iter = value.splitn(2, ':');
-        let addr = iter.next().unwrap_or_default();
-        let port_str = iter.next().unwrap_or_default();
-
-        if addr.is_empty() {
-            return Err(anyhow!("bind address is empty"));
-        }
-        if port_str.is_empty() {
-            return Err(anyhow!("bind port is empty"));
-        }
-
-        return Ok((addr.to_string(), Some(port_str.parse()?)));
-    }
-
-    /*
-     * IPv6リテラル形式の解析
-     */
-    Ok((value.to_string(), None))
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for RunOpts {
-    fn show_options(&self) {
-        println!("run command options");
-        println!("   browser_open:   {:?}", self.is_browser_open());
-        println!("   tls enabled:    {}", self.use_tls());
-        println!("   cert path:      {}", self.cert_path().display());
-        println!("   bind:  {}:{}", self.bind_addr(), self.bind_port());
-    }
-}
-
-///
-/// サブコマンドuser_addのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct UserAddOpts {
-    /// 表示名の指定
-    #[arg(short = 'd', long = "display-name", value_name = "NAME")]
-    display_name: Option<String>,
-
-    /// 登録するユーザ名
-    #[arg()]
-    user_name: String,
-}
-
-impl UserAddOpts {
-    ///
-    /// ユーザ名へのアクセサ
-    ///
-    /// # 戻り値
-    /// ユーザ名を返す
-    ///
-    pub(crate) fn user_name(&self) -> String {
-        self.user_name.clone()
-    }
-
-    ///
-    /// 表示名へのアクセサ
-    ///
-    /// # 戻り値
-    /// 表示名を返す
-    ///
-    pub(crate) fn display_name(&self) -> Option<String> {
-        self.display_name.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for UserAddOpts {
-    fn show_options(&self) {
-        println!("user add command options");
-        println!("   user_name:    {}", self.user_name());
-        println!("   display_name: {:?}", self.display_name());
-    }
-}
-
-///
-/// サブコマンドuser_deleteのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct UserDeleteOpts {
-    /// 削除するユーザ名
-    #[arg()]
-    user_name: String,
-}
-
-impl UserDeleteOpts {
-    ///
-    /// ユーザ名へのアクセサ
-    ///
-    /// # 戻り値
-    /// ユーザ名を返す
-    ///
-    pub(crate) fn user_name(&self) -> String {
-        self.user_name.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for UserDeleteOpts {
-    fn show_options(&self) {
-        println!("user delete command options");
-        println!("   user_name: {}", self.user_name());
-    }
-}
-
-///
-/// サブコマンドpage_addのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageAddOpts {
-    /// 登録ユーザ名
-    #[arg(short = 'u', long = "user", value_name = "USER-NAME")]
-    user_name: Option<String>,
-
-    /// 取り込むMarkdownファイルのパス
-    #[arg()]
-    file_path: PathBuf,
-
-    /// ページパス
-    #[arg()]
-    page_path: String,
-}
-
-impl PageAddOpts {
-    ///
-    /// 登録ユーザ名へのアクセサ
-    ///
-    /// # 戻り値
-    /// 登録ユーザ名を返す
-    ///
-    pub(crate) fn user_name(&self) -> String {
-        self.user_name
-            .clone()
-            .expect("user_name must be resolved")
-    }
-
-    ///
-    /// ファイルパスへのアクセサ
-    ///
-    /// # 戻り値
-    /// ファイルパスを返す
-    ///
-    pub(crate) fn file_path(&self) -> PathBuf {
-        self.file_path.clone()
-    }
-
-    ///
-    /// ページパスへのアクセサ
-    ///
-    /// # 戻り値
-    /// ページパスを返す
-    ///
-    pub(crate) fn page_path(&self) -> String {
-        self.page_path.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for PageAddOpts {
-    fn show_options(&self) {
-        println!("page add command options");
-        println!("   user_name: {}", self.user_name());
-        println!("   file_path: {}", self.file_path.display());
-        println!("   page_path: {}", self.page_path());
-    }
-}
-
-///
-/// サブコマンドpage_move_toのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageMoveToOpts {
-    /// ロック中でも強制的に移動を行う
-    #[arg(short = 'f', long = "force")]
-    force: bool,
-
-    /// 配下ページを含めて移動する
-    #[arg(short = 'r', long = "recursive")]
-    recursive: bool,
-
-    /// 移動元のページパスまたはページID
-    #[arg()]
-    src_path: String,
-
-    /// 移動先のページパス
-    #[arg()]
-    dst_path: String,
-}
-
-impl PageMoveToOpts {
-    ///
-    /// ロック無視の指定有無へのアクセサ
-    ///
-    /// # 戻り値
-    /// 強制移動が指定されている場合はtrue
-    ///
-    pub(crate) fn is_force(&self) -> bool {
-        self.force
-    }
-
-    ///
-    /// 再帰移動指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 再帰移動が指定されている場合はtrue
-    ///
-    pub(crate) fn is_recursive(&self) -> bool {
-        self.recursive
-    }
-
-    ///
-    /// 移動元指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 移動元指定を返す
-    ///
-    pub(crate) fn src_path(&self) -> String {
-        self.src_path.clone()
-    }
-
-    ///
-    /// 移動先パスへのアクセサ
-    ///
-    /// # 戻り値
-    /// 移動先パスを返す
-    ///
-    pub(crate) fn dst_path(&self) -> String {
-        self.dst_path.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for PageMoveToOpts {
-    fn show_options(&self) {
-        println!("page move_to command options");
-        println!("   force:    {:?}", self.is_force());
-        println!("   recursive: {:?}", self.is_recursive());
-        println!("   src_path: {}", self.src_path());
-        println!("   dst_path: {}", self.dst_path());
-    }
-}
-
-///
-/// サブコマンドpage_undeleteのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageUndeleteOpts {
-    /// アセットの復旧を行わない
-    #[arg(long = "without-assets")]
-    without_assets: bool,
-
-    /// 配下ページを含めて復帰する
-    #[arg(short = 'r', long = "recursive")]
-    recursive: bool,
-
-    /// 復帰対象のページID
-    #[arg()]
-    target: String,
-
-    /// 復帰先のページパス
-    #[arg()]
-    restore_to: String,
-}
-
-impl PageUndeleteOpts {
-    ///
-    /// アセット復旧無効化指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// アセット復旧無効化が指定されている場合はtrue
-    ///
-    pub(crate) fn is_without_assets(&self) -> bool {
-        self.without_assets
-    }
-
-    ///
-    /// 再帰復帰指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 再帰復帰が指定されている場合はtrue
-    ///
-    pub(crate) fn is_recursive(&self) -> bool {
-        self.recursive
-    }
-
-    ///
-    /// 復帰対象指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 復帰対象指定を返す
-    ///
-    pub(crate) fn target(&self) -> String {
-        self.target.clone()
-    }
-
-    ///
-    /// 復帰先パスへのアクセサ
-    ///
-    /// # 戻り値
-    /// 復帰先パスを返す
-    ///
-    pub(crate) fn restore_to(&self) -> String {
-        self.restore_to.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for PageUndeleteOpts {
-    fn show_options(&self) {
-        println!("page undelete command options");
-        println!("   without_assets: {:?}", self.is_without_assets());
-        println!("   recursive:      {:?}", self.is_recursive());
-        println!("   target:         {}", self.target());
-        println!("   restore_to:     {}", self.restore_to());
-    }
-}
-
-///
-/// サブコマンドpage_deleteのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageDeleteOpts {
-    /// ハードデリートを行う
-    #[arg(short = 'H', long = "hard-delete")]
-    hard_delete: bool,
-
-    /// 配下ページを含めて削除する
-    #[arg(short = 'r', long = "recursive")]
-    recursive: bool,
-
-    /// ロック中でも強制的に削除を行う
-    #[arg(short = 'f', long = "force")]
-    force: bool,
-
-    /// 削除対象のページIDまたはページパス
-    #[arg()]
-    target: String,
-}
-
-impl PageDeleteOpts {
-    ///
-    /// ハードデリート指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// ハードデリートが指定されている場合はtrue
-    ///
-    pub(crate) fn is_hard_delete(&self) -> bool {
-        self.hard_delete
-    }
-
-    ///
-    /// 再帰削除指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 再帰削除が指定されている場合はtrue
-    ///
-    pub(crate) fn is_recursive(&self) -> bool {
-        self.recursive
-    }
-
-    ///
-    /// ロック無視の指定有無へのアクセサ
-    ///
-    /// # 戻り値
-    /// 強制削除が指定されている場合はtrue
-    ///
-    pub(crate) fn is_force(&self) -> bool {
-        self.force
-    }
-
-    ///
-    /// 削除対象指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 削除対象指定を返す
-    ///
-    pub(crate) fn target(&self) -> String {
-        self.target.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for PageDeleteOpts {
-    fn show_options(&self) {
-        println!("page delete command options");
-        println!("   hard_delete: {:?}", self.is_hard_delete());
-        println!("   recursive:   {:?}", self.is_recursive());
-        println!("   force:       {:?}", self.is_force());
-        println!("   target:      {}", self.target());
-    }
-}
-
-///
-/// サブコマンドpage_unlockのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageUnlockOpts {
-    /// ロック解除対象のページIDまたはページパス
-    #[arg()]
-    target: String,
-}
-
-impl PageUnlockOpts {
-    ///
-    /// ロック解除対象指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// ロック解除対象指定を返す
-    ///
-    pub(crate) fn target(&self) -> String {
-        self.target.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for PageUnlockOpts {
-    fn show_options(&self) {
-        println!("page unlock command options");
-        println!("   target: {}", self.target());
-    }
-}
-
-///
-/// サブコマンドasset_addのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetAddOpts {
-    /// 登録ユーザ名
-    #[arg(short = 'u', long = "user", value_name = "USER-NAME")]
-    user_name: Option<String>,
-
-    /// MIME種別の指定
-    #[arg(short = 't', long = "mime-type", value_name = "TYPE")]
-    mime_type: Option<String>,
-
-    /// 取り込むアセットファイルのパス
-    #[arg()]
-    file_path: PathBuf,
-
-    /// 所属ページIDまたはページパス
-    #[arg()]
-    target: String,
-}
-
-impl AssetAddOpts {
-    ///
-    /// 登録ユーザ名へのアクセサ
-    ///
-    /// # 戻り値
-    /// 登録ユーザ名を返す
-    ///
-    pub(crate) fn user_name(&self) -> String {
-        self.user_name
-            .clone()
-            .expect("user_name must be resolved")
-    }
-
-    ///
-    /// MIME種別へのアクセサ
-    ///
-    /// # 戻り値
-    /// MIME種別を返す
-    ///
-    pub(crate) fn mime_type(&self) -> Option<String> {
-        self.mime_type.clone()
-    }
-
-    ///
-    /// ファイルパスへのアクセサ
-    ///
-    /// # 戻り値
-    /// ファイルパスを返す
-    ///
-    pub(crate) fn file_path(&self) -> PathBuf {
-        self.file_path.clone()
-    }
-
-    ///
-    /// 対象ページ指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 対象ページ指定を返す
-    ///
-    pub(crate) fn target(&self) -> String {
-        self.target.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for AssetAddOpts {
-    fn show_options(&self) {
-        println!("asset add command options");
-        println!("   user_name: {:?}", self.user_name.as_deref());
-        println!("   mime_type: {:?}", self.mime_type());
-        println!("   file_path: {}", self.file_path.display());
-        println!("   target:    {}", self.target());
-    }
-}
-
-///
-/// asset listサブコマンドのソート順
-///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
-#[clap(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum AssetListSortMode {
-    /// デフォルト（アセットID順）
-    Default,
-
-    /// アップロード日時でソート
-    Upload,
-
-    /// アップロードユーザ名でソート
-    UserName,
-
-    /// MIME種別でソート
-    MimeType,
-
-    /// サイズでソート
-    Size,
-
-    /// ページパスでソート
-    Path,
-}
-
-///
-/// サブコマンドasset_listのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetListOpts {
-    /// 一覧のソート方法
-    #[arg(long = "sort-by", value_name = "MODE")]
-    sort_by: Option<AssetListSortMode>,
-
-    /// ソートを逆順で行う
-    #[arg(short = 'r', long = "reverse-sort")]
-    reverse_sort: bool,
-
-    /// 詳細情報で表示
-    #[arg(short = 'l', long = "long-info")]
-    long_info: bool,
-}
-
-impl AssetListOpts {
-    ///
-    /// ソートモードへのアクセサ
-    ///
-    /// # 戻り値
-    /// ソートモードを返す
-    ///
-    pub(crate) fn sort_mode(&self) -> AssetListSortMode {
-        self.sort_by.unwrap_or(AssetListSortMode::Default)
-    }
-
-    ///
-    /// 逆順ソート指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 逆順ソートが指定されている場合はtrue
-    ///
-    pub(crate) fn is_reverse_sort(&self) -> bool {
-        self.reverse_sort
-    }
-
-    ///
-    /// 詳細表示指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 詳細表示が指定されている場合はtrue
-    ///
-    pub(crate) fn is_long_info(&self) -> bool {
-        self.long_info
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for AssetListOpts {
-    fn show_options(&self) {
-        println!("asset list command options");
-        println!("   sort_by:      {:?}", self.sort_mode());
-        println!("   reverse_sort: {:?}", self.is_reverse_sort());
-        println!("   long_info:    {:?}", self.is_long_info());
-    }
-}
-
-///
-/// サブコマンドasset_deleteのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetDeleteOpts {
-    /// ハードデリートを行う
-    #[arg(short = 'H', long = "hard-delete")]
-    hard_delete: bool,
-
-    /// 削除対象のアセットIDまたはアセットパス
-    #[arg()]
-    target: String,
-}
-
-impl AssetDeleteOpts {
-    ///
-    /// ハードデリート指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// ハードデリートが指定されている場合はtrue
-    ///
-    pub(crate) fn is_hard_delete(&self) -> bool {
-        self.hard_delete
-    }
-
-    ///
-    /// 削除対象指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 削除対象指定を返す
-    ///
-    pub(crate) fn target(&self) -> String {
-        self.target.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for AssetDeleteOpts {
-    fn show_options(&self) {
-        println!("asset delete command options");
-        println!("   hard_delete: {:?}", self.is_hard_delete());
-        println!("   target:      {}", self.target());
-    }
-}
-
-///
-/// サブコマンドasset_purgeのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetPurgeOpts {
-    /// 削除済みアセットを削除する対象ページ
-    #[arg()]
-    target: Option<String>,
-}
-
-impl AssetPurgeOpts {
-    ///
-    /// 削除対象指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 削除対象指定を返す
-    ///
-    pub(crate) fn target(&self) -> Option<String> {
-        self.target.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for AssetPurgeOpts {
-    fn show_options(&self) {
-        println!("asset purge command options");
-        println!("   target: {:?}", self.target());
-    }
-}
-
-///
-/// サブコマンドasset_undeleteのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetUndeleteOpts {
-    /// 復帰対象のアセットID
-    #[arg()]
-    target: String,
-
-    /// 復帰時のアセット名
-    #[arg()]
-    rename_to: Option<String>,
-}
-
-impl AssetUndeleteOpts {
-    ///
-    /// 復帰対象指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 復帰対象指定を返す
-    ///
-    pub(crate) fn target(&self) -> String {
-        self.target.clone()
-    }
-
-    ///
-    /// 復帰時のアセット名へのアクセサ
-    ///
-    /// # 戻り値
-    /// 復帰時のアセット名を返す
-    ///
-    pub(crate) fn rename_to(&self) -> Option<String> {
-        self.rename_to.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for AssetUndeleteOpts {
-    fn show_options(&self) {
-        println!("asset undelete command options");
-        println!("   target: {}", self.target());
-        println!("   rename_to: {:?}", self.rename_to());
-    }
-}
-
-///
-/// サブコマンドasset_move_toのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct AssetMoveToOpts {
-    /// 強制的に移動を行う
-    #[arg(short = 'f', long = "force")]
-    force: bool,
-
-    /// 移動対象のアセットID
-    #[arg()]
-    asset_id: String,
-
-    /// 移動先のページIDまたはページパス
-    #[arg()]
-    dst_target: String,
-}
-
-impl AssetMoveToOpts {
-    ///
-    /// 強制移動指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 強制移動が指定されている場合はtrue
-    ///
-    pub(crate) fn is_force(&self) -> bool {
-        self.force
-    }
-
-    ///
-    /// 移動対象アセットIDへのアクセサ
-    ///
-    /// # 戻り値
-    /// 移動対象アセットIDを返す
-    ///
-    pub(crate) fn asset_id(&self) -> String {
-        self.asset_id.clone()
-    }
-
-    ///
-    /// 移動先指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 移動先指定を返す
-    ///
-    pub(crate) fn dst_target(&self) -> String {
-        self.dst_target.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for AssetMoveToOpts {
-    fn show_options(&self) {
-        println!("asset move_to command options");
-        println!("   force:      {:?}", self.is_force());
-        println!("   asset_id:   {}", self.asset_id());
-        println!("   dst_target: {}", self.dst_target());
-    }
-}
-
-///
-/// fts searchサブコマンドの検索対象
-///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
-#[clap(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum FtsSearchTarget {
-    /// 見出し
-    Headings,
-
-    /// 本文
-    Body,
-
-    /// コードブロック
-    Code,
-}
-
-///
-/// サブコマンドfts searchのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct FtsSearchOpts {
-    /// 検索対象
-    #[arg(short = 't', long = "target", value_name = "TARGET")]
-    target: Option<FtsSearchTarget>,
-
-    /// 削除済みページを検索対象に含める
-    #[arg(short = 'd', long = "with-deleted")]
-    with_deleted: bool,
-
-    /// 全リビジョンを検索対象に含める
-    #[arg(short = 'a', long = "all-revision")]
-    all_revision: bool,
-
-    /// 検索式
-    #[arg()]
-    expression: String,
-}
-
-impl FtsSearchOpts {
-    ///
-    /// 検索対象のアクセサ
-    ///
-    pub(crate) fn target(&self) -> FtsSearchTarget {
-        self.target.unwrap_or(FtsSearchTarget::Body)
-    }
-
-    ///
-    /// 削除済み対象を含めるか否か
-    ///
-    /// # 戻り値
-    /// 削除済みページを含める場合は`true`
-    ///
-    pub(crate) fn with_deleted(&self) -> bool {
-        self.with_deleted
-    }
-
-    ///
-    /// 全リビジョン対象か否か
-    ///
-    /// # 戻り値
-    /// 全リビジョンを対象に含める場合は`true`
-    ///
-    pub(crate) fn all_revision(&self) -> bool {
-        self.all_revision
-    }
-
-    ///
-    /// 検索式のアクセサ
-    ///
-    pub(crate) fn expression(&self) -> String {
-        self.expression.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for FtsSearchOpts {
-    fn show_options(&self) {
-        println!("fts search command options");
-        println!("   target:     {:?}", self.target());
-        println!("   deleted:    {:?}", self.with_deleted());
-        println!("   revision:   {:?}", self.all_revision());
-        println!("   expression: {}", self.expression());
-    }
-}
-
-// Validateトレイトの実装
-impl Validate for FtsSearchOpts {
-    fn validate(&mut self) -> Result<()> {
-        if self.expression.trim().is_empty() {
-            return Err(anyhow!("search expression is empty"));
-        }
-        Ok(())
-    }
-}
-
-// ApplyConfigトレイトの実装
-impl ApplyConfig for FtsSearchOpts {
-    fn apply_config(&mut self, config: &Config) {
-        if self.target.is_none() {
-            if let Some(target) = config.fts_search_target() {
-                self.target = Some(target);
-            }
-        }
-
-        if !self.with_deleted {
-            if let Some(with_deleted) = config.fts_search_with_deleted() {
-                self.with_deleted = with_deleted;
-            }
-        }
-
-        if !self.all_revision {
-            if let Some(all_revision) = config.fts_search_all_revision() {
-                self.all_revision = all_revision;
-            }
-        }
-    }
-}
-
-///
-/// サブコマンドuser_editのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct UserEditOpts {
-    /// 表示名の指定
-    #[arg(short = 'd', long = "display-name", value_name = "NEW-NAME")]
-    display_name: Option<String>,
-
-    /// パスワードの指定
-    #[arg(short = 'p', long = "password")]
-    password: bool,
-
-    /// 変更対象のユーザ名
-    #[arg()]
-    user_name: String,
-}
-
-impl UserEditOpts {
-    ///
-    /// ユーザ名へのアクセサ
-    ///
-    /// # 戻り値
-    /// ユーザ名を返す
-    ///
-    pub(crate) fn user_name(&self) -> String {
-        self.user_name.clone()
-    }
-
-    ///
-    /// 表示名へのアクセサ
-    ///
-    /// # 戻り値
-    /// 表示名を返す
-    ///
-    pub(crate) fn display_name(&self) -> Option<String> {
-        self.display_name.clone()
-    }
-
-    ///
-    /// パスワード変更指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// パスワード変更が指定されている場合はtrue
-    ///
-    pub(crate) fn is_password_change(&self) -> bool {
-        self.password
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for UserEditOpts {
-    fn show_options(&self) {
-        println!("user edit command options");
-        println!("   user_name:    {}", self.user_name());
-        println!("   display_name: {:?}", self.display_name());
-        println!("   password:     {:?}", self.is_password_change());
-    }
-}
-
-///
-/// user_listサブコマンドのソート順
-///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
-#[clap(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum UserListSortMode {
-    /// デフォルト（ユーザID順）
-    Default,
-
-    /// ユーザ名でソート
-    UserName,
-
-    /// 表示名でソート
-    DisplayName,
-
-    /// 更新日時でソート
-    LastUpdate,
-}
-
-///
-/// サブコマンドuser_listのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct UserListOpts {
-    /// 一覧のソート方法
-    #[arg(long = "sort-by", value_name = "MODE")]
-    sort_by: Option<UserListSortMode>,
-
-    /// ソートを逆順で行う
-    #[arg(short = 'r', long = "reverse-sort")]
-    reverse_sort: bool,
-}
-
-impl UserListOpts {
-    ///
-    /// ソートモードへのアクセサ
-    ///
-    /// # 戻り値
-    /// ソートモードを返す
-    ///
-    pub(crate) fn sort_mode(&self) -> UserListSortMode {
-        self.sort_by.unwrap_or(UserListSortMode::Default)
-    }
-
-    ///
-    /// 逆順ソート指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 逆順ソートが指定されている場合はtrue
-    ///
-    pub(crate) fn is_reverse_sort(&self) -> bool {
-        self.reverse_sort
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for UserListOpts {
-    fn show_options(&self) {
-        println!("user list command options");
-        println!("   sort_by:      {:?}", self.sort_mode());
-        println!("   reverse_sort: {:?}", self.is_reverse_sort());
-    }
-}
-
-///
-/// page_listサブコマンドのソート順
-///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
-#[clap(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PageListSortMode {
-    /// デフォルト（ページID順）
-    Default,
-
-    /// ユーザ名でソート
-    UserName,
-
-    /// ページパスでソート
-    PagePath,
-
-    /// 更新日時でソート
-    LastUpdate,
-}
-
-///
-/// サブコマンドpage_listのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct PageListOpts {
-    /// 一覧のソート方法
-    #[arg(long = "sort-by", value_name = "MODE")]
-    sort_by: Option<PageListSortMode>,
-
-    /// ソートを逆順で行う
-    #[arg(short = 'r', long = "reverse-sort")]
-    reverse_sort: bool,
-
-    /// 詳細情報で表示
-    #[arg(short = 'l', long = "long-info")]
-    long_info: bool,
-}
-
-impl PageListOpts {
-    ///
-    /// ソートモードへのアクセサ
-    ///
-    /// # 戻り値
-    /// ソートモードを返す
-    ///
-    pub(crate) fn sort_mode(&self) -> PageListSortMode {
-        self.sort_by.unwrap_or(PageListSortMode::Default)
-    }
-
-    ///
-    /// 逆順ソート指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 逆順ソートが指定されている場合はtrue
-    ///
-    pub(crate) fn is_reverse_sort(&self) -> bool {
-        self.reverse_sort
-    }
-
-    ///
-    /// 詳細表示指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 詳細表示が指定されている場合はtrue
-    ///
-    pub(crate) fn is_long_info(&self) -> bool {
-        self.long_info
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for PageListOpts {
-    fn show_options(&self) {
-        println!("page list command options");
-        println!("   sort_by:      {:?}", self.sort_mode());
-        println!("   reverse_sort: {:?}", self.is_reverse_sort());
-        println!("   long_info:    {:?}", self.is_long_info());
-    }
-}
-
-///
-/// lock_listサブコマンドのソート順
-///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
-#[clap(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LockListSortMode {
-    /// デフォルト（ロックID順）
-    Default,
-
-    /// 有効期限でソート
-    Expire,
-
-    /// ユーザ名でソート
-    UserName,
-
-    /// ページパスでソート
-    PagePath,
-}
-
-///
-/// サブコマンドlock_listのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct LockListOpts {
-    /// 一覧のソート方法
-    #[arg(long = "sort-by", value_name = "MODE")]
-    sort_by: Option<LockListSortMode>,
-
-    /// ソートを逆順で行う
-    #[arg(short = 'r', long = "reverse-sort")]
-    reverse_sort: bool,
-
-    /// 詳細情報で表示
-    #[arg(short = 'l', long = "long-info")]
-    long_info: bool,
-}
-
-impl LockListOpts {
-    ///
-    /// ソートモードへのアクセサ
-    ///
-    /// # 戻り値
-    /// ソートモードを返す
-    ///
-    pub(crate) fn sort_mode(&self) -> LockListSortMode {
-        self.sort_by.unwrap_or(LockListSortMode::Default)
-    }
-
-    ///
-    /// 逆順ソート指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 逆順ソートが指定されている場合はtrue
-    ///
-    pub(crate) fn is_reverse_sort(&self) -> bool {
-        self.reverse_sort
-    }
-
-    ///
-    /// 詳細表示指定へのアクセサ
-    ///
-    /// # 戻り値
-    /// 詳細表示が指定されている場合はtrue
-    ///
-    pub(crate) fn is_long_info(&self) -> bool {
-        self.long_info
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for LockListOpts {
-    fn show_options(&self) {
-        println!("lock list command options");
-        println!("   sort_by:      {:?}", self.sort_mode());
-        println!("   reverse_sort: {:?}", self.is_reverse_sort());
-        println!("   long_info:    {:?}", self.is_long_info());
-    }
-}
-
-///
-/// サブコマンドlock_deleteのオプション
-///
-#[derive(Clone, Args, Debug)]
-pub(crate) struct LockDeleteOpts {
-    /// 削除するロックID
-    #[arg()]
-    lock_id: String,
-}
-
-impl LockDeleteOpts {
-    ///
-    /// ロックIDへのアクセサ
-    ///
-    /// # 戻り値
-    /// ロックIDを返す
-    ///
-    pub(crate) fn lock_id(&self) -> String {
-        self.lock_id.clone()
-    }
-}
-
-// ShowOptionsトレイトの実装
-impl ShowOptions for LockDeleteOpts {
-    fn show_options(&self) {
-        println!("lock delete command options");
-        println!("   lock_id: {}", self.lock_id());
     }
 }
 
@@ -3296,78 +1209,8 @@ fn save_config(opts: &Options) -> Result<()> {
     config.set_wiki_title(opts.wiki_title.clone());
     config.set_asset_limit_size(opts.asset_limit_size.clone());
 
-    match &opts.command {
-        Some(Command::Run(opts)) => {
-            config.set_run_bind_addr(opts.bind_addr());
-            config.set_run_bind_port(opts.bind_port());
-            config.set_run_use_tls(opts.use_tls());
-            config.set_run_server_cert(opts.cert_path());
-        }
-
-        Some(Command::User(user)) => match &user.subcommand {
-            UserSubCommand::List(opts) => {
-                config.set_user_list_sort_mode(opts.sort_mode());
-                config.set_user_list_reverse_sort(opts.is_reverse_sort());
-            }
-
-            _ => {}
-        }
-
-        Some(Command::Page(page)) => match &page.subcommand {
-            PageSubCommand::Add(opts) => {
-                if let Some(user_name) = opts.user_name.as_ref() {
-                    config.set_page_add_default_user(user_name.clone());
-                }
-            }
-            PageSubCommand::Delete(_) => {}
-            PageSubCommand::List(opts) => {
-                config.set_page_list_sort_mode(opts.sort_mode());
-                config.set_page_list_reverse_sort(opts.is_reverse_sort());
-                config.set_page_list_long_info(opts.is_long_info());
-            }
-            PageSubCommand::MoveTo(_) => {}
-            PageSubCommand::Undelete(opts) => {
-                config.set_page_undelete_with_assets(!opts.is_without_assets());
-            }
-            PageSubCommand::Unlock(_) => {}
-        }
-
-        Some(Command::Lock(lock)) => match &lock.subcommand {
-            LockSubCommand::List(opts) => {
-                config.set_lock_list_sort_mode(opts.sort_mode());
-                config.set_lock_list_reverse_sort(opts.is_reverse_sort());
-                config.set_lock_list_long_info(opts.is_long_info());
-            }
-            _ => {}
-        }
-
-        Some(Command::Asset(asset)) => match &asset.subcommand {
-            AssetSubCommand::Add(opts) => {
-                if let Some(user_name) = opts.user_name.as_ref() {
-                    config.set_asset_add_default_user(user_name.clone());
-                }
-            }
-            AssetSubCommand::List(opts) => {
-                config.set_asset_list_sort_mode(opts.sort_mode());
-                config.set_asset_list_reverse_sort(opts.is_reverse_sort());
-                config.set_asset_list_long_info(opts.is_long_info());
-            }
-            AssetSubCommand::Delete(_) => {}
-            AssetSubCommand::Purge(_) => {}
-            AssetSubCommand::Undelete(_) => {}
-            AssetSubCommand::MoveTo(_) => {}
-        }
-
-        Some(Command::Fts(fts)) => match &fts.subcommand {
-            FtsSubCommand::Search(opts) => {
-                config.set_fts_search_target(opts.target());
-                config.set_fts_search_with_deleted(opts.with_deleted());
-                config.set_fts_search_all_revision(opts.all_revision());
-            }
-            _ => {}
-        }
-
-        _ => {}
+    if let Some(command) = &opts.command {
+        command.save_config(&mut config);
     }
 
     /*

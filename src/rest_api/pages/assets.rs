@@ -17,10 +17,10 @@ use serde_json::json;
 
 use super::super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::{LockToken, PageId};
+use crate::database::types::{BearerScope, LockToken, PageId};
 use crate::http_server::app_state::AppState;
-use crate::rest_api::AuthUser;
-use crate::rest_api::CACHE_CONTROL_NO_STORE;
+use crate::rest_api::AuthContext;
+use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
 /// ロック認証ヘッダの名称
 const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
 
@@ -38,9 +38,14 @@ const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
 /// actix-webのレスポンスオブジェクト
 ///
 pub async fn get(
+    req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * ページID解析
      */
@@ -171,6 +176,10 @@ pub async fn post(
     path: web::Path<(String, String)>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
+        return Ok(resp);
+    }
+
     /*
      * パス情報の取得
      */
@@ -207,8 +216,8 @@ pub async fn post(
     /*
      * 認証ユーザ取得
      */
-    let auth_user = match req.extensions().get::<AuthUser>() {
-        Some(user) => user.user_id().to_string(),
+    let auth_user = match req.extensions().get::<AuthContext>() {
+        Some(context) => context.user_id().to_string(),
         None => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -379,9 +388,14 @@ pub async fn post(
 /// actix-webのレスポンスオブジェクト
 ///
 pub async fn redirect(
+    req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<(String, String)>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
+
     /*
      * パス情報の取得
      */
