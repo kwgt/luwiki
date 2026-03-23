@@ -11,6 +11,8 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Seek, Write};
+#[cfg(target_family = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -514,7 +516,6 @@ fn replace_output_file_unix(temp_path: &Path, output: &Path) -> Result<()> {
 ///
 #[cfg(target_family = "windows")]
 fn replace_output_file_windows(temp_path: &Path, output: &Path) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use std::ptr::null;
 
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;

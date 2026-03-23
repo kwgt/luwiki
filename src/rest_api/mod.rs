@@ -21,6 +21,7 @@ use actix_web::{HttpResponse, web};
 use actix_web_httpauth::extractors::basic::Config;
 use serde_json::json;
 
+#[allow(unused_imports)]
 pub(crate) use auth::{
     AuthContext,
     AuthUser,

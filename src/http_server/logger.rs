@@ -24,6 +24,8 @@ use actix_web::http::{header, Version};
 use actix_web::{Error, HttpMessage, HttpRequest};
 use log::info;
 
+use crate::rest_api::AuthContext;
+#[cfg(test)]
 use crate::rest_api::AuthUser;
 
 ///
@@ -169,8 +171,8 @@ where
 fn extract_user(request: &HttpRequest) -> String {
     let user = request
         .extensions()
-        .get::<AuthUser>()
-        .map(|user| user.user_id().to_string())
+        .get::<AuthContext>()
+        .map(|auth| auth.user_id().to_string())
         .unwrap_or_else(|| "-".to_string());
     format!("@{}", user)
 }
@@ -227,5 +229,44 @@ fn http_version(version: Version) -> &'static str {
         Version::HTTP_2 => "HTTP/2.0",
         Version::HTTP_3 => "HTTP/3.0",
         _ => "HTTP/?",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::test::TestRequest;
+
+    use super::*;
+    use crate::database::types::BearerScopeSet;
+
+    ///
+    /// 認証文脈がある場合にアクセスログ用ユーザ名を返すことを確認する。
+    ///
+    /// 注記:
+    /// `cargo test extract_user_returns_authenticated_user` で実行する。
+    ///
+    #[test]
+    fn extract_user_returns_authenticated_user() {
+        let req = TestRequest::default().to_http_request();
+
+        req.extensions_mut().insert(AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::all(),
+        ));
+
+        assert_eq!(extract_user(&req), "@alice");
+    }
+
+    ///
+    /// 認証文脈が無い場合に未認証表示を返すことを確認する。
+    ///
+    /// 注記:
+    /// `cargo test extract_user_returns_dash_without_auth_context` で実行する。
+    ///
+    #[test]
+    fn extract_user_returns_dash_without_auth_context() {
+        let req = TestRequest::default().to_http_request();
+
+        assert_eq!(extract_user(&req), "@-");
     }
 }
