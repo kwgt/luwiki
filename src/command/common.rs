@@ -83,6 +83,33 @@ pub(crate) fn format_cli_timestamp(timestamp: DateTime<Local>) -> String {
 }
 
 ///
+/// CLI出力用の期間表示文字列を生成
+///
+/// # 引数
+/// * `duration` - 整形対象の期間
+///
+/// # 戻り値
+/// 日・時・分・秒の短縮表記へ整形した文字列を返す。
+///
+pub(crate) fn format_cli_duration(duration: chrono::Duration) -> String {
+    let seconds = duration.num_seconds();
+
+    if seconds % 86_400 == 0 {
+        return format!("{}d", seconds / 86_400);
+    }
+
+    if seconds % 3_600 == 0 {
+        return format!("{}h", seconds / 3_600);
+    }
+
+    if seconds % 60 == 0 {
+        return format!("{}m", seconds / 60);
+    }
+
+    format!("{}s", seconds)
+}
+
+///
 /// パスワード入力とバリデーション
 ///
 /// # 概要

@@ -17,6 +17,7 @@ use crate::cmd_args::{FrontendConfig, Options, RunOpts};
 use crate::database::DatabaseManager;
 use crate::fts::FtsIndexConfig;
 use crate::http_server;
+use crate::mcp;
 use crate::rest_api::validate_page_path;
 
 ///
@@ -50,6 +51,9 @@ struct RunCommandContext {
     /// サーバ証明書パスの明示指定フラグ
     cert_is_explicit: bool,
 
+    /// MCP有効フラグ
+    mcp_enabled: bool,
+
     /// 起動時にブラウザを開くか否かのフラグ
     #[allow(dead_code)]
     open_browser: bool,
@@ -62,6 +66,9 @@ struct RunCommandContext {
 
     /// アセットサイズ上限
     asset_limit_size: u64,
+
+    /// 監査ログ設定
+    audit_log_config: http_server::AuditLogConfig,
 }
 
 impl RunCommandContext {
@@ -95,10 +102,16 @@ impl RunCommandContext {
             use_tls: sub_opts.use_tls(),
             cert_path: sub_opts.cert_path(),
             cert_is_explicit: sub_opts.is_cert_path_explicit(),
+            mcp_enabled: sub_opts.use_mcp(),
             open_browser: sub_opts.is_browser_open(),
             template_root,
             wiki_title: opts.wiki_title(),
             asset_limit_size: opts.asset_limit_size()?,
+            audit_log_config: http_server::AuditLogConfig::new(
+                opts.audit_log_dir(),
+                opts.audit_log_retention()?,
+                opts.audit_log_rotate_size()?,
+            ),
         })
     }
 }
@@ -129,6 +142,15 @@ impl CommandContext for RunCommandContext {
         }
 
         /*
+         * MCP endpoint情報の解決
+         */
+        let mcp_endpoint = if self.mcp_enabled {
+            Some(mcp::create_endpoint())
+        } else {
+            None
+        };
+
+        /*
          * HTTPサーバの起動
          */
         http_server::run(
@@ -143,6 +165,12 @@ impl CommandContext for RunCommandContext {
             self.use_tls,
             self.cert_path.clone(),
             self.cert_is_explicit,
+            if self.mcp_enabled {
+                Some(self.audit_log_config.clone())
+            } else {
+                None
+            },
+            mcp_endpoint,
         )
     }
 }

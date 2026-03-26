@@ -7,7 +7,15 @@
 //! ライブラリ用の公開モジュール定義
 #![allow(dead_code)]
 
+pub mod auth;
 pub mod database;
 pub mod export_import;
+pub mod audit;
+pub mod cmd_args;
+pub mod command;
+pub mod http_server;
+pub mod mcp;
+pub mod fts;
+pub mod rest_api;
 
 pub use database::page_source_exists_for_test;

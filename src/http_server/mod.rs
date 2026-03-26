@@ -25,20 +25,72 @@ use actix_web::dev::ServiceResponse;
 use actix_web::http::StatusCode;
 use actix_web::middleware::{ErrorHandlerResponse, ErrorHandlers};
 use actix_web::{App, HttpResponse, HttpServer, web};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use chrono::{Duration as ChronoDuration, Utc};
 use log::{info, warn};
 use tokio::runtime::Builder;
 #[cfg(target_os = "windows")]
 use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
 use tokio::time;
 
+use crate::audit::buffer::AppendAuditBuffer;
+use crate::audit::retention::{
+    AuditRetentionPolicy,
+    build_retention_plan,
+    execute_retention_plan,
+};
+use crate::audit::rotation::AuditRotationPolicy;
+use crate::audit::sink::AuditSink;
+use crate::audit::writer::{AuditWriter, AuditWriterConfig};
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
 use crate::fts::FtsIndexConfig;
+use crate::mcp::McpEndpoint;
+use crate::mcp::session_manager::ManagedSessionManager;
 use crate::rest_api;
 
 use self::app_state::AppState;
 use self::logger::AccessLogger;
+
+///
+/// HTTP サーバが利用する監査ログ設定
+///
+#[derive(Clone, Debug)]
+pub(crate) struct AuditLogConfig {
+    /// 監査ログ出力先ディレクトリ
+    output_dir: PathBuf,
+
+    /// 監査ログ保持期間
+    retention: ChronoDuration,
+
+    /// 監査ログローテーション閾値サイズ
+    rotate_size: u64,
+}
+
+impl AuditLogConfig {
+    ///
+    /// 監査ログ設定の生成
+    ///
+    /// # 引数
+    /// * `output_dir` - 監査ログ出力先ディレクトリ
+    /// * `retention` - 監査ログ保持期間
+    /// * `rotate_size` - ローテーション閾値サイズ(バイト)
+    ///
+    /// # 戻り値
+    /// 生成した監査ログ設定を返す。
+    ///
+    pub(crate) fn new(
+        output_dir: PathBuf,
+        retention: ChronoDuration,
+        rotate_size: u64,
+    ) -> Self {
+        Self {
+            output_dir,
+            retention,
+            rotate_size,
+        }
+    }
+}
 
 ///
 /// ペイロード超過時のエラーレスポンスを生成する
@@ -84,6 +136,8 @@ fn payload_too_large_handler<B>(
 /// * `use_tls` - TLSを使用する場合は`true`
 /// * `cert_path` - 証明書ファイルパス
 /// * `cert_is_explicit` - 証明書パスが明示指定なら`true`
+/// * `audit_config` - 監査ログ設定
+/// * `mcp_endpoint` - 公開するMCP endpoint情報
 ///
 /// # 戻り値
 /// 起動処理に成功した場合は`Ok(())`
@@ -100,6 +154,8 @@ pub(crate) fn run(
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
+    audit_config: Option<AuditLogConfig>,
+    mcp_endpoint: Option<McpEndpoint>,
 ) -> Result<()> {
     info!(
         "{} {} start",
@@ -118,6 +174,15 @@ pub(crate) fn run(
     /*
      * サーバインスタンスの生成
      */
+    let audit_sink = if mcp_endpoint.is_some() {
+        let config = audit_config
+            .clone()
+            .ok_or_else(|| anyhow!("audit config missing for MCP"))?;
+        run_audit_retention(&config)?;
+        Some(Arc::new(RwLock::new(build_audit_sink(&config))))
+    } else {
+        None
+    };
     let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
         manager,
         frontend_config,
@@ -125,7 +190,18 @@ pub(crate) fn run(
         template_root,
         wiki_title,
         asset_limit_size,
+        audit_sink,
     ))));
+    let mcp_session_manager =
+        mcp_endpoint.map(|_| ManagedSessionManager::new());
+
+    /*
+     * MCP session sweep task を Tokio runtime 上で起動する
+     */
+    if let Some(manager) = mcp_session_manager.as_ref() {
+        let _guard = rt.enter();
+        manager.start_background_sweep();
+    }
 
     let server = create_server(
         addr,
@@ -135,6 +211,8 @@ pub(crate) fn run(
         use_tls,
         cert_path,
         cert_is_explicit,
+        mcp_endpoint,
+        mcp_session_manager,
     )?;
 
     /*
@@ -166,6 +244,51 @@ pub(crate) fn run(
 }
 
 ///
+/// 監査ログ投入入口を設定値から生成する
+///
+/// # 引数
+/// * `config` - 監査ログ設定
+///
+/// # 戻り値
+/// 設定値で初期化した監査ログ投入入口を返す。
+///
+fn build_audit_sink(config: &AuditLogConfig) -> AuditSink {
+    let writer = AuditWriter::new(AuditWriterConfig {
+        output_dir: config.output_dir.clone(),
+        rotation_policy: AuditRotationPolicy::new(config.rotate_size),
+    });
+
+    AuditSink::new(AppendAuditBuffer::new(), writer)
+}
+
+///
+/// 起動時の保持期間超過ログ削除を実行する
+///
+/// # 引数
+/// * `config` - 監査ログ設定
+///
+/// # 戻り値
+/// 保持削除処理に成功した場合は `Ok(())` を返す。
+///
+fn run_audit_retention(config: &AuditLogConfig) -> Result<()> {
+    /*
+     * 出力先がまだ存在しない場合は何もしない
+     */
+    if !config.output_dir.exists() {
+        return Ok(());
+    }
+
+    /*
+     * 保持削除計画の構築と実行
+     */
+    let policy = AuditRetentionPolicy::new(config.retention);
+    let plan = build_retention_plan(&config.output_dir, &policy, Utc::now())?;
+    let _ = execute_retention_plan(plan);
+
+    Ok(())
+}
+
+///
 /// HTTPサーバーの生成
 ///
 /// # 引数
@@ -176,6 +299,7 @@ pub(crate) fn run(
 /// * `use_tls` - TLSを利用する場合は`true`
 /// * `cert_path` - 証明書ファイルパス
 /// * `cert_is_explicit` - 証明書パスが明示指定なら`true`
+/// * `mcp_endpoint` - 公開するMCP endpoint情報
 ///
 /// # 戻り値
 /// 生成したHTTPサーバ
@@ -188,13 +312,15 @@ fn create_server(
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
+    mcp_endpoint: Option<McpEndpoint>,
+    mcp_session_manager: Option<Arc<ManagedSessionManager>>,
 ) -> Result<Server> {
     /*
      * サーバ設定の構築
      */
     let payload_limit = asset_limit_size as usize;
     let server = HttpServer::new(move || {
-        App::new()
+        let app = App::new()
             // ロガーの設定
             .wrap(AccessLogger::new())
             .wrap(
@@ -219,7 +345,25 @@ fn create_server(
             .route("/rev", web::get().to(page_view::get_rev_root))
             .route("/rev/{page_path:.*}", web::get().to(page_view::get_rev))
             // 静的ファイル配信
-            .route("/static/{file:.*}", web::get().to(static_files::get))
+            .route("/static/{file:.*}", web::get().to(static_files::get));
+
+        /*
+         * MCP endpoint を必要時のみ登録する
+         */
+        let app = match mcp_endpoint {
+            Some(endpoint) => app
+                .service(crate::mcp::transport::create_scope(
+                    endpoint,
+                    state.clone(),
+                    mcp_session_manager
+                        .as_ref()
+                        .expect("mcp session manager missing")
+                        .clone(),
+                )),
+            None => app,
+        };
+
+        app
 
         // root空間に展開されるその他のエンドポイント設定
         //.servcie(...)

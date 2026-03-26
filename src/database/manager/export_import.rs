@@ -225,6 +225,7 @@ impl DatabaseManager {
                     user.password.clone(),
                     user.salt,
                     user.display_name.clone(),
+                    crate::database::types::UserAttributeSet::new(),
                     Local::now(),
                 );
                 user_id_table.insert(user.username.clone(), user.id.clone())?;

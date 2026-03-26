@@ -63,3 +63,31 @@ fn get_users_me_allows_bearer_read_scope() {
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
+
+#[test]
+/// GET /api/users/me: Bearer write でも従来どおり取得できることを確認する。
+fn get_users_me_allows_bearer_write_scope() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let write_token = run_create_token(&db_path, &assets_dir, "write");
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+    let url = format!("{}/users/me", api_base_url);
+
+    let response = client
+        .get(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", write_token))
+        .send()
+        .expect("get users/me with bearer write failed");
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = response.text().expect("read body failed");
+    let value: Value =
+        serde_json::from_str(&body).expect("parse users/me response failed");
+    assert_eq!(value["username"], TEST_USERNAME);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}

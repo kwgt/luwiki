@@ -5,11 +5,14 @@
  */
 
 mod cmd_args;
+pub(crate) mod auth;
+pub(crate) mod audit;
 pub(crate) mod command;
 pub(crate) mod database;
 pub(crate) mod export_import;
 pub(crate) mod fts;
 pub(crate) mod http_server;
+pub(crate) mod mcp;
 pub(crate) mod rest_api;
 
 use std::sync::Arc;

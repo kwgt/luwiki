@@ -18,9 +18,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::resp_error_json;
-use crate::cmd_args::FtsSearchTarget;
 use crate::database::types::{BearerScope, PageId};
-use crate::fts;
+use crate::fts::{self, FtsSearchTarget};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::require_request_scope;
 

@@ -35,6 +35,21 @@
 - エクスポートデータの仕様は `EXPORT_DATA_SPEC.md` に記載されています。
 - エクスポート／インポートの設計内容は `EXPORT_IMPORT_DESIGN.md` に記載されています。
 - Bearer認証の設計内容は `BEARER_AUTH_DESIGN.md` に記載されています。
+- MCPツール仕様については `MCP_TOOL_SPECS.md` に記載されています(※作成中)。
+- MCPサーバ機能の設計内容は以下に記載されています。
+    - 全体・共通設計 : `MCP_INTERNAL_DESIGN.md `
+    - アーキテクチャ設計 : `MCP_ARCHITECTURE_DESIGN.md `
+    - サービス・永続化設計 : `MCP_SERVICE_AND_STORAGE_DESIGN.md `
+    - ランタイム・トランスポート設計 : `MCP_RUNTIME_AND_TRANSPORT_DESIGN.md `
+    - インタフェース・エラー設計 : `MCP_INTERFACE_AND_ERROR_DESIGN.md `
+    - 認証・認可のテスト観点 : `MCP_AUTHORIZATION_TEST_VIEWPOINTS.md`
+    - append の競合制御および amend 挙動のテスト観点: `MCP_APPEND_TEST_VIEWPOINTS.md`
+    - 監査ログ基盤のテスト観点 : `MCP_AUDIT_LOG_TEST_VIEWPOINTS.md`
+    - CLI 拡張のテスト観点 : `MCP_CLI_TEST_VIEWPOINTS.md`
+    - 既存機能への回帰確認範囲 : `MCP_REGRESSION_TEST_SCOPE.md`
+- 監査ログの設計内容は `MCP_AUDIT_LOG_DESIGN.md` に記載されています。
+
+過去の作業中に作成し解決したタスクリストはresolvedに格納されている。このフォルダに格納されているタスクリストは解決済みで関連ドキュメントに反映済みであるので注意すること。
 
 ---
 

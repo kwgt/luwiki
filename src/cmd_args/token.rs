@@ -14,10 +14,15 @@ use clap::{Args, Subcommand};
 
 use super::{ApplyConfig, ShowOptions, Validate};
 use crate::cmd_args::config::Config;
-use crate::database::types::{BearerScope, BearerScopeSet};
+use crate::database::types::{
+    BearerScope,
+    BearerScopeSet,
+    PathPrefixSet,
+};
+use crate::rest_api::validate_page_path;
 
 /// `token create` のデフォルトスコープ文字列
-const DEFAULT_TOKEN_CREATE_SCOPE: &str = "read,write";
+const DEFAULT_TOKEN_CREATE_SCOPE: &str = "write";
 
 /// `token create` のデフォルトTTL文字列
 const DEFAULT_TOKEN_CREATE_TTL: &str = "30d";
@@ -34,6 +39,14 @@ pub(crate) enum TokenSubCommand {
     #[command(name = "create", alias = "c")]
     Create(TokenCreateOpts),
 
+    /// path制約の追加
+    #[command(name = "add_path", alias = "a", alias = "add")]
+    AddPath(TokenPathUpdateOpts),
+
+    /// path制約の削除
+    #[command(name = "remove_path", alias = "rm")]
+    RemovePath(TokenPathUpdateOpts),
+
     /// トークンの失効
     #[command(name = "revoke", alias = "r")]
     Revoke(TokenRevokeOpts),
@@ -45,6 +58,10 @@ pub(crate) enum TokenSubCommand {
     /// トークン一覧の表示
     #[command(name = "list", alias = "l", alias = "ls")]
     List(TokenListOpts),
+
+    /// トークン情報の詳細表示
+    #[command(name = "info")]
+    Info(TokenInfoOpts),
 }
 
 ///
@@ -63,6 +80,10 @@ pub(crate) struct TokenCreateOpts {
     /// トークン名の指定
     #[arg(short = 'n', long = "name", value_name = "TOKEN-NAME")]
     name: Option<String>,
+
+    /// 操作可能な path prefix 制約
+    #[arg(long = "path-prefix", value_name = "PATH")]
+    path_prefixes: Vec<String>,
 
     /// 発行対象のユーザ名
     #[arg()]
@@ -133,14 +154,31 @@ impl TokenCreateOpts {
     pub(crate) fn ttl_duration(&self) -> Result<Duration> {
         parse_token_ttl(&self.resolved_ttl())
     }
+
+    ///
+    /// 検証済み path prefix 制約集合の取得
+    ///
+    /// # 戻り値
+    /// 解析済みの path prefix 制約集合を返す。
+    ///
+    pub(crate) fn path_prefixes(&self) -> Result<PathPrefixSet> {
+        parse_path_prefixes(&self.path_prefixes)
+    }
 }
 
 // Validateトレイトの実装
 impl Validate for TokenCreateOpts {
     fn validate(&mut self) -> Result<()> {
+        /*
+         * 主要入力を検証する
+         */
         self.scopes()?;
         self.ttl_duration()?;
+        self.path_prefixes()?;
 
+        /*
+         * 任意名の妥当性を検証する
+         */
         if let Some(name) = self.normalized_name() {
             if name.is_empty() {
                 return Err(anyhow!("token name must not be empty"));
@@ -164,6 +202,61 @@ impl ShowOptions for TokenCreateOpts {
         println!("   scope:     {}", self.resolved_scope());
         println!("   ttl:       {}", self.resolved_ttl());
         println!("   name:      {:?}", self.normalized_name());
+        println!("   path:      {:?}", self.path_prefixes);
+    }
+}
+
+///
+/// サブコマンドtoken_add_path / token_remove_pathのオプション
+///
+#[derive(Clone, Args, Debug)]
+pub(crate) struct TokenPathUpdateOpts {
+    /// 更新対象のトークンID
+    #[arg()]
+    token_id: String,
+
+    /// 追加または削除する path prefix
+    #[arg()]
+    path_prefix: String,
+}
+
+impl TokenPathUpdateOpts {
+    ///
+    /// トークンIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// 指定されたトークンIDを返す。
+    ///
+    pub(crate) fn token_id(&self) -> String {
+        self.token_id.clone()
+    }
+
+    ///
+    /// 検証済み path prefix へのアクセサ
+    ///
+    /// # 戻り値
+    /// trim 後の path prefix を返す。
+    ///
+    pub(crate) fn normalized_path_prefix(&self) -> String {
+        self.path_prefix.trim().to_string()
+    }
+}
+
+impl Validate for TokenPathUpdateOpts {
+    fn validate(&mut self) -> Result<()> {
+        validate_path_prefix(&self.normalized_path_prefix())
+    }
+}
+
+impl ApplyConfig for TokenPathUpdateOpts {
+    fn apply_config(&mut self, _config: &Config) {}
+}
+
+impl ShowOptions for TokenPathUpdateOpts {
+    fn show_options(&self) {
+        println!("token path update command options");
+        println!("   token_id:    {:?}", self.token_id());
+        println!("   path_prefix: {:?}", self.normalized_path_prefix());
     }
 }
 
@@ -485,6 +578,48 @@ impl ShowOptions for TokenListOpts {
 }
 
 ///
+/// サブコマンドtoken_infoのオプション
+///
+#[derive(Clone, Args, Debug)]
+pub(crate) struct TokenInfoOpts {
+    /// 取得対象のトークンID
+    #[arg()]
+    token_id: String,
+}
+
+impl TokenInfoOpts {
+    ///
+    /// トークンIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// 指定されたトークンIDを返す。
+    ///
+    pub(crate) fn token_id(&self) -> String {
+        self.token_id.clone()
+    }
+}
+
+// Validateトレイトの実装
+impl Validate for TokenInfoOpts {
+    fn validate(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ApplyConfigトレイトの実装
+impl ApplyConfig for TokenInfoOpts {
+    fn apply_config(&mut self, _config: &Config) {}
+}
+
+// ShowOptionsトレイトの実装
+impl ShowOptions for TokenInfoOpts {
+    fn show_options(&self) {
+        println!("token info command options");
+        println!("   token_id: {:?}", self.token_id());
+    }
+}
+
+///
 /// スコープ指定文字列の解析
 ///
 /// # 引数
@@ -509,6 +644,30 @@ fn parse_token_scopes(raw: &str) -> Result<BearerScopeSet> {
     }
 
     Ok(scopes)
+}
+
+///
+/// path prefix 指定群の解析
+///
+/// # 引数
+/// * `raw_prefixes` - path prefix 指定群
+///
+/// # 戻り値
+/// 解析済みの path prefix 集合を返す。
+///
+fn parse_path_prefixes(raw_prefixes: &[String]) -> Result<PathPrefixSet> {
+    let mut prefixes = PathPrefixSet::new();
+
+    /*
+     * 各 path prefix を順に検証する
+     */
+    for raw_prefix in raw_prefixes {
+        let prefix = raw_prefix.trim();
+        validate_path_prefix(prefix)?;
+        prefixes.insert(prefix.to_string());
+    }
+
+    Ok(prefixes)
 }
 
 ///
@@ -552,14 +711,58 @@ fn parse_token_ttl(raw: &str) -> Result<Duration> {
     Ok(duration)
 }
 
+///
+/// path prefix の妥当性を検証する
+///
+/// # 引数
+/// * `prefix` - 検証対象の path prefix
+///
+/// # 戻り値
+/// 検証に成功した場合は `Ok(())` を返す。
+///
+fn validate_path_prefix(prefix: &str) -> Result<()> {
+    /*
+     * 既存 page path 規則との整合を確認する
+     */
+    if let Err(message) = validate_page_path(prefix) {
+        return Err(anyhow!("invalid path prefix: {}", message));
+    }
+
+    /*
+     * 正規化済み絶対 path 制約を検証する
+     */
+    if prefix != "/" && prefix.ends_with('/') {
+        return Err(anyhow!(
+            "invalid path prefix: path must be normalized"
+        ));
+    }
+
+    if prefix.split('/').any(|segment| segment == "." || segment == "..") {
+        return Err(anyhow!(
+            "invalid path prefix: path must be normalized"
+        ));
+    }
+
+    if prefix.contains("//") {
+        return Err(anyhow!(
+            "invalid path prefix: path must be normalized"
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
 
     use super::{
+        TokenCreateOpts,
+        TokenInfoOpts,
         TokenListOpts,
         TokenPurgeOpts,
         TokenRevokeOpts,
+        parse_path_prefixes,
         parse_token_ttl,
     };
     use crate::cmd_args::Validate;
@@ -603,6 +806,64 @@ mod tests {
          */
         assert!(parse_token_ttl("0d").is_err());
         assert!(parse_token_ttl("-1h").is_err());
+    }
+
+    ///
+    /// path prefix 解析が正規化済み絶対 path 制約を
+    /// 設計どおりに扱うことを確認する。
+    ///
+    /// # 注記
+    /// 正常系、末尾スラッシュ、`.` / `..`、重複区切りを
+    /// 検証する。
+    ///
+    #[test]
+    fn parse_path_prefixes_accepts_normalized_absolute_paths_only() {
+        let parsed = parse_path_prefixes(&[
+            "/docs".to_string(),
+            "/notes/spec".to_string(),
+        ])
+        .expect("parse path prefixes failed");
+        assert!(parsed.contains("/docs"));
+        assert!(parsed.contains("/notes/spec"));
+
+        assert!(parse_path_prefixes(&["docs".to_string()]).is_err());
+        assert!(parse_path_prefixes(&["/docs/".to_string()]).is_err());
+        assert!(parse_path_prefixes(&["/docs/../secret".to_string()]).is_err());
+        assert!(parse_path_prefixes(&["/docs//topic".to_string()]).is_err());
+    }
+
+    ///
+    /// token create の入力検証が path prefix と空名を
+    /// 設計どおりに扱うことを確認する。
+    ///
+    #[test]
+    fn token_create_validate_checks_name_and_path_prefixes() {
+        let mut valid = TokenCreateOpts {
+            scope: Some("write".to_string()),
+            ttl: Some("30d".to_string()),
+            name: Some("api".to_string()),
+            path_prefixes: vec!["/docs".to_string()],
+            user_name: "alice".to_string(),
+        };
+        valid.validate().expect("valid token create must pass");
+
+        let mut blank_name = TokenCreateOpts {
+            scope: Some("write".to_string()),
+            ttl: Some("30d".to_string()),
+            name: Some("   ".to_string()),
+            path_prefixes: Vec::new(),
+            user_name: "alice".to_string(),
+        };
+        assert!(blank_name.validate().is_err());
+
+        let mut invalid_prefix = TokenCreateOpts {
+            scope: Some("write".to_string()),
+            ttl: Some("30d".to_string()),
+            name: None,
+            path_prefixes: vec!["/docs/".to_string()],
+            user_name: "alice".to_string(),
+        };
+        assert!(invalid_prefix.validate().is_err());
     }
 
     ///
@@ -721,5 +982,16 @@ mod tests {
         positional_only
             .validate()
             .expect("positional USER-NAME only list must be valid");
+    }
+
+    ///
+    /// token info の基本入力が検証を通過することを確認する。
+    ///
+    #[test]
+    fn token_info_validate_accepts_token_id_argument() {
+        let mut opts = TokenInfoOpts {
+            token_id: "01JTESTTOKENID1234567890123".to_string(),
+        };
+        opts.validate().expect("token info validate must pass");
     }
 }

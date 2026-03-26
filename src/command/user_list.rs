@@ -176,7 +176,7 @@ pub(crate) fn build_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::types::{UserId, UserInfo};
+    use crate::database::types::{UserAttributeSet, UserId, UserInfo};
     use chrono::{Local, TimeZone};
 
     ///
@@ -197,6 +197,7 @@ mod tests {
             Local.timestamp_opt(ts, 0).single().unwrap(),
             name,
             display,
+            UserAttributeSet::new(),
         )
     }
 

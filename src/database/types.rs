@@ -246,9 +246,25 @@ pub(crate) enum BearerScope {
     #[serde(rename = "read")]
     Read,
 
-    /// 更新系操作を表すスコープ
+    /// 後方互換の更新系操作を表すスコープ
     #[serde(rename = "write")]
     Write,
+
+    /// 新規作成系操作を表すスコープ
+    #[serde(rename = "create")]
+    Create,
+
+    /// 上書き更新系操作を表すスコープ
+    #[serde(rename = "update")]
+    Update,
+
+    /// 追記系操作を表すスコープ
+    #[serde(rename = "append")]
+    Append,
+
+    /// 削除系操作を表すスコープ
+    #[serde(rename = "delete")]
+    Delete,
 }
 
 #[allow(dead_code)]
@@ -263,6 +279,10 @@ impl BearerScope {
         match self {
             Self::Read => "read",
             Self::Write => "write",
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Append => "append",
+            Self::Delete => "delete",
         }
     }
 }
@@ -282,6 +302,10 @@ impl TryFrom<&str> for BearerScope {
         match value {
             "read" => Ok(Self::Read),
             "write" => Ok(Self::Write),
+            "create" => Ok(Self::Create),
+            "update" => Ok(Self::Update),
+            "append" => Ok(Self::Append),
+            "delete" => Ok(Self::Delete),
             _ => Err(anyhow!("invalid bearer scope: {}", value)),
         }
     }
@@ -316,7 +340,14 @@ impl BearerScopeSet {
     /// 現時点で定義されている全スコープを持つ集合を返す。
     ///
     pub(crate) fn all() -> Self {
-        Self::from_iter([BearerScope::Read, BearerScope::Write])
+        Self::from_iter([
+            BearerScope::Read,
+            BearerScope::Write,
+            BearerScope::Create,
+            BearerScope::Update,
+            BearerScope::Append,
+            BearerScope::Delete,
+        ])
     }
 
     ///
@@ -361,6 +392,22 @@ impl BearerScopeSet {
                     self.contains(BearerScope::Write)
             }
             BearerScope::Write => self.contains(BearerScope::Write),
+            BearerScope::Create => {
+                self.contains(BearerScope::Create) ||
+                    self.contains(BearerScope::Write)
+            }
+            BearerScope::Update => {
+                self.contains(BearerScope::Update) ||
+                    self.contains(BearerScope::Write)
+            }
+            BearerScope::Append => {
+                self.contains(BearerScope::Append) ||
+                    self.contains(BearerScope::Write)
+            }
+            BearerScope::Delete => {
+                self.contains(BearerScope::Delete) ||
+                    self.contains(BearerScope::Write)
+            }
         }
     }
 
@@ -405,6 +452,122 @@ impl FromIterator<BearerScope> for BearerScopeSet {
 }
 
 ///
+/// Bearerトークンの path prefix 制約集合
+///
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PathPrefixSet {
+    /// 保持している path prefix 集合
+    prefixes: BTreeSet<String>,
+}
+
+#[allow(dead_code)]
+impl PathPrefixSet {
+    ///
+    /// 空の path prefix 集合を生成する
+    ///
+    /// # 戻り値
+    /// path prefix を持たない集合を返す。
+    ///
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    ///
+    /// path prefix を追加する
+    ///
+    /// # 引数
+    /// * `prefix` - 追加する path prefix
+    ///
+    /// # 戻り値
+    /// 追加前に同一 path prefix が存在しなかった場合は `true` を返す。
+    ///
+    pub(crate) fn insert<S>(&mut self, prefix: S) -> bool
+    where
+        S: Into<String>,
+    {
+        self.prefixes.insert(prefix.into())
+    }
+
+    ///
+    /// path prefix を削除する
+    ///
+    /// # 引数
+    /// * `prefix` - 削除する path prefix
+    ///
+    /// # 戻り値
+    /// 削除対象が存在した場合は `true` を返す。
+    ///
+    pub(crate) fn remove(&mut self, prefix: &str) -> bool {
+        self.prefixes.remove(prefix)
+    }
+
+    ///
+    /// path prefix が明示的に含まれているかを返す
+    ///
+    /// # 引数
+    /// * `prefix` - 判定対象の path prefix
+    ///
+    /// # 戻り値
+    /// 集合内に同一 path prefix が存在する場合は `true` を返す。
+    ///
+    pub(crate) fn contains(&self, prefix: &str) -> bool {
+        self.prefixes.contains(prefix)
+    }
+
+    ///
+    /// 全領域アクセス可の状態かを返す
+    ///
+    /// # 戻り値
+    /// path prefix 未設定または `/` を含む場合は `true` を返す。
+    ///
+    pub(crate) fn allows_all(&self) -> bool {
+        self.is_empty() || self.contains("/")
+    }
+
+    ///
+    /// path prefix 集合が空かを返す
+    ///
+    /// # 戻り値
+    /// 集合が空の場合は `true` を返す。
+    ///
+    pub(crate) fn is_empty(&self) -> bool {
+        self.prefixes.is_empty()
+    }
+
+    ///
+    /// 保持 path prefix 数を返す
+    ///
+    /// # 戻り値
+    /// 集合に保持されている path prefix 数を返す。
+    ///
+    pub(crate) fn len(&self) -> usize {
+        self.prefixes.len()
+    }
+
+    ///
+    /// path prefix 列挙子へのイテレータを返す
+    ///
+    /// # 戻り値
+    /// path prefix 文字列への参照を順序付きで返すイテレータを返す。
+    ///
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &str> {
+        self.prefixes.iter().map(|prefix| prefix.as_str())
+    }
+}
+
+impl<T> FromIterator<T> for PathPrefixSet
+where
+    T: Into<String>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self {
+            prefixes: iter.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+///
 /// Bearerトークン管理情報
 ///
 #[allow(dead_code)]
@@ -418,6 +581,10 @@ pub(crate) struct BearerTokenInfo {
 
     /// 付与スコープ
     scopes: BearerScopeSet,
+
+    /// 操作対象 path prefix 制約
+    #[serde(default)]
+    path_prefixes: PathPrefixSet,
 
     /// 作成日時
     created_at: DateTime<Local>,
@@ -446,6 +613,7 @@ impl BearerTokenInfo {
     /// # 引数
     /// * `user_id` - 発行対象ユーザID
     /// * `scopes` - 付与スコープ集合
+    /// * `path_prefixes` - path prefix 制約集合
     /// * `ttl` - トークンTTL
     /// * `name` - 任意のトークン名
     ///
@@ -455,6 +623,7 @@ impl BearerTokenInfo {
     pub(crate) fn new(
         user_id: UserId,
         scopes: BearerScopeSet,
+        path_prefixes: PathPrefixSet,
         ttl: Duration,
         name: Option<String>,
     ) -> Self {
@@ -470,6 +639,7 @@ impl BearerTokenInfo {
             token_id: TokenId::new(),
             user_id,
             scopes,
+            path_prefixes,
             created_at: now,
             updated_at: now,
             ttl,
@@ -507,6 +677,16 @@ impl BearerTokenInfo {
     ///
     pub(crate) fn scopes(&self) -> BearerScopeSet {
         self.scopes.clone()
+    }
+
+    ///
+    /// path prefix 制約集合へのアクセサ
+    ///
+    /// # 戻り値
+    /// path prefix 制約集合を返す。
+    ///
+    pub(crate) fn path_prefixes(&self) -> PathPrefixSet {
+        self.path_prefixes.clone()
     }
 
     ///
@@ -598,6 +778,25 @@ impl BearerTokenInfo {
     }
 
     ///
+    /// path prefix 制約集合を更新する
+    ///
+    /// # 引数
+    /// * `path_prefixes` - 更新後の path prefix 制約集合
+    /// * `updated_at` - 更新時刻
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    pub(crate) fn set_path_prefixes(
+        &mut self,
+        path_prefixes: PathPrefixSet,
+        updated_at: DateTime<Local>,
+    ) {
+        self.path_prefixes = path_prefixes;
+        self.updated_at = updated_at;
+    }
+
+    ///
     /// テスト用に日時項目を上書きする
     ///
     /// # 引数
@@ -636,6 +835,7 @@ impl BearerTokenInfo {
     /// * `ttl` - TTL
     /// * `expire_at` - 有効期限
     /// * `revoked` - 失効状態
+    /// * `path_prefixes` - path prefix 制約集合
     /// * `name` - 任意名
     ///
     /// # 戻り値
@@ -650,12 +850,14 @@ impl BearerTokenInfo {
         ttl: Duration,
         expire_at: DateTime<Local>,
         revoked: bool,
+        path_prefixes: PathPrefixSet,
         name: Option<String>,
     ) -> Self {
         Self {
             token_id,
             user_id,
             scopes,
+            path_prefixes,
             created_at,
             updated_at,
             ttl,
@@ -2105,8 +2307,152 @@ pub(crate) struct UserInfo {
     /// 表示名
     display_name: String,
 
+    /// ユーザ属性集合
+    #[serde(default)]
+    attributes: UserAttributeSet,
+
     /// 最終更新日時
     timestamp: DateTime<Local>,
+}
+
+///
+/// ユーザ属性種別
+///
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+pub(crate) enum UserAttribute {
+    /// Basic認証を拒否する属性
+    #[serde(rename = "NoBasicAuth")]
+    NoBasicAuth,
+}
+
+impl UserAttribute {
+    ///
+    /// 属性の文字列表現を返す
+    ///
+    /// # 戻り値
+    /// 外部仕様で利用する属性名を返す。
+    ///
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoBasicAuth => "NoBasicAuth",
+        }
+    }
+}
+
+impl Display for UserAttribute {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl TryFrom<&str> for UserAttribute {
+    type Error = Error;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "NoBasicAuth" => Ok(Self::NoBasicAuth),
+            _ => Err(anyhow!("invalid user attribute: {}", value)),
+        }
+    }
+}
+
+///
+/// ユーザ属性集合
+///
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct UserAttributeSet {
+    /// 保持している属性集合
+    attributes: BTreeSet<UserAttribute>,
+}
+
+impl UserAttributeSet {
+    ///
+    /// 空の属性集合を生成する
+    ///
+    /// # 戻り値
+    /// 属性を持たない集合を返す。
+    ///
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    ///
+    /// 属性を追加する
+    ///
+    /// # 引数
+    /// * `attribute` - 追加する属性
+    ///
+    /// # 戻り値
+    /// 追加前に同一属性が存在しなかった場合は `true` を返す。
+    ///
+    pub(crate) fn insert(&mut self, attribute: UserAttribute) -> bool {
+        self.attributes.insert(attribute)
+    }
+
+    ///
+    /// 属性を削除する
+    ///
+    /// # 引数
+    /// * `attribute` - 削除する属性
+    ///
+    /// # 戻り値
+    /// 削除対象が存在した場合は `true` を返す。
+    ///
+    pub(crate) fn remove(&mut self, attribute: UserAttribute) -> bool {
+        self.attributes.remove(&attribute)
+    }
+
+    ///
+    /// 属性が含まれているかを返す
+    ///
+    /// # 引数
+    /// * `attribute` - 判定対象の属性
+    ///
+    /// # 戻り値
+    /// 集合内に同一属性が存在する場合は `true` を返す。
+    ///
+    pub(crate) fn contains(&self, attribute: UserAttribute) -> bool {
+        self.attributes.contains(&attribute)
+    }
+
+    ///
+    /// 属性集合が空かを返す
+    ///
+    /// # 戻り値
+    /// 集合が空の場合は `true` を返す。
+    ///
+    pub(crate) fn is_empty(&self) -> bool {
+        self.attributes.is_empty()
+    }
+
+    ///
+    /// 属性列挙子へのイテレータを返す
+    ///
+    /// # 戻り値
+    /// 属性列挙子への参照を順序付きで返すイテレータを返す。
+    ///
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &UserAttribute> {
+        self.attributes.iter()
+    }
+}
+
+impl FromIterator<UserAttribute> for UserAttributeSet {
+    fn from_iter<T: IntoIterator<Item = UserAttribute>>(iter: T) -> Self {
+        Self {
+            attributes: iter.into_iter().collect(),
+        }
+    }
 }
 
 impl UserInfo {
@@ -2127,24 +2473,61 @@ impl UserInfo {
     /// 存せず、ランダムに生成されたソルトデータと掛け合わせたデータでハッシュ化
     /// し、その結果を文字列化した物を格納する。
     ///
+    #[allow(dead_code)]
     pub(crate) fn new<S>(name: S, password: S, display_name: Option<S>) -> Self
     where
         S: AsRef<str>,
     {
+        Self::new_with_attributes(
+            name,
+            Some(password.as_ref()),
+            display_name,
+            UserAttributeSet::new(),
+        )
+    }
+
+    ///
+    /// 属性付きユーザ情報の作成
+    ///
+    /// # 引数
+    /// * `name` - ユーザ名
+    /// * `password` - 登録するパスワード
+    /// * `display_name` - 表示名
+    /// * `attributes` - ユーザ属性集合
+    ///
+    /// # 戻り値
+    /// 属性を反映したユーザ情報を返す。
+    ///
+    /// # 注記
+    /// `password` が `None` の場合は、Basic認証を使わないユーザ向けに
+    /// ランダムな内部専用文字列を用いてハッシュ値を生成する。
+    ///
+    pub(crate) fn new_with_attributes<S>(
+        name: S,
+        password: Option<&str>,
+        display_name: Option<S>,
+        attributes: UserAttributeSet,
+    ) -> Self
+    where
+        S: AsRef<str>,
+    {
+        /*
+         * パスワード入力値を決定する
+         */
+        let password_value = password
+            .map(str::to_string)
+            .unwrap_or_else(|| UserId::new().to_string());
+
         /*
          * ソルトデータの生成
          */
         let mut salt = [0u8; 16];
         OsRng.fill_bytes(&mut salt);
-
-        /*
-         * パスワードのハッシュ化
-         */
         let salt_string =
             SaltString::encode_b64(&salt).expect("salt encode failed");
         let argon2 = Argon2::default();
         let hashed = argon2
-            .hash_password(password.as_ref().as_bytes(), &salt_string)
+            .hash_password(password_value.as_bytes(), &salt_string)
             .expect("hash failed")
             .to_string();
 
@@ -2157,6 +2540,7 @@ impl UserInfo {
             password: hashed,
             salt,
             display_name: display_name.unwrap_or(name).as_ref().to_string(),
+            attributes,
             timestamp: Local::now(),
         }
     }
@@ -2170,6 +2554,7 @@ impl UserInfo {
     /// * `password` - ハッシュ済みパスワード
     /// * `salt` - ソルト
     /// * `display_name` - 表示名
+    /// * `attributes` - ユーザ属性集合
     /// * `timestamp` - 更新日時
     ///
     /// # 戻り値
@@ -2181,6 +2566,7 @@ impl UserInfo {
         password: String,
         salt: [u8; 16],
         display_name: String,
+        attributes: UserAttributeSet,
         timestamp: DateTime<Local>,
     ) -> Self {
         Self {
@@ -2189,6 +2575,7 @@ impl UserInfo {
             password,
             salt,
             display_name,
+            attributes,
             timestamp,
         }
     }
@@ -2241,6 +2628,16 @@ impl UserInfo {
     ///
     pub(crate) fn display_name(&self) -> String {
         self.display_name.clone()
+    }
+
+    ///
+    /// ユーザ属性集合へのアクセサ
+    ///
+    /// # 戻り値
+    /// ユーザ属性集合を返す。
+    ///
+    pub(crate) fn attributes(&self) -> UserAttributeSet {
+        self.attributes.clone()
     }
 
     ///
@@ -2297,6 +2694,17 @@ impl UserInfo {
     }
 
     ///
+    /// ユーザ属性集合を更新する
+    ///
+    /// # 引数
+    /// * `attributes` - 更新後のユーザ属性集合
+    ///
+    pub(crate) fn set_attributes(&mut self, attributes: UserAttributeSet) {
+        self.attributes = attributes;
+        self.timestamp = Local::now();
+    }
+
+    ///
     /// パスワードの検証
     ///
     /// # 引数
@@ -2315,6 +2723,16 @@ impl UserInfo {
             .verify_password(password.as_bytes(), &parsed)
             .is_ok()
     }
+
+    ///
+    /// Basic認証を許可できるかを返す
+    ///
+    /// # 戻り値
+    /// `NoBasicAuth` 属性を持たない場合は `true` を返す。
+    ///
+    pub(crate) fn allows_basic_auth(&self) -> bool {
+        !self.attributes.contains(UserAttribute::NoBasicAuth)
+    }
 }
 
 #[cfg(test)]
@@ -2327,6 +2745,7 @@ impl UserInfo {
     /// * `timestamp` - 更新日時
     /// * `username` - ユーザ名
     /// * `display_name` - 表示名
+    /// * `attributes` - ユーザ属性集合
     ///
     /// # 戻り値
     /// 生成したユーザ情報を返す。
@@ -2336,6 +2755,7 @@ impl UserInfo {
         timestamp: DateTime<Local>,
         username: &str,
         display_name: &str,
+        attributes: UserAttributeSet,
     ) -> Self {
         Self {
             id,
@@ -2343,6 +2763,7 @@ impl UserInfo {
             password: "dummy".to_string(),
             salt: [0u8; 16],
             display_name: display_name.to_string(),
+            attributes,
             timestamp,
         }
     }

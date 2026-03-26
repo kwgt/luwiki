@@ -37,11 +37,17 @@ use super::types::{
     PageId,
     PageIndex,
     PageSource,
+    PathPrefixSet,
     RenameInfo,
+    TokenId,
     TokenHash,
+    UserAttribute,
+    UserAttributeSet,
     UserId,
+    UserInfo,
 };
 use super::manager::bearer_tokens::VerifyBearerTokenFailureReason;
+use super::manager::pages_write::AppendPageRequest;
 use crate::export_import::MigrateExportPageSnapshot;
 use crate::export_import::model::{
     ExportAsset,
@@ -134,7 +140,7 @@ fn build_link_refs_extracts_wiki_links() {
 /// 確認する。
 ///
 /// # 注記
-/// `read` / `write` の表示、パース、JSON変換を
+/// `read` / `write` / 分解スコープの表示、パース、JSON変換を
 /// 検証する。
 ///
 #[test]
@@ -144,8 +150,16 @@ fn bearer_scope_converts_to_and_from_strings() {
      */
     assert_eq!(BearerScope::Read.as_str(), "read");
     assert_eq!(BearerScope::Write.as_str(), "write");
+    assert_eq!(BearerScope::Create.as_str(), "create");
+    assert_eq!(BearerScope::Update.as_str(), "update");
+    assert_eq!(BearerScope::Append.as_str(), "append");
+    assert_eq!(BearerScope::Delete.as_str(), "delete");
     assert_eq!(BearerScope::Read.to_string(), "read");
     assert_eq!(BearerScope::Write.to_string(), "write");
+    assert_eq!(BearerScope::Create.to_string(), "create");
+    assert_eq!(BearerScope::Update.to_string(), "update");
+    assert_eq!(BearerScope::Append.to_string(), "append");
+    assert_eq!(BearerScope::Delete.to_string(), "delete");
 
     /*
      * 文字列からの変換を検証する
@@ -157,6 +171,22 @@ fn bearer_scope_converts_to_and_from_strings() {
     assert_eq!(
         BearerScope::try_from("write").expect("parse write failed"),
         BearerScope::Write,
+    );
+    assert_eq!(
+        BearerScope::try_from("create").expect("parse create failed"),
+        BearerScope::Create,
+    );
+    assert_eq!(
+        BearerScope::try_from("update").expect("parse update failed"),
+        BearerScope::Update,
+    );
+    assert_eq!(
+        BearerScope::try_from("append").expect("parse append failed"),
+        BearerScope::Append,
+    );
+    assert_eq!(
+        BearerScope::try_from("delete").expect("parse delete failed"),
+        BearerScope::Delete,
     );
     assert!(BearerScope::try_from("admin").is_err());
 
@@ -174,6 +204,11 @@ fn bearer_scope_converts_to_and_from_strings() {
         "\"write\"",
     );
     assert_eq!(
+        serde_json::to_string(&BearerScope::Create)
+            .expect("serialize create failed"),
+        "\"create\"",
+    );
+    assert_eq!(
         serde_json::from_str::<BearerScope>("\"read\"")
             .expect("deserialize read failed"),
         BearerScope::Read,
@@ -183,6 +218,11 @@ fn bearer_scope_converts_to_and_from_strings() {
             .expect("deserialize write failed"),
         BearerScope::Write,
     );
+    assert_eq!(
+        serde_json::from_str::<BearerScope>("\"append\"")
+            .expect("deserialize append failed"),
+        BearerScope::Append,
+    );
 }
 
 ///
@@ -190,8 +230,8 @@ fn bearer_scope_converts_to_and_from_strings() {
 /// 行うことを確認する。
 ///
 /// # 注記
-/// 空集合、`read` のみ、`write` のみ、全スコープ
-/// の各ケースで `read` / `write` の包含関係を検証する。
+/// 空集合、`read` のみ、`write` のみ、分解スコープ、
+/// 全スコープの各ケースで包含関係を検証する。
 ///
 #[test]
 fn bearer_scope_set_deduplicates_and_allows_required_scope() {
@@ -202,6 +242,10 @@ fn bearer_scope_set_deduplicates_and_allows_required_scope() {
     assert!(empty_set.is_empty());
     assert!(!empty_set.allows(BearerScope::Read));
     assert!(!empty_set.allows(BearerScope::Write));
+    assert!(!empty_set.allows(BearerScope::Create));
+    assert!(!empty_set.allows(BearerScope::Update));
+    assert!(!empty_set.allows(BearerScope::Append));
+    assert!(!empty_set.allows(BearerScope::Delete));
 
     /*
      * `read` のみ保持する集合の重複排除と包含判定を検証する
@@ -214,6 +258,7 @@ fn bearer_scope_set_deduplicates_and_allows_required_scope() {
     assert!(!read_set.contains(BearerScope::Write));
     assert!(read_set.allows(BearerScope::Read));
     assert!(!read_set.allows(BearerScope::Write));
+    assert!(!read_set.allows(BearerScope::Create));
 
     /*
      * `write` のみ保持する集合では `read` / `write`
@@ -224,20 +269,40 @@ fn bearer_scope_set_deduplicates_and_allows_required_scope() {
     assert!(write_set.contains(BearerScope::Write));
     assert!(write_set.allows(BearerScope::Read));
     assert!(write_set.allows(BearerScope::Write));
+    assert!(write_set.allows(BearerScope::Create));
+    assert!(write_set.allows(BearerScope::Update));
+    assert!(write_set.allows(BearerScope::Append));
+    assert!(write_set.allows(BearerScope::Delete));
     assert_eq!(
         write_set.iter().copied().collect::<Vec<_>>(),
         vec![BearerScope::Write],
     );
 
     /*
+     * 分解スコープでは個別要求だけを満たすことを検証する
+     */
+    let append_set = BearerScopeSet::from_iter([BearerScope::Append]);
+    assert!(!append_set.allows(BearerScope::Read));
+    assert!(!append_set.allows(BearerScope::Update));
+    assert!(append_set.allows(BearerScope::Append));
+
+    /*
      * 全スコープ相当集合では両要求を満たすことを検証する
      */
     let all_set = BearerScopeSet::all();
-    assert_eq!(all_set.len(), 2);
+    assert_eq!(all_set.len(), 6);
     assert!(all_set.contains(BearerScope::Read));
     assert!(all_set.contains(BearerScope::Write));
+    assert!(all_set.contains(BearerScope::Create));
+    assert!(all_set.contains(BearerScope::Update));
+    assert!(all_set.contains(BearerScope::Append));
+    assert!(all_set.contains(BearerScope::Delete));
     assert!(all_set.allows(BearerScope::Read));
     assert!(all_set.allows(BearerScope::Write));
+    assert!(all_set.allows(BearerScope::Create));
+    assert!(all_set.allows(BearerScope::Update));
+    assert!(all_set.allows(BearerScope::Append));
+    assert!(all_set.allows(BearerScope::Delete));
 }
 
 ///
@@ -258,12 +323,14 @@ fn bearer_token_info_stores_and_updates_management_fields() {
     let mut info = BearerTokenInfo::new(
         user_id.clone(),
         scopes.clone(),
+        PathPrefixSet::new(),
         ttl,
         Some("cli token".to_string()),
     );
 
     assert_eq!(info.user_id(), user_id);
     assert_eq!(info.scopes(), scopes);
+    assert!(info.path_prefixes().is_empty());
     assert_eq!(info.ttl(), ttl);
     assert_eq!(info.name(), Some("cli token".to_string()));
     assert!(!info.revoked());
@@ -286,6 +353,197 @@ fn bearer_token_info_stores_and_updates_management_fields() {
     assert!(info.revoked());
     assert_eq!(info.updated_at(), revoked_at);
     assert!(!info.token_id().to_string().is_empty());
+}
+
+///
+/// UserAttribute と UserAttributeSet が文字列表現と
+/// 集合操作を扱えることを確認する。
+///
+/// # 注記
+/// `NoBasicAuth` の表示、パース、JSON変換、集合包含判定を
+/// 検証する。
+///
+#[test]
+fn user_attribute_and_set_work_as_expected() {
+    /*
+     * 文字列表現とパースを検証する
+     */
+    assert_eq!(UserAttribute::NoBasicAuth.as_str(), "NoBasicAuth");
+    assert_eq!(UserAttribute::NoBasicAuth.to_string(), "NoBasicAuth");
+    assert_eq!(
+        UserAttribute::try_from("NoBasicAuth")
+            .expect("parse NoBasicAuth failed"),
+        UserAttribute::NoBasicAuth,
+    );
+    assert!(UserAttribute::try_from("Unknown").is_err());
+
+    /*
+     * JSON表現を検証する
+     */
+    assert_eq!(
+        serde_json::to_string(&UserAttribute::NoBasicAuth)
+            .expect("serialize NoBasicAuth failed"),
+        "\"NoBasicAuth\"",
+    );
+    assert_eq!(
+        serde_json::from_str::<UserAttribute>("\"NoBasicAuth\"")
+            .expect("deserialize NoBasicAuth failed"),
+        UserAttribute::NoBasicAuth,
+    );
+
+    /*
+     * 集合操作を検証する
+     */
+    let mut attributes = UserAttributeSet::new();
+    assert!(attributes.is_empty());
+    assert!(attributes.insert(UserAttribute::NoBasicAuth));
+    assert!(!attributes.insert(UserAttribute::NoBasicAuth));
+    assert!(attributes.contains(UserAttribute::NoBasicAuth));
+}
+
+///
+/// UserInfo が属性集合を保持し、`NoBasicAuth` から
+/// Basic認証許可判定を導出できることを確認する。
+///
+/// # 注記
+/// 通常ユーザと `NoBasicAuth` 属性付きユーザの
+/// `allows_basic_auth()` を検証する。
+///
+#[test]
+fn user_info_tracks_attributes_and_basic_auth_permission() {
+    /*
+     * 通常ユーザでは Basic認証が許可されることを検証する
+     */
+    let plain_user = UserInfo::new("user", "password", None);
+    assert!(plain_user.attributes().is_empty());
+    assert!(plain_user.allows_basic_auth());
+
+    /*
+     * `NoBasicAuth` 属性付きユーザでは Basic認証が拒否されることを検証する
+     */
+    let restricted_user = UserInfo::new_for_test(
+        UserId::new(),
+        Local::now(),
+        "user2",
+        "User 2",
+        UserAttributeSet::from_iter([UserAttribute::NoBasicAuth]),
+    );
+    assert!(restricted_user
+        .attributes()
+        .contains(UserAttribute::NoBasicAuth));
+    assert!(!restricted_user.allows_basic_auth());
+}
+
+///
+/// 旧形式の BearerTokenInfo から `path_prefixes` 欠落を
+/// 読み取り互換で吸収できることを確認する。
+///
+/// # 注記
+/// `path_prefixes` を持たない旧形式を named field の
+/// MessagePack として復元し、空集合扱いになることを検証する。
+///
+#[test]
+fn bearer_token_info_deserialize_reads_legacy_without_path_prefixes() {
+    #[derive(Serialize)]
+    struct LegacyBearerTokenInfo {
+        token_id: TokenId,
+        user_id: UserId,
+        scopes: BearerScopeSet,
+        created_at: DateTime<Local>,
+        updated_at: DateTime<Local>,
+        ttl: chrono::Duration,
+        expire_at: DateTime<Local>,
+        revoked: bool,
+        name: Option<String>,
+    }
+
+    /*
+     * `path_prefixes` を持たない旧形式を組み立てる
+     */
+    let now = Local::now();
+    let legacy = LegacyBearerTokenInfo {
+        token_id: TokenId::new(),
+        user_id: UserId::new(),
+        scopes: BearerScopeSet::from_iter([
+            BearerScope::Read,
+            BearerScope::Write,
+        ]),
+        created_at: now,
+        updated_at: now,
+        ttl: chrono::Duration::days(30),
+        expire_at: now + chrono::Duration::days(30),
+        revoked: false,
+        name: Some("legacy token".to_string()),
+    };
+
+    /*
+     * 旧形式 MessagePack から復元できることを検証する
+     */
+    let bytes = rmp_serde::to_vec_named(&legacy)
+        .expect("serialize legacy bearer token failed");
+    let info = rmp_serde::from_slice::<BearerTokenInfo>(&bytes)
+        .expect("deserialize legacy bearer token failed");
+
+    assert_eq!(info.token_id(), legacy.token_id);
+    assert_eq!(info.user_id(), legacy.user_id);
+    assert_eq!(info.scopes(), legacy.scopes);
+    assert!(info.path_prefixes().is_empty());
+    assert_eq!(info.created_at(), legacy.created_at);
+    assert_eq!(info.updated_at(), legacy.updated_at);
+    assert_eq!(info.ttl(), legacy.ttl);
+    assert_eq!(info.expire_at(), legacy.expire_at);
+    assert_eq!(info.revoked(), legacy.revoked);
+    assert_eq!(info.name(), legacy.name);
+}
+
+///
+/// 旧形式の UserInfo から `attributes` 欠落を
+/// 読み取り互換で吸収できることを確認する。
+///
+/// # 注記
+/// `attributes` を持たない旧形式を named field の
+/// MessagePack として復元し、空集合扱いになることを検証する。
+///
+#[test]
+fn user_info_deserialize_reads_legacy_without_attributes() {
+    #[derive(Serialize)]
+    struct LegacyUserInfo {
+        id: UserId,
+        username: String,
+        password: String,
+        salt: [u8; 16],
+        display_name: String,
+        timestamp: DateTime<Local>,
+    }
+
+    /*
+     * `attributes` を持たない旧形式を組み立てる
+     */
+    let legacy = LegacyUserInfo {
+        id: UserId::new(),
+        username: "legacy-user".to_string(),
+        password: "hashed-password".to_string(),
+        salt: [7u8; 16],
+        display_name: "Legacy User".to_string(),
+        timestamp: Local::now(),
+    };
+
+    /*
+     * 旧形式 MessagePack から復元できることを検証する
+     */
+    let bytes = rmp_serde::to_vec_named(&legacy)
+        .expect("serialize legacy user info failed");
+    let info = rmp_serde::from_slice::<UserInfo>(&bytes)
+        .expect("deserialize legacy user info failed");
+
+    assert_eq!(info.id(), legacy.id);
+    assert_eq!(info.username(), legacy.username);
+    assert_eq!(info.password(), legacy.password);
+    assert_eq!(info.salt(), legacy.salt);
+    assert_eq!(info.display_name(), legacy.display_name);
+    assert!(info.attributes().is_empty());
+    assert!(info.allows_basic_auth());
+    assert_eq!(info.timestamp(), legacy.timestamp);
 }
 
 ///
@@ -448,6 +706,7 @@ fn db_bearer_token_create_registers_consistent_main_and_lookup_tables() {
         .create_bearer_token(
             "user",
             scopes.clone(),
+            PathPrefixSet::new(),
             ttl,
             Some("db consistency".to_string()),
         )
@@ -546,6 +805,7 @@ fn db_bearer_token_revoke_updates_revoked_and_updated_at() {
         .create_bearer_token(
             "user",
             scopes.clone(),
+            PathPrefixSet::new(),
             ttl,
             Some("revoke target".to_string()),
         )
@@ -610,6 +870,7 @@ fn db_bearer_token_purge_removes_main_and_lookup_tables_consistently() {
         .create_bearer_token(
             "user",
             BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
             chrono::Duration::hours(12),
             Some("purge target".to_string()),
         )
@@ -703,6 +964,7 @@ fn db_bearer_token_delete_user_removes_related_tokens_from_list_and_verify() {
         .create_bearer_token(
             "alice",
             BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
             chrono::Duration::hours(12),
             Some("alice token".to_string()),
         )
@@ -711,6 +973,7 @@ fn db_bearer_token_delete_user_removes_related_tokens_from_list_and_verify() {
         .create_bearer_token(
             "bob",
             BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::new(),
             chrono::Duration::hours(12),
             Some("bob token".to_string()),
         )
@@ -841,6 +1104,368 @@ fn ensure_default_root_creates_root_page() {
         .expect("sandbox csv asset lookup failed")
         .is_some();
     assert!(csv_asset_exists);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+///
+/// current path から現在ページ状態を解決できることを
+/// 確認する。
+///
+/// # 注記
+/// 通常ページと draft ページを作成し、
+/// `get_current_page_state_by_path` の戻り値を検証する。
+///
+#[test]
+fn current_page_state_can_be_resolved_by_path() {
+    /*
+     * テスト用データベースと対象ユーザを準備する
+     */
+    let (base_dir, db_path) = prepare_test_dirs();
+    let asset_path = base_dir.join("assets");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
+        .expect("add user failed");
+
+    /*
+     * 通常ページと draft ページを作成する
+     */
+    let page_id = manager
+        .create_page("/mcp/page", "user", "# page".to_string())
+        .expect("create page failed");
+    let (draft_page_id, _) = manager
+        .create_draft_page("/mcp/draft", "user")
+        .expect("create draft page failed");
+
+    /*
+     * 通常ページの current path 解決結果を検証する
+     */
+    let page_state = manager
+        .get_current_page_state_by_path("/mcp/page")
+        .expect("resolve page state failed")
+        .expect("page state missing");
+    assert_eq!(page_state.page_id(), page_id);
+    assert_eq!(page_state.current_path(), "/mcp/page");
+    assert_eq!(page_state.latest_revision(), Some(1));
+    assert_eq!(
+        page_state
+            .latest_source()
+            .expect("latest source missing")
+            .source(),
+        "# page",
+    );
+    assert!(!page_state.page_index().is_draft());
+
+    /*
+     * draft ページの current path 解決結果を検証する
+     */
+    let draft_state = manager
+        .get_current_page_state_by_path("/mcp/draft")
+        .expect("resolve draft state failed")
+        .expect("draft state missing");
+    assert_eq!(draft_state.page_id(), draft_page_id);
+    assert_eq!(draft_state.current_path(), "/mcp/draft");
+    assert_eq!(draft_state.latest_revision(), None);
+    assert!(draft_state.latest_source().is_none());
+    assert!(draft_state.page_index().is_draft());
+
+    /*
+     * 未存在 path は解決できないことを検証する
+     */
+    assert!(manager
+        .get_current_page_state_by_path("/mcp/missing")
+        .expect("resolve missing path failed")
+        .is_none());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+///
+/// 複数ページIDの current path 情報を一括取得できることを
+/// 確認する。
+///
+/// # 注記
+/// 通常ページと draft ページを作成し、
+/// `get_current_page_paths_by_ids` の戻り値を検証する。
+///
+#[test]
+fn current_page_paths_can_be_resolved_by_ids() {
+    /*
+     * テスト用データベースと対象ユーザを準備する
+     */
+    let (base_dir, db_path) = prepare_test_dirs();
+    let asset_path = base_dir.join("assets");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
+        .expect("add user failed");
+
+    /*
+     * 通常ページと draft ページを作成する
+     */
+    let page_id = manager
+        .create_page("/mcp/page2", "user", "# page2".to_string())
+        .expect("create page failed");
+    let (draft_page_id, _) = manager
+        .create_draft_page("/mcp/draft2", "user")
+        .expect("create draft page failed");
+
+    /*
+     * 一括解決結果を検証する
+     */
+    let paths = manager
+        .get_current_page_paths_by_ids(&[
+            page_id.clone(),
+            draft_page_id.clone(),
+            PageId::new(),
+        ])
+        .expect("resolve current paths failed");
+    let page_info = paths.get(&page_id).expect("page path info missing");
+    assert_eq!(page_info.current_path(), "/mcp/page2");
+    assert!(!page_info.deleted());
+    assert!(!page_info.draft());
+
+    let draft_info = paths
+        .get(&draft_page_id)
+        .expect("draft path info missing");
+    assert_eq!(draft_info.current_path(), "/mcp/draft2");
+    assert!(!draft_info.deleted());
+    assert!(draft_info.draft());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+///
+/// `append_page_by_id` が前提 revision 一致時に
+/// 新規 revision を追加できることを確認する。
+///
+/// # 注記
+/// 初回 revision を持つページへ `allow_amend = false` で保存し、
+/// 結果 revision と本文を検証する。
+///
+#[test]
+fn append_page_by_id_adds_new_revision_when_latest_matches() {
+    /*
+     * テスト用データベースと対象ページを準備する
+     */
+    let (base_dir, db_path) = prepare_test_dirs();
+    let asset_path = base_dir.join("assets");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
+        .expect("add user failed");
+    let page_id = manager
+        .create_page("/mcp/append", "user", "# base".to_string())
+        .expect("create page failed");
+
+    /*
+     * `append` 用 compare-and-write を実行する
+     */
+    let request = AppendPageRequest::new(
+        page_id.clone(),
+        "user".to_string(),
+        "# base\nappended".to_string(),
+        1,
+        false,
+    );
+    let result = manager
+        .append_page_by_id(&request)
+        .expect("append page failed");
+
+    /*
+     * 新規 revision 追加結果を検証する
+     */
+    assert_eq!(result.revision(), 2);
+    assert!(!result.amended());
+
+    let page_state = manager
+        .get_current_page_state_by_path("/mcp/append")
+        .expect("resolve page failed")
+        .expect("page state missing");
+    assert_eq!(page_state.latest_revision(), Some(2));
+    assert_eq!(
+        page_state
+            .latest_source()
+            .expect("latest source missing")
+            .source(),
+        "# base\nappended",
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+///
+/// `append_page_by_id` が同一ユーザかつ amend 許可時に
+/// 最新 revision を更新できることを確認する。
+///
+/// # 注記
+/// `allow_amend = true` で保存し、
+/// revision が増えずに本文だけ更新されることを検証する。
+///
+#[test]
+fn append_page_by_id_amends_latest_revision_for_same_user() {
+    /*
+     * テスト用データベースと対象ページを準備する
+     */
+    let (base_dir, db_path) = prepare_test_dirs();
+    let asset_path = base_dir.join("assets");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
+        .expect("add user failed");
+    let page_id = manager
+        .create_page("/mcp/amend", "user", "# base".to_string())
+        .expect("create page failed");
+
+    /*
+     * 同一ユーザ amend を実行する
+     */
+    let request = AppendPageRequest::new(
+        page_id.clone(),
+        "user".to_string(),
+        "# base\namended".to_string(),
+        1,
+        true,
+    );
+    let result = manager
+        .append_page_by_id(&request)
+        .expect("append page failed");
+
+    /*
+     * amend 結果を検証する
+     */
+    assert_eq!(result.revision(), 1);
+    assert!(result.amended());
+    assert!(
+        !manager
+            .has_page_source_for_test(&page_id, 2)
+            .expect("page source lookup failed")
+    );
+
+    let page_state = manager
+        .get_current_page_state_by_path("/mcp/amend")
+        .expect("resolve page failed")
+        .expect("page state missing");
+    assert_eq!(page_state.latest_revision(), Some(1));
+    assert_eq!(
+        page_state
+            .latest_source()
+            .expect("latest source missing")
+            .source(),
+        "# base\namended",
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+///
+/// `append_page_by_id` が最新 revision 不一致を
+/// 競合として拒否することを確認する。
+///
+/// # 注記
+/// 保存前に別更新で revision を進め、
+/// `expected_latest_revision` が古い要求を失敗させる。
+///
+#[test]
+fn append_page_by_id_rejects_revision_conflict() {
+    /*
+     * テスト用データベースと対象ページを準備する
+     */
+    let (base_dir, db_path) = prepare_test_dirs();
+    let asset_path = base_dir.join("assets");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
+        .expect("add user failed");
+    let page_id = manager
+        .create_page("/mcp/conflict", "user", "# base".to_string())
+        .expect("create page failed");
+
+    /*
+     * 先行更新で latest revision を進める
+     */
+    manager
+        .put_page(&page_id, "user", "# base\nv2".to_string(), false)
+        .expect("put page failed");
+
+    /*
+     * 古い revision 前提の保存が拒否されることを検証する
+     */
+    let request = AppendPageRequest::new(
+        page_id,
+        "user".to_string(),
+        "# base\nstale".to_string(),
+        1,
+        false,
+    );
+    let err = manager
+        .append_page_by_id(&request)
+        .expect_err("append page should fail");
+    assert!(matches!(
+        err.downcast_ref::<super::schema::DbError>(),
+        Some(super::schema::DbError::RevisionConflict),
+    ));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+///
+/// `append` 競合確認 API が最新 revision・更新者・ロック状態を
+/// 返せることを確認する。
+///
+/// # 注記
+/// 通常ページへロックを取得し、
+/// `get_append_conflict_state_by_id` の戻り値を検証する。
+///
+#[test]
+fn append_conflict_state_reports_latest_revision_user_and_lock() {
+    /*
+     * テスト用データベースと対象ページを準備する
+     */
+    let (base_dir, db_path) = prepare_test_dirs();
+    let asset_path = base_dir.join("assets");
+    let manager = DatabaseManager::open(&db_path, &asset_path)
+        .expect("open manager failed");
+    manager
+        .add_user("user", "pass", None)
+        .expect("add user failed");
+    let page_id = manager
+        .create_page("/mcp/state", "user", "# base".to_string())
+        .expect("create page failed");
+    manager
+        .acquire_page_lock(&page_id, "user")
+        .expect("acquire lock failed");
+
+    /*
+     * 競合確認結果を検証する
+     */
+    let conflict_state = manager
+        .get_append_conflict_state_by_id(&page_id)
+        .expect("get conflict state failed")
+        .expect("conflict state missing");
+    let page_state = manager
+        .get_current_page_state_by_path("/mcp/state")
+        .expect("resolve page failed")
+        .expect("page state missing");
+
+    assert_eq!(conflict_state.latest_revision(), Some(1));
+    assert_eq!(
+        conflict_state.latest_user_id(),
+        Some(
+            page_state
+                .latest_source()
+                .expect("latest source missing")
+                .user(),
+        ),
+    );
+    assert!(conflict_state.locked());
+    assert!(!conflict_state.draft());
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

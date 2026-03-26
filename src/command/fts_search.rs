@@ -15,7 +15,7 @@ use anyhow::Result;
 use super::CommandContext;
 use crate::cmd_args::{FtsSearchOpts, Options};
 use crate::database::DatabaseManager;
-use crate::fts::{FtsIndexConfig, FtsSearchResult};
+use crate::fts::{FtsIndexConfig, FtsSearchResult, FtsSearchTarget};
 
 ///
 /// "fts search"コマンド実行コンテキスト
@@ -23,7 +23,7 @@ use crate::fts::{FtsIndexConfig, FtsSearchResult};
 struct FtsSearchCommandContext {
     manager: DatabaseManager,
     index_path: PathBuf,
-    target: crate::cmd_args::FtsSearchTarget,
+    target: FtsSearchTarget,
     expression: String,
     with_deleted: bool,
     all_revision: bool,

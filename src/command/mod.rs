@@ -31,13 +31,17 @@ pub(crate) mod page_move_to;
 pub(crate) mod page_undelete;
 pub(crate) mod page_unlock;
 pub(crate) mod run;
+pub(crate) mod token_add_path;
 pub(crate) mod token_create;
+pub(crate) mod token_info;
 pub(crate) mod token_list;
 pub(crate) mod token_purge;
+pub(crate) mod token_remove_path;
 pub(crate) mod token_revoke;
 pub(crate) mod user_add;
 pub(crate) mod user_delete;
 pub(crate) mod user_edit;
+pub(crate) mod user_info;
 pub(crate) mod user_list;
 
 use anyhow::Result;

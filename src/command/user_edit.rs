@@ -13,6 +13,7 @@ use anyhow::{anyhow, Result};
 use super::CommandContext;
 use super::common::read_password_with_confirm;
 use crate::cmd_args::{Options, UserEditOpts};
+use crate::database::types::{UserAttribute, UserAttributeSet};
 use crate::database::DatabaseManager;
 
 ///
@@ -23,6 +24,9 @@ struct UserEditCommandContext {
     username: String,
     display_name: Option<String>,
     change_password: bool,
+    add_attributes: UserAttributeSet,
+    remove_attributes: UserAttributeSet,
+    clear_attributes: bool,
 }
 
 impl UserEditCommandContext {
@@ -35,7 +39,22 @@ impl UserEditCommandContext {
             username: sub_opts.user_name(),
             display_name: sub_opts.display_name(),
             change_password: sub_opts.is_password_change(),
+            add_attributes: sub_opts.add_attributes()?,
+            remove_attributes: sub_opts.remove_attributes()?,
+            clear_attributes: sub_opts.clear_attributes(),
         })
+    }
+
+    ///
+    /// 属性変更指定の有無を返す
+    ///
+    /// # 戻り値
+    /// 属性変更が指定されている場合は `true` を返す。
+    ///
+    fn has_attribute_changes(&self) -> bool {
+        self.clear_attributes
+            || !self.add_attributes.is_empty()
+            || !self.remove_attributes.is_empty()
     }
 }
 
@@ -50,12 +69,40 @@ impl CommandContext for UserEditCommandContext {
         /*
          * 更新内容の検証
          */
-        if self.display_name.is_none() && !self.change_password {
+        if self.display_name.is_none()
+            && !self.change_password
+            && !self.has_attribute_changes()
+        {
             return Err(anyhow!("no update options specified"));
         }
 
         /*
-         * パスワード変更入力の取得
+         * 現在のユーザ状態を解決する
+         */
+        let current_user = self
+            .manager
+            .get_user_info_by_name(&self.username)?
+            .ok_or_else(|| anyhow!("user not found: {}", self.username))?;
+        let target_attributes = resolve_target_attributes(
+            current_user.attributes(),
+            self.clear_attributes,
+            &self.remove_attributes,
+            &self.add_attributes,
+        );
+
+        /*
+         * `NoBasicAuth` 遷移条件を検証する
+         */
+        validate_attribute_transition(
+            &current_user,
+            &target_attributes,
+            self.change_password,
+            self.display_name.is_some(),
+            self.has_attribute_changes(),
+        )?;
+
+        /*
+         * 必要時のみパスワード変更入力を取得する
          */
         let password = if self.change_password {
             Some(read_password_with_confirm()?)
@@ -66,12 +113,110 @@ impl CommandContext for UserEditCommandContext {
         /*
          * ユーザ情報の更新
          */
-        self.manager.update_user(
+        self.manager.update_user_with_attributes(
             &self.username,
             self.display_name.as_deref(),
             password.as_deref(),
+            if self.has_attribute_changes() {
+                Some(target_attributes)
+            } else {
+                None
+            },
         )
     }
+}
+
+///
+/// 属性変更後の集合を解決する
+///
+/// # 引数
+/// * `current` - 現在の属性集合
+/// * `clear_attributes` - 全消去指定
+/// * `remove_attributes` - 削除対象属性
+/// * `add_attributes` - 追加対象属性
+///
+/// # 戻り値
+/// 適用後の属性集合を返す。
+///
+fn resolve_target_attributes(
+    current: UserAttributeSet,
+    clear_attributes: bool,
+    remove_attributes: &UserAttributeSet,
+    add_attributes: &UserAttributeSet,
+) -> UserAttributeSet {
+    let mut resolved = if clear_attributes {
+        UserAttributeSet::new()
+    } else {
+        current
+    };
+
+    /*
+     * remove を先に適用する
+     */
+    for attribute in remove_attributes.iter().copied() {
+        resolved.remove(attribute);
+    }
+
+    /*
+     * add を最後に適用する
+     */
+    for attribute in add_attributes.iter().copied() {
+        resolved.insert(attribute);
+    }
+
+    resolved
+}
+
+///
+/// `NoBasicAuth` 遷移条件を検証する
+///
+/// # 引数
+/// * `current_user` - 現在のユーザ情報
+/// * `target_attributes` - 更新後の属性集合
+/// * `change_password` - パスワード変更指定
+/// * `change_display_name` - 表示名変更指定
+/// * `has_attribute_changes` - 属性変更指定の有無
+///
+/// # 戻り値
+/// 制約を満たす場合は `Ok(())` を返す。
+///
+fn validate_attribute_transition(
+    current_user: &crate::database::types::UserInfo,
+    target_attributes: &UserAttributeSet,
+    change_password: bool,
+    change_display_name: bool,
+    has_attribute_changes: bool,
+) -> Result<()> {
+    let current_no_basic = current_user
+        .attributes()
+        .contains(UserAttribute::NoBasicAuth);
+    let target_no_basic =
+        target_attributes.contains(UserAttribute::NoBasicAuth);
+
+    /*
+     * Basic認証再有効化時の条件を確認する
+     */
+    if current_no_basic && !target_no_basic && !change_password {
+        return Err(anyhow!(
+            "password must be specified when removing NoBasicAuth"
+        ));
+    }
+
+    /*
+     * `NoBasicAuth` 維持中のパスワード単独変更を禁止する
+     */
+    if current_no_basic
+        && target_no_basic
+        && change_password
+        && !change_display_name
+        && !has_attribute_changes
+    {
+        return Err(anyhow!(
+            "password-only update is not allowed for NoBasicAuth user"
+        ));
+    }
+
+    Ok(())
 }
 
 ///

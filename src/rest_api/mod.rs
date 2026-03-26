@@ -22,11 +22,9 @@ use actix_web_httpauth::extractors::basic::Config;
 use serde_json::json;
 
 #[allow(unused_imports)]
-pub(crate) use auth::{
-    AuthContext,
-    AuthUser,
-    require_request_scope,
-};
+pub(crate) use crate::auth::AuthContext;
+#[allow(unused_imports)]
+pub(crate) use auth::require_request_scope;
 
 /// ファイル名で禁止する文字
 /// (追加しやすいように集約する)

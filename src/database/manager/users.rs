@@ -18,7 +18,7 @@ use crate::database::schema::{
     USER_ID_TABLE,
     USER_INFO_TABLE,
 };
-use crate::database::types::{UserId, UserInfo};
+use crate::database::types::{UserAttributeSet, UserId, UserInfo};
 
 impl DatabaseManager {
     ///
@@ -32,6 +32,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 登録に成功した場合は`Ok(())`を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn add_user<S>(
         &self,
         username: S,
@@ -41,10 +42,37 @@ impl DatabaseManager {
     where
         S: AsRef<str> + Copy,
     {
+        self.add_user_with_attributes(
+            username.as_ref(),
+            Some(password.as_ref()),
+            display_name.map(|name| name.as_ref().to_string()),
+            UserAttributeSet::new(),
+        )
+    }
+
+    ///
+    /// 属性付きユーザ情報の追加
+    ///
+    /// # 引数
+    /// * `username` - 登録するユーザ名
+    /// * `password` - 登録するパスワード
+    /// * `display_name` - 表示名
+    /// * `attributes` - ユーザ属性集合
+    ///
+    /// # 戻り値
+    /// 登録に成功した場合は`Ok(())`を返す。
+    ///
+    pub(crate) fn add_user_with_attributes(
+        &self,
+        username: &str,
+        password: Option<&str>,
+        display_name: Option<String>,
+        attributes: UserAttributeSet,
+    ) -> Result<()> {
         /*
          * 事前情報の整形
          */
-        let key = username.as_ref().to_string();
+        let key = username.to_string();
 
         /*
          * 書き込みトランザクション開始
@@ -61,16 +89,18 @@ impl DatabaseManager {
              * 既存ユーザの確認
              */
             if id_table.get(&key)?.is_some() {
-                return Err(anyhow!(
-                    "user already exists: {}",
-                    username.as_ref()
-                ));
+                return Err(anyhow!("user already exists: {}", username));
             }
 
             /*
              * ユーザ情報の生成
              */
-            let user_info = UserInfo::new(username, password, display_name);
+            let user_info = UserInfo::new_with_attributes(
+                username,
+                password,
+                display_name.as_deref(),
+                attributes,
+            );
             let user_id = user_info.id();
 
             /*
@@ -129,8 +159,12 @@ impl DatabaseManager {
         };
 
         /*
-         * パスワード検証
+         * Basic認証可否とパスワードを検証する
          */
+        if !user_info.allows_basic_auth() {
+            return Ok(false);
+        }
+
         Ok(user_info.verify_password(password))
     }
 
@@ -325,16 +359,45 @@ impl DatabaseManager {
     /// # 戻り値
     /// 更新に成功した場合は`Ok(())`を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn update_user(
         &self,
         username: &str,
         display_name: Option<&str>,
         password: Option<&str>,
     ) -> Result<()> {
+        self.update_user_with_attributes(
+            username,
+            display_name,
+            password,
+            None,
+        )
+    }
+
+    ///
+    /// ユーザ情報と属性集合の更新
+    ///
+    /// # 引数
+    /// * `username` - 更新対象のユーザ名
+    /// * `display_name` - 表示名
+    /// * `password` - パスワード
+    /// * `attributes` - ユーザ属性集合
+    ///
+    /// # 戻り値
+    /// 更新に成功した場合は`Ok(())`を返す。
+    ///
+    pub(crate) fn update_user_with_attributes(
+        &self,
+        username: &str,
+        display_name: Option<&str>,
+        password: Option<&str>,
+        attributes: Option<UserAttributeSet>,
+    ) -> Result<()> {
         /*
          * 引数の妥当性チェック
          */
-        if display_name.is_none() && password.is_none() {
+        if display_name.is_none() && password.is_none() && attributes.is_none()
+        {
             return Err(anyhow!("no update fields specified"));
         }
 
@@ -374,6 +437,10 @@ impl DatabaseManager {
 
             if let Some(password) = password {
                 user_info.set_password(password);
+            }
+
+            if let Some(attributes) = attributes {
+                user_info.set_attributes(attributes);
             }
 
             info_table.insert(user_id.clone(), user_info)?;

@@ -8,6 +8,9 @@
 //! HTTPサーバが共有する状態をまとめたモジュール
 //!
 
+use std::sync::{Arc, RwLock};
+
+use crate::audit::AuditSink;
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
 use crate::fts::FtsIndexConfig;
@@ -33,6 +36,9 @@ pub(crate) struct AppState {
 
     /// アセットサイズ上限
     asset_limit_size: u64,
+
+    /// 監査ログ投入入口
+    audit_sink: Option<Arc<RwLock<AuditSink>>>,
 }
 
 impl AppState {
@@ -46,6 +52,7 @@ impl AppState {
     /// * `template_root` - テンプレートルート
     /// * `wiki_title` - Wikiタイトル
     /// * `asset_limit_size` - アセットサイズ上限(バイト単位)
+    /// * `audit_sink` - 監査ログ投入入口
     ///
     /// # 戻り値
     /// 生成したオブジェクトを返す。
@@ -57,6 +64,7 @@ impl AppState {
         template_root: Option<String>,
         wiki_title: String,
         asset_limit_size: u64,
+        audit_sink: Option<Arc<RwLock<AuditSink>>>,
     ) -> Self {
         Self {
             db,
@@ -65,6 +73,7 @@ impl AppState {
             template_root,
             wiki_title,
             asset_limit_size,
+            audit_sink,
         }
     }
 
@@ -123,6 +132,16 @@ impl AppState {
     ///
     pub(crate) fn asset_limit_size(&self) -> u64 {
         self.asset_limit_size
+    }
+
+    ///
+    /// 監査ログ投入入口へのアクセサ
+    ///
+    /// # 戻り値
+    /// 監査ログ投入入口が存在する場合は共有参照を返す。
+    ///
+    pub(crate) fn audit_sink(&self) -> Option<Arc<RwLock<AuditSink>>> {
+        self.audit_sink.clone()
     }
 
     ///

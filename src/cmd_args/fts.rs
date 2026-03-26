@@ -9,11 +9,11 @@
 //!
 
 use anyhow::{anyhow, Result};
-use clap::{Args, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
+use clap::{Args, Subcommand};
 
 use super::{ApplyConfig, ShowOptions, Validate};
 use crate::cmd_args::config::Config;
+pub(crate) use crate::fts::FtsSearchTarget;
 
 #[derive(Clone, Args, Debug)]
 pub(crate) struct FtsCommand {
@@ -34,23 +34,6 @@ pub(crate) enum FtsSubCommand {
     /// 全文検索
     #[command(name = "search", alias = "s")]
     Search(FtsSearchOpts),
-}
-
-///
-/// fts searchサブコマンドの検索対象
-///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
-#[clap(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum FtsSearchTarget {
-    /// 見出し
-    Headings,
-
-    /// 本文
-    Body,
-
-    /// コードブロック
-    Code,
 }
 
 ///

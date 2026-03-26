@@ -24,9 +24,9 @@ use actix_web::http::{header, Version};
 use actix_web::{Error, HttpMessage, HttpRequest};
 use log::info;
 
-use crate::rest_api::AuthContext;
+use crate::auth::AuthContext;
 #[cfg(test)]
-use crate::rest_api::AuthUser;
+use crate::auth::AuthUser;
 
 ///
 /// HTTPアクセスログの出力ミドルウェア
@@ -237,7 +237,7 @@ mod tests {
     use actix_web::test::TestRequest;
 
     use super::*;
-    use crate::database::types::BearerScopeSet;
+    use crate::database::types::{BearerScopeSet, PathPrefixSet};
 
     ///
     /// 認証文脈がある場合にアクセスログ用ユーザ名を返すことを確認する。
@@ -252,6 +252,8 @@ mod tests {
         req.extensions_mut().insert(AuthContext::new(
             AuthUser::new("alice".to_string()),
             BearerScopeSet::all(),
+            PathPrefixSet::new(),
+            None,
         ));
 
         assert_eq!(extract_user(&req), "@alice");

@@ -13,12 +13,14 @@ use std::cell::RefCell;
 use anyhow::Result;
 
 use super::CommandContext;
-use super::common::format_cli_timestamp;
+use super::common::{format_cli_duration, format_cli_timestamp};
 use crate::cmd_args::{Options, TokenCreateOpts};
 use crate::database::types::{
+    BearerScope,
     BearerScopeSet,
     BearerTokenInfo,
     BearerTokenPlaintext,
+    PathPrefixSet,
 };
 use crate::database::DatabaseManager;
 
@@ -40,6 +42,9 @@ struct TokenCreateCommandContext {
 
     /// 任意のトークン名
     name: Option<String>,
+
+    /// path prefix 制約集合
+    path_prefixes: PathPrefixSet,
 }
 
 impl TokenCreateCommandContext {
@@ -53,6 +58,7 @@ impl TokenCreateCommandContext {
             scopes: sub_opts.scopes()?,
             ttl: sub_opts.ttl_duration()?,
             name: sub_opts.normalized_name(),
+            path_prefixes: sub_opts.path_prefixes()?,
         })
     }
 }
@@ -64,6 +70,7 @@ impl CommandContext for TokenCreateCommandContext {
         let (plaintext, info) = manager.create_bearer_token(
             &self.user_name,
             self.scopes.clone(),
+            self.path_prefixes.clone(),
             self.ttl,
             self.name.clone(),
         )?;
@@ -86,12 +93,27 @@ fn print_created_token(
     plaintext: &BearerTokenPlaintext,
     info: &BearerTokenInfo,
 ) {
-    println!("token_id: {}", info.token_id());
-    println!("user_name: {}", user_name);
-    println!("scopes: {}", format_scopes(info));
-    println!("created_at: {}", format_cli_timestamp(info.created_at()));
-    println!("expire_at: {}", format_cli_timestamp(info.expire_at()));
-    println!("token: {}", plaintext.expose());
+    print_field("TOKEN ID", &info.token_id().to_string());
+    print_field("TOKEN NAME", info.name().as_deref().unwrap_or("-"));
+    print_field("USERNAME", user_name);
+    print_field("SCOPES", &format_scopes(info));
+    print_field(
+        "PERMISSIONS",
+        &format_effective_permission_list(info.scopes()),
+    );
+    print_field("TTL", &format_cli_duration(info.ttl()));
+    print_path_prefixes(info.path_prefixes());
+    print_timestamps(&[
+        ("create", info.created_at()),
+        ("expire", info.expire_at()),
+    ]);
+    if info.path_prefixes().allows_all() {
+        println!("WARNING:");
+        println!("    - token allows access to all paths");
+    }
+    println!();
+    println!("TOKEN VALUE:");
+    println!("    {}", plaintext.expose());
 }
 
 ///
@@ -109,6 +131,87 @@ fn format_scopes(info: &BearerTokenInfo) -> String {
         .map(|scope| scope.as_str())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+///
+/// 実効権限の詳細表示文字列を生成する
+///
+/// # 引数
+/// * `scopes` - Bearer スコープ集合
+///
+/// # 戻り値
+/// 実効権限名のカンマ区切り文字列を返す。
+///
+fn format_effective_permission_list(scopes: BearerScopeSet) -> String {
+    /*
+     * 実効権限名の収集
+     */
+    let mut permissions = Vec::new();
+    for (required, label) in [
+        (BearerScope::Read, "read"),
+        (BearerScope::Create, "create"),
+        (BearerScope::Delete, "delete"),
+        (BearerScope::Update, "update"),
+        (BearerScope::Append, "append"),
+    ] {
+        if scopes.allows(required) {
+            permissions.push(label);
+        }
+    }
+
+    permissions.join(", ")
+}
+
+///
+/// 単一値フィールドを整形出力する
+///
+/// # 引数
+/// * `label` - 表示ラベル
+/// * `value` - 表示値
+///
+/// # 戻り値
+/// なし
+///
+fn print_field(label: &str, value: &str) {
+    println!("{:<13} {}", format!("{}:", label), value);
+}
+
+///
+/// path prefix 制約を整形出力する
+///
+/// # 引数
+/// * `path_prefixes` - 表示対象の path prefix 制約集合
+///
+/// # 戻り値
+/// なし
+///
+fn print_path_prefixes(path_prefixes: PathPrefixSet) {
+    println!("PATH PREFIXES:");
+
+    if path_prefixes.allows_all() {
+        println!("    - all");
+        return;
+    }
+
+    for path_prefix in path_prefixes.iter() {
+        println!("    - {}", path_prefix);
+    }
+}
+
+///
+/// タイムスタンプ群を整形出力する
+///
+/// # 引数
+/// * `timestamps` - ラベル付きタイムスタンプ一覧
+///
+/// # 戻り値
+/// なし
+///
+fn print_timestamps(timestamps: &[(&str, chrono::DateTime<chrono::Local>)]) {
+    println!("TIMESTAMPS:");
+    for (label, timestamp) in timestamps {
+        println!("    {}: {}", label, format_cli_timestamp(*timestamp));
+    }
 }
 
 ///

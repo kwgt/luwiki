@@ -26,6 +26,10 @@ pub(crate) struct RunOpts {
     #[arg(short = 'b', long = "open-browser", help = "ブラウザを起動する")]
     open_browser: bool,
 
+    /// MCPの有効化指定
+    #[arg(long = "mcp", action = clap::ArgAction::SetTrue)]
+    use_mcp: Option<bool>,
+
     /// TLSでの通信を有効にする
     #[arg(short = 'T', long = "tls")]
     use_tls: bool,
@@ -52,6 +56,16 @@ impl RunOpts {
     ///
     pub(crate) fn is_browser_open(&self) -> bool {
         self.open_browser
+    }
+
+    ///
+    /// MCP有効フラグへのアクセサ
+    ///
+    /// # 戻り値
+    /// MCPが有効ならtrueを返す。
+    ///
+    pub(crate) fn use_mcp(&self) -> bool {
+        self.use_mcp.unwrap_or(false)
     }
 
     ///
@@ -182,6 +196,13 @@ impl ApplyConfig for RunOpts {
         }
 
         /*
+         * MCP有効化設定を補完
+         */
+        if self.use_mcp.is_none() {
+            self.use_mcp = config.run_use_mcp();
+        }
+
+        /*
          * TLS関連の設定を補完
          */
         if !self.use_tls {
@@ -281,6 +302,7 @@ impl ShowOptions for RunOpts {
     fn show_options(&self) {
         println!("run command options");
         println!("   browser_open:   {:?}", self.is_browser_open());
+        println!("   mcp enabled:    {}", self.use_mcp());
         println!("   tls enabled:    {}", self.use_tls());
         println!("   cert path:      {}", self.cert_path().display());
         println!("   bind:  {}:{}", self.bind_addr(), self.bind_port());

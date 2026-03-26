@@ -21,10 +21,13 @@ use super::{
     LockListSortMode,
     PageListSortMode,
     UserListSortMode,
+    default_audit_path,
     default_assets_path,
     default_db_path,
     default_fts_index_path,
     default_log_path,
+    DEFAULT_AUDIT_RETENTION_TEXT,
+    DEFAULT_AUDIT_ROTATE_SIZE_TEXT,
     LogLevel,
 };
 
@@ -133,6 +136,30 @@ impl Config {
     }
 
     ///
+    /// グローバル設定の監査ログ出力先を更新
+    ///
+    pub(super) fn set_audit_path(&mut self, path: PathBuf) {
+        let global = self.ensure_global();
+        global.audit_path = Some(path);
+    }
+
+    ///
+    /// グローバル設定の監査ログ保持期間を更新
+    ///
+    pub(super) fn set_audit_retention(&mut self, retention: String) {
+        let global = self.ensure_global();
+        global.audit_retention = Some(retention);
+    }
+
+    ///
+    /// グローバル設定の監査ログローテーション閾値を更新
+    ///
+    pub(super) fn set_audit_rotate_size(&mut self, rotate_size: String) {
+        let global = self.ensure_global();
+        global.audit_rotate_size = Some(rotate_size);
+    }
+
+    ///
     /// runサブコマンドのバインドアドレスを更新
     ///
     pub(super) fn set_run_bind_addr(&mut self, addr: String) {
@@ -162,6 +189,14 @@ impl Config {
     pub(super) fn set_run_server_cert(&mut self, path: PathBuf) {
         let run = self.ensure_run();
         run.server_cert = Some(path);
+    }
+
+    ///
+    /// runサブコマンドのMCP有効化フラグを更新
+    ///
+    pub(super) fn set_run_use_mcp(&mut self, use_mcp: bool) {
+        let run = self.ensure_run();
+        run.use_mcp = Some(use_mcp);
     }
 
     ///
@@ -386,6 +421,34 @@ impl Config {
     }
 
     ///
+    /// 監査ログ出力先へのアクセサ
+    ///
+    pub(super) fn audit_path(&self) -> Option<PathBuf> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.audit_path.as_ref())
+            .map(|path| self.resolve_path(path))
+    }
+
+    ///
+    /// 監査ログ保持期間へのアクセサ
+    ///
+    pub(super) fn audit_retention(&self) -> Option<String> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.audit_retention.clone())
+    }
+
+    ///
+    /// 監査ログローテーション閾値へのアクセサ
+    ///
+    pub(super) fn audit_rotate_size(&self) -> Option<String> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.audit_rotate_size.clone())
+    }
+
+    ///
     /// TLS使用フラグへのアクセサ
     ///
     pub(super) fn use_tls(&self) -> Option<bool> {
@@ -437,6 +500,15 @@ impl Config {
         self.run
             .as_ref()
             .and_then(|run| run.bind_port)
+    }
+
+    ///
+    /// runサブコマンドのMCP有効化フラグへのアクセサ
+    ///
+    pub(super) fn run_use_mcp(&self) -> Option<bool> {
+        self.run
+            .as_ref()
+            .and_then(|run| run.use_mcp)
     }
 
     ///
@@ -686,6 +758,9 @@ impl Config {
                 template_root: None,
                 wiki_title: None,
                 asset_limit_size: None,
+                audit_path: None,
+                audit_retention: None,
+                audit_rotate_size: None,
                 use_tls: None,
                 server_cert: None,
             });
@@ -775,6 +850,7 @@ impl Config {
             self.run = Some(RunInfo {
                 bind_addr: None,
                 bind_port: None,
+                use_mcp: None,
                 use_tls: None,
                 server_cert: None,
             });
@@ -998,6 +1074,13 @@ impl Default for Config {
                 template_root: None,
                 wiki_title: None,
                 asset_limit_size: None,
+                audit_path: Some(default_audit_path()),
+                audit_retention: Some(
+                    DEFAULT_AUDIT_RETENTION_TEXT.to_string()
+                ),
+                audit_rotate_size: Some(
+                    DEFAULT_AUDIT_ROTATE_SIZE_TEXT.to_string()
+                ),
                 use_tls: None,
                 server_cert: None,
             }),
@@ -1005,6 +1088,7 @@ impl Default for Config {
             run: Some(RunInfo {
                 bind_addr: Some("0.0.0.0".to_string()),
                 bind_port: Some(8080),
+                use_mcp: Some(false),
                 use_tls: Some(false),
                 server_cert: None,
             }),
@@ -1093,6 +1177,15 @@ struct GlobalInfo {
     /// アセットサイズ上限
     asset_limit_size: Option<String>,
 
+    /// 監査ログ出力先
+    audit_path: Option<PathBuf>,
+
+    /// 監査ログ保持期間
+    audit_retention: Option<String>,
+
+    /// 監査ログローテーション閾値
+    audit_rotate_size: Option<String>,
+
     /// TLSの使用
     use_tls: Option<bool>,
 
@@ -1123,6 +1216,9 @@ struct RunInfo {
 
     /// 秘匿項目をマスク表示するか否か
     bind_port: Option<u16>,
+
+    /// MCPの有効化
+    use_mcp: Option<bool>,
 
     /// TLSの使用
     use_tls: Option<bool>,

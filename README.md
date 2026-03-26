@@ -15,6 +15,7 @@ Commands:
   lock      ロック管理コマンド一覧の表示
   asset     アセット管理コマンド一覧の表示
   fts       全文検索管理コマンド一覧の表示
+  token     Bearerトークン管理コマンド一覧の表示
   export    バックアップ／マイグレート用データのエクスポート
   import    エクスポートデータのインポート
   commands  サブコマンド一覧の表示
@@ -60,6 +61,15 @@ Options:
   -S, --asset-limit-size <SIZE>
           アセットサイズ上限
 
+      --audit-log-dir <DIR>
+          監査ログ出力先
+
+      --audit-log-retention <DURATION>
+          監査ログ保持期間
+
+      --audit-log-rotate-size <SIZE>
+          監査ログローテーション閾値
+
       --show-options
           設定情報の表示
 
@@ -78,6 +88,9 @@ Options:
   1. ユーザの追加 : `user add`サブコマンドでユーザを追加
   2. サーバの起動 : `run`サブコマンドでサーバを起動
   3. ブラウザで http://127.0.0.1:8080/wiki を開く
+
+## MCPサーバ機能を使用する場合
+[こちら](MCP_SETUP.md)をご覧ください。
 
 ## Todo
   - [x] TLS対応
@@ -105,8 +118,24 @@ Options:
       - [x] 単純リンク生成
       - [x] アセットのコードブロック展開マクロ
       - [x] ページ名展開
-  - [ ] Bearer認証のサポート
-  - [ ] MCPサーバ機能
+  - [x] Bearer認証のサポート
+  - MCPサーバ機能
+      - tools
+          - ページ本文の操作
+              - [x] get_page
+              - [x] get_page_toc
+              - [x] list_pages
+              - [x] search_pages
+              - [x] create_page
+              - [x] update_page
+              - [x] append_page
+              - [x] rename_page
+              - [x] get_page_section
+              - [ ] edit_page
+          - [ ] アセットの操作
+      - resources
+          - [ ] テンプレート
+      - [ ] prompts
 
 ## ライセンス
 このソフトウェアは[MITライセンス](https://opensource.org/licenses/MIT)の条件下でオープンソースとして利用可能です。

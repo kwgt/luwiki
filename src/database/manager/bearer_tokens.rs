@@ -25,6 +25,7 @@ use crate::database::types::{
     BearerScopeSet,
     BearerTokenInfo,
     BearerTokenPlaintext,
+    PathPrefixSet,
     TokenHash,
     TokenId,
     UserId,
@@ -249,6 +250,7 @@ impl DatabaseManager {
     /// # 引数
     /// * `user_name` - 発行対象のユーザ名
     /// * `scopes` - 付与スコープ集合
+    /// * `path_prefixes` - path prefix 制約集合
     /// * `ttl` - トークンTTL
     /// * `name` - 任意のトークン名
     ///
@@ -260,6 +262,7 @@ impl DatabaseManager {
         &self,
         user_name: &str,
         scopes: BearerScopeSet,
+        path_prefixes: PathPrefixSet,
         ttl: Duration,
         name: Option<String>,
     ) -> Result<(BearerTokenPlaintext, BearerTokenInfo)> {
@@ -299,6 +302,7 @@ impl DatabaseManager {
                 let info = BearerTokenInfo::new(
                     user_id.clone(),
                     scopes.clone(),
+                    path_prefixes.clone(),
                     ttl,
                     name.clone(),
                 );
@@ -440,6 +444,106 @@ impl DatabaseManager {
             .collect();
 
         Ok(filtered)
+    }
+
+    ///
+    /// Bearerトークンへ path prefix 制約を追加する
+    ///
+    /// # 引数
+    /// * `token_id` - 更新対象の BearerトークンID
+    /// * `path_prefix` - 追加する path prefix
+    ///
+    /// # 戻り値
+    /// 更新後の Bearerトークン管理情報を返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn add_path_prefix_to_bearer_token(
+        &self,
+        token_id: &TokenId,
+        path_prefix: &str,
+    ) -> Result<BearerTokenInfo> {
+        /*
+         * BearerトークンIDから照合用ハッシュ値を解決する
+         */
+        let token_hash = self
+            .get_bearer_token_hash_by_id(token_id)?
+            .ok_or_else(|| anyhow!("token not found: {}", token_id))?;
+
+        /*
+         * path prefix 制約を更新する
+         */
+        let txn = self.db.begin_write()?;
+        let updated = {
+            let mut token_table = txn.open_table(BEARER_TOKEN_TABLE)?;
+            let mut info = token_table
+                .get(token_hash)?
+                .ok_or_else(|| anyhow!("token not found: {}", token_id))?
+                .value();
+            let updated_prefixes =
+                add_path_prefix(info.path_prefixes(), path_prefix);
+
+            info.set_path_prefixes(updated_prefixes, Local::now());
+            token_table.insert(token_hash, info.clone())?;
+            info
+        };
+
+        txn.commit()?;
+        Ok(updated)
+    }
+
+    ///
+    /// Bearerトークンから path prefix 制約を削除する
+    ///
+    /// # 引数
+    /// * `token_id` - 更新対象の BearerトークンID
+    /// * `path_prefix` - 削除する path prefix
+    ///
+    /// # 戻り値
+    /// 更新後の Bearerトークン管理情報と、
+    /// 全領域アクセス可へ戻ったかを返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn remove_path_prefix_from_bearer_token(
+        &self,
+        token_id: &TokenId,
+        path_prefix: &str,
+    ) -> Result<(BearerTokenInfo, bool)> {
+        /*
+         * BearerトークンIDから照合用ハッシュ値を解決する
+         */
+        let token_hash = self
+            .get_bearer_token_hash_by_id(token_id)?
+            .ok_or_else(|| anyhow!("token not found: {}", token_id))?;
+
+        /*
+         * path prefix 制約を更新する
+         */
+        let txn = self.db.begin_write()?;
+        let updated = {
+            let mut token_table = txn.open_table(BEARER_TOKEN_TABLE)?;
+            let mut info = token_table
+                .get(token_hash)?
+                .ok_or_else(|| anyhow!("token not found: {}", token_id))?
+                .value();
+            let current_prefixes = info.path_prefixes();
+            if !current_prefixes.contains(path_prefix) {
+                return Err(anyhow!(
+                    "path prefix not found: {}",
+                    path_prefix
+                ));
+            }
+
+            let mut updated_prefixes = current_prefixes;
+            updated_prefixes.remove(path_prefix);
+            let unrestricted = updated_prefixes.is_empty();
+
+            info.set_path_prefixes(updated_prefixes, Local::now());
+            token_table.insert(token_hash, info.clone())?;
+            (info, unrestricted)
+        };
+
+        txn.commit()?;
+        Ok(updated)
     }
 
     ///
@@ -906,6 +1010,69 @@ fn revoke_bearer_token_info(
 }
 
 ///
+/// path prefix 追加後の集合を返す
+///
+/// # 引数
+/// * `prefixes` - 更新前の path prefix 制約集合
+/// * `path_prefix` - 追加する path prefix
+///
+/// # 戻り値
+/// 追加後に正規化した path prefix 制約集合を返す。
+///
+fn add_path_prefix(
+    prefixes: PathPrefixSet,
+    path_prefix: &str,
+) -> PathPrefixSet {
+    /*
+     * `/` 追加時は全領域アクセス可へ正規化する
+     */
+    if path_prefix == "/" {
+        return PathPrefixSet::from_iter(["/"]);
+    }
+
+    /*
+     * より広い明示 prefix がある場合は現状維持する
+     */
+    if prefixes.iter().any(|existing| prefix_includes(existing, path_prefix)) {
+        return prefixes;
+    }
+
+    /*
+     * 暗黙の全領域アクセスではなく、明示 prefix 集合として更新する
+     */
+    let mut updated = PathPrefixSet::new();
+    for existing in prefixes.iter() {
+        if existing == "/" || prefix_includes(path_prefix, existing) {
+            continue;
+        }
+        updated.insert(existing.to_string());
+    }
+    updated.insert(path_prefix.to_string());
+    updated
+}
+
+///
+/// path prefix の包含関係を判定する
+///
+/// # 引数
+/// * `base` - 基準となる path prefix
+/// * `path` - 判定対象 path
+///
+/// # 戻り値
+/// `base` が `path` を包含する場合は `true` を返す。
+///
+fn prefix_includes(base: &str, path: &str) -> bool {
+    if base == "/" {
+        return true;
+    }
+
+    path == base
+        || path
+            .strip_prefix(base)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+///
 /// Bearerトークンの TTL 延長要否を判定する
 ///
 /// # 引数
@@ -940,6 +1107,7 @@ mod tests {
         BearerScope,
         BearerScopeSet,
         BearerTokenInfo,
+        PathPrefixSet,
         UserId,
     };
 
@@ -960,6 +1128,7 @@ mod tests {
         let token_info = BearerTokenInfo::new(
             UserId::new(),
             BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
             ttl,
             Some("ttl boundary test".to_string()),
         );

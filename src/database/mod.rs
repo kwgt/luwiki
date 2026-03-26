@@ -25,6 +25,9 @@ pub(crate) use entries::{
     PageListEntry,
 };
 pub(crate) use manager::DatabaseManager;
+pub(crate) use manager::bearer_tokens::VerifyBearerTokenFailureReason;
+pub(crate) use manager::pages_read::AppendConflictState;
+pub(crate) use manager::pages_write::{AppendPageRequest, AppendPageResult};
 pub(crate) use schema::DbError;
 
 use std::path::Path;
@@ -40,7 +43,12 @@ use crate::database::schema::{
     USER_INFO_TABLE,
 };
 use crate::database::types::PageId;
-use crate::database::types::{BearerScope, BearerScopeSet, TokenId};
+use crate::database::types::{
+    BearerScope,
+    BearerScopeSet,
+    PathPrefixSet,
+    TokenId,
+};
 
 ///
 /// テスト用の Bearer トークン管理情報スナップショット
@@ -56,6 +64,9 @@ pub struct BearerTokenSnapshotForTest {
 
     /// TTL 秒数
     pub ttl_seconds: i64,
+
+    /// path prefix 制約
+    pub path_prefixes: Vec<String>,
 
     /// 失効状態
     pub revoked: bool,
@@ -118,6 +129,7 @@ where
     let (plaintext, info) = manager.create_bearer_token(
         user_name,
         BearerScopeSet::from_iter([BearerScope::Read]),
+        PathPrefixSet::new(),
         Duration::seconds(ttl_seconds),
         Some("integration test token".to_string()),
     )?;
@@ -188,6 +200,11 @@ where
             .map(|scope| scope.as_str().to_string())
             .collect(),
         ttl_seconds: info.ttl().num_seconds(),
+        path_prefixes: info
+            .path_prefixes()
+            .iter()
+            .map(str::to_string)
+            .collect(),
         revoked: info.revoked(),
         name: info.name(),
     }))

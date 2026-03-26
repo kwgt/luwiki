@@ -24,7 +24,264 @@ use crate::database::schema::{
     PAGE_SOURCE_TABLE,
     USER_INFO_TABLE,
 };
+use crate::database::txn_helpers::find_lock_by_page;
 use crate::database::types::{PageId, PageIndex, PageSource, UserId, UserInfo};
+
+///
+/// current path から解決した現在ページ状態
+///
+#[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct CurrentPageState {
+    /// ページID
+    page_id: PageId,
+
+    /// ページインデックス
+    page_index: PageIndex,
+
+    /// 最新 revision
+    latest_revision: Option<u64>,
+
+    /// 最新ソース
+    latest_source: Option<PageSource>,
+
+    /// current path
+    current_path: String,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl CurrentPageState {
+    ///
+    /// 現在ページ状態の生成
+    ///
+    /// # 引数
+    /// * `page_id` - ページID
+    /// * `page_index` - ページインデックス
+    /// * `latest_revision` - 最新 revision
+    /// * `latest_source` - 最新ソース
+    /// * `current_path` - current path
+    ///
+    /// # 戻り値
+    /// 生成した現在ページ状態を返す。
+    ///
+    fn new(
+        page_id: PageId,
+        page_index: PageIndex,
+        latest_revision: Option<u64>,
+        latest_source: Option<PageSource>,
+        current_path: String,
+    ) -> Self {
+        Self {
+            page_id,
+            page_index,
+            latest_revision,
+            latest_source,
+            current_path,
+        }
+    }
+
+    ///
+    /// ページIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// ページIDを返す。
+    ///
+    pub(crate) fn page_id(&self) -> PageId {
+        self.page_id.clone()
+    }
+
+    ///
+    /// ページインデックスへのアクセサ
+    ///
+    /// # 戻り値
+    /// ページインデックスを返す。
+    ///
+    pub(crate) fn page_index(&self) -> PageIndex {
+        self.page_index.clone()
+    }
+
+    ///
+    /// 最新 revision へのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新 revision を返す。draft の場合は `None` を返す。
+    ///
+    pub(crate) fn latest_revision(&self) -> Option<u64> {
+        self.latest_revision
+    }
+
+    ///
+    /// 最新ソースへのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新ソースを返す。draft の場合は `None` を返す。
+    ///
+    pub(crate) fn latest_source(&self) -> Option<PageSource> {
+        self.latest_source.clone()
+    }
+
+    ///
+    /// current path へのアクセサ
+    ///
+    /// # 戻り値
+    /// current path を返す。
+    ///
+    pub(crate) fn current_path(&self) -> &str {
+        &self.current_path
+    }
+}
+
+///
+/// search 結果整形用の current path 情報
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CurrentPathInfo {
+    /// current path
+    current_path: String,
+
+    /// 削除済み状態
+    deleted: bool,
+
+    /// draft 状態
+    draft: bool,
+}
+
+impl CurrentPathInfo {
+    ///
+    /// current path 情報の生成
+    ///
+    /// # 引数
+    /// * `current_path` - current path
+    /// * `deleted` - 削除済み状態
+    /// * `draft` - draft 状態
+    ///
+    /// # 戻り値
+    /// 生成した current path 情報を返す。
+    ///
+    fn new(current_path: String, deleted: bool, draft: bool) -> Self {
+        Self {
+            current_path,
+            deleted,
+            draft,
+        }
+    }
+
+    ///
+    /// current path へのアクセサ
+    ///
+    /// # 戻り値
+    /// current path を返す。
+    ///
+    pub(crate) fn current_path(&self) -> &str {
+        &self.current_path
+    }
+
+    ///
+    /// 削除済み状態へのアクセサ
+    ///
+    /// # 戻り値
+    /// 削除済みの場合は `true` を返す。
+    ///
+    pub(crate) fn deleted(&self) -> bool {
+        self.deleted
+    }
+
+    ///
+    /// draft 状態へのアクセサ
+    ///
+    /// # 戻り値
+    /// draft の場合は `true` を返す。
+    ///
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+}
+
+///
+/// `append` 競合確認用の現在状態
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AppendConflictState {
+    /// 最新 revision
+    latest_revision: Option<u64>,
+
+    /// 最新 source の更新者
+    latest_user_id: Option<UserId>,
+
+    /// 有効ロック有無
+    locked: bool,
+
+    /// draft 状態
+    draft: bool,
+}
+
+impl AppendConflictState {
+    ///
+    /// `append` 競合確認状態の生成
+    ///
+    /// # 引数
+    /// * `latest_revision` - 最新 revision
+    /// * `latest_user_id` - 最新 source の更新者
+    /// * `locked` - 有効ロック有無
+    /// * `draft` - draft 状態
+    ///
+    /// # 戻り値
+    /// 生成した状態を返す。
+    ///
+    fn new(
+        latest_revision: Option<u64>,
+        latest_user_id: Option<UserId>,
+        locked: bool,
+        draft: bool,
+    ) -> Self {
+        Self {
+            latest_revision,
+            latest_user_id,
+            locked,
+            draft,
+        }
+    }
+
+    ///
+    /// 最新 revision へのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新 revision を返す。draft の場合は `None` を返す。
+    ///
+    pub(crate) fn latest_revision(&self) -> Option<u64> {
+        self.latest_revision
+    }
+
+    ///
+    /// 最新更新者へのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新 source の更新者を返す。draft の場合は `None` を返す。
+    ///
+    pub(crate) fn latest_user_id(&self) -> Option<UserId> {
+        self.latest_user_id.clone()
+    }
+
+    ///
+    /// ロック有無へのアクセサ
+    ///
+    /// # 戻り値
+    /// 有効ロックが存在する場合は `true` を返す。
+    ///
+    pub(crate) fn locked(&self) -> bool {
+        self.locked
+    }
+
+    ///
+    /// draft 状態へのアクセサ
+    ///
+    /// # 戻り値
+    /// draft の場合は `true` を返す。
+    ///
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+}
 
 impl DatabaseManager {
     ///
@@ -376,6 +633,186 @@ impl DatabaseManager {
         let table = txn.open_table(PAGE_PATH_TABLE)?;
         let key = path.to_string();
         Ok(table.get(&key)?.map(|entry| entry.value()))
+    }
+
+    ///
+    /// current path から現在ページ状態を取得
+    ///
+    /// # 引数
+    /// * `path` - current path
+    ///
+    /// # 戻り値
+    /// current path に一致するページが存在する場合は
+    /// `Ok(Some(CurrentPageState))` を返す。
+    ///
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn get_current_page_state_by_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<CurrentPageState>> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let path_table = txn.open_table(PAGE_PATH_TABLE)?;
+        let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+        let source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+        let key = path.to_string();
+
+        /*
+         * current path からページIDを解決
+         */
+        let page_id = match path_table.get(&key)? {
+            Some(entry) => entry.value(),
+            None => return Ok(None),
+        };
+
+        /*
+         * ページ状態を構築
+         */
+        let page_index = match index_table.get(page_id.clone())? {
+            Some(entry) => entry.value(),
+            None => return Err(anyhow!("page index not found")),
+        };
+        let current_path = match page_index.current_path() {
+            Some(current_path) => current_path.to_string(),
+            None => return Err(anyhow!("current path not found")),
+        };
+        if current_path != path {
+            return Err(anyhow!("current path mismatch"));
+        }
+
+        let latest_revision = if page_index.is_draft() {
+            None
+        } else {
+            Some(page_index.latest())
+        };
+        let latest_source = match latest_revision {
+            Some(revision) => source_table
+                .get((page_id.clone(), revision))?
+                .map(|entry| entry.value()),
+            None => None,
+        };
+
+        Ok(Some(CurrentPageState::new(
+            page_id,
+            page_index,
+            latest_revision,
+            latest_source,
+            current_path,
+        )))
+    }
+
+    ///
+    /// 複数ページIDの current path 情報を取得
+    ///
+    /// # 引数
+    /// * `page_ids` - 取得対象のページID一覧
+    ///
+    /// # 戻り値
+    /// current path 情報の写像を返す。
+    ///
+    pub(crate) fn get_current_page_paths_by_ids(
+        &self,
+        page_ids: &[PageId],
+    ) -> Result<HashMap<PageId, CurrentPathInfo>> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+        let mut paths = HashMap::new();
+
+        /*
+         * current path 情報の収集
+         */
+        for page_id in page_ids {
+            let Some(entry) = index_table.get(page_id.clone())? else {
+                continue;
+            };
+            let index = entry.value();
+            let Some(current_path) = index.current_path() else {
+                continue;
+            };
+
+            paths.insert(
+                page_id.clone(),
+                CurrentPathInfo::new(
+                    current_path.to_string(),
+                    index.deleted(),
+                    index.is_draft(),
+                ),
+            );
+        }
+
+        Ok(paths)
+    }
+
+    ///
+    /// `append` 競合確認用の現在状態を取得
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ページID
+    ///
+    /// # 戻り値
+    /// 対象ページが存在する場合は現在状態を返す。
+    /// 存在しない場合は `None` を返す。
+    ///
+    pub(crate) fn get_append_conflict_state_by_id(
+        &self,
+        page_id: &PageId,
+    ) -> Result<Option<AppendConflictState>> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+        let source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+        let lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+        let now = Local::now();
+
+        let index = match index_table.get(page_id.clone())? {
+            Some(entry) => entry.value(),
+            None => return Ok(None),
+        };
+
+        /*
+         * draft / 通常ページの状態を組み立てる
+         */
+        if index.is_draft() {
+            let locked = match find_lock_by_page(&lock_table, page_id)? {
+                Some((_, info)) => info.expire() > now,
+                None => false,
+            };
+            return Ok(Some(AppendConflictState::new(
+                None,
+                None,
+                locked,
+                true,
+            )));
+        }
+
+        let latest_revision = index.latest();
+        let latest_source = match source_table
+            .get((page_id.clone(), latest_revision))?
+        {
+            Some(entry) => entry.value(),
+            None => return Err(anyhow!("page source not found")),
+        };
+        let locked = match index.lock_token() {
+            Some(token) => match lock_table.get(token)? {
+                Some(info) => info.value().expire() > now,
+                None => false,
+            },
+            None => false,
+        };
+
+        Ok(Some(AppendConflictState::new(
+            Some(latest_revision),
+            Some(latest_source.user()),
+            locked,
+            false,
+        )))
     }
 
     ///

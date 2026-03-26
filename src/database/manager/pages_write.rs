@@ -51,6 +51,106 @@ use crate::database::types::{
     UserId,
 };
 
+///
+/// `append` 保存補助 API の入力
+///
+#[derive(Clone, Debug)]
+pub(crate) struct AppendPageRequest {
+    /// 対象ページID
+    page_id: PageId,
+
+    /// 保存主体のユーザ名
+    user_name: String,
+
+    /// 追記後の全文
+    source: String,
+
+    /// 保存直前に一致していることを要求する latest revision
+    expected_latest_revision: u64,
+
+    /// amend 相当保存を許可するか
+    allow_amend: bool,
+}
+
+impl AppendPageRequest {
+    ///
+    /// `append` 保存要求の生成
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ページID
+    /// * `user_name` - 保存主体のユーザ名
+    /// * `source` - 追記後の全文
+    /// * `expected_latest_revision` - 前提となる latest revision
+    /// * `allow_amend` - amend 相当保存可否
+    ///
+    /// # 戻り値
+    /// 生成した要求を返す。
+    ///
+    pub(crate) fn new(
+        page_id: PageId,
+        user_name: String,
+        source: String,
+        expected_latest_revision: u64,
+        allow_amend: bool,
+    ) -> Self {
+        Self {
+            page_id,
+            user_name,
+            source,
+            expected_latest_revision,
+            allow_amend,
+        }
+    }
+}
+
+///
+/// `append` 保存補助 API の結果
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AppendPageResult {
+    /// 確定 revision
+    revision: u64,
+
+    /// amend 実行有無
+    amended: bool,
+}
+
+impl AppendPageResult {
+    ///
+    /// `append` 保存結果の生成
+    ///
+    /// # 引数
+    /// * `revision` - 確定 revision
+    /// * `amended` - amend 実行有無
+    ///
+    /// # 戻り値
+    /// 生成した保存結果を返す。
+    ///
+    fn new(revision: u64, amended: bool) -> Self {
+        Self { revision, amended }
+    }
+
+    ///
+    /// revision へのアクセサ
+    ///
+    /// # 戻り値
+    /// 確定 revision を返す。
+    ///
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    ///
+    /// amend 実行有無へのアクセサ
+    ///
+    /// # 戻り値
+    /// amend 実行時は `true` を返す。
+    ///
+    pub(crate) fn amended(&self) -> bool {
+        self.amended
+    }
+}
+
 impl DatabaseManager {
     ///
     /// ページの作成
@@ -311,6 +411,114 @@ impl DatabaseManager {
         txn.commit()?;
 
         Ok(())
+    }
+
+    ///
+    /// `append` 用の compare-and-write 保存
+    ///
+    /// # 引数
+    /// * `request` - 保存要求
+    ///
+    /// # 戻り値
+    /// 成功時は確定 revision と amend 実行有無を返す。
+    ///
+    pub(crate) fn append_page_by_id(
+        &self,
+        request: &AppendPageRequest,
+    ) -> Result<AppendPageResult> {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+        let result = {
+            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+            let now = Local::now();
+
+            /*
+             * ユーザIDの解決
+             */
+            let user_id = {
+                let id_table = txn.open_table(USER_ID_TABLE)?;
+                match id_table.get(&request.user_name)? {
+                    Some(id) => id.value(),
+                    None => return Err(anyhow!(DbError::UserNotFound)),
+                }
+            };
+
+            let mut index = match index_table.get(request.page_id.clone())? {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!(DbError::PageNotFound)),
+            };
+
+            /*
+             * 対象ページ状態の検証
+             */
+            if index.is_draft() {
+                return Err(anyhow!(DbError::DraftPage));
+            }
+
+            verify_page_lock_in_txn(
+                &request.page_id,
+                &mut index,
+                &mut index_table,
+                &mut lock_table,
+                &now,
+            )?;
+
+            let latest_revision = index.latest();
+            if latest_revision != request.expected_latest_revision {
+                return Err(anyhow!(DbError::RevisionConflict));
+            }
+
+            /*
+             * 最新 source を基準に amend または新規 revision を決定
+             */
+            let latest_source = match source_table
+                .get((request.page_id.clone(), latest_revision))?
+            {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!("page source not found")),
+            };
+
+            if request.allow_amend {
+                if latest_source.user() != user_id {
+                    return Err(anyhow!(DbError::AmendForbidden));
+                }
+
+                let mut page_source = latest_source;
+                page_source.update_source(request.source.clone());
+                source_table.insert(
+                    (request.page_id.clone(), latest_revision),
+                    page_source,
+                )?;
+
+                AppendPageResult::new(latest_revision, true)
+            } else {
+                let revision = latest_revision + 1;
+                let page_source = PageSource::new_revision(
+                    revision,
+                    request.source.clone(),
+                    user_id,
+                    RenameInfo::none(),
+                );
+
+                index.set_latest(revision);
+                index_table.insert(request.page_id.clone(), index)?;
+                source_table
+                    .insert((request.page_id.clone(), revision), page_source)?;
+
+                AppendPageResult::new(revision, false)
+            }
+        };
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(result)
     }
 
     ///

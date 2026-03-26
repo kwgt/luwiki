@@ -8,20 +8,23 @@ mod common;
 
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use luwiki::database::{
     create_bearer_token_for_test,
     get_bearer_token_snapshot_for_test,
 };
-
 use common::{
     TEST_PASSWORD,
     TEST_USERNAME,
+    reserve_port,
     prepare_test_dirs,
     run_add_user,
     run_add_user_with_credentials,
     test_binary_path,
+    wait_for_server_with_scheme,
 };
 
 fn build_base_command(db_path: &Path, assets_dir: &Path) -> Command {
@@ -120,9 +123,16 @@ fn create_token_and_get_id(
     String::from_utf8(output.stdout)
         .expect("stdout decode failed")
         .lines()
-        .find_map(|line| line.strip_prefix("token_id: "))
+        .find_map(|line| line.strip_prefix("TOKEN ID:     "))
         .map(str::to_string)
         .expect("token_id missing")
+}
+
+fn find_label_value<'a>(stdout: &'a str, label: &str) -> &'a str {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(label))
+        .expect("label missing")
 }
 
 fn list_token_rows(
@@ -146,6 +156,113 @@ fn list_token_rows(
         .filter(|line| !line.trim().is_empty())
         .map(|line| line.split_whitespace().map(str::to_string).collect())
         .collect()
+}
+
+fn run_user_info(
+    db_path: &Path,
+    assets_dir: &Path,
+    user_name: &str,
+) -> std::process::Output {
+    build_base_command(db_path, assets_dir)
+        .arg("user")
+        .arg("info")
+        .arg(user_name)
+        .output()
+        .expect("user info failed")
+}
+
+fn run_user_edit_with_input(
+    db_path: &Path,
+    assets_dir: &Path,
+    args: &[&str],
+    input: Option<&str>,
+) -> std::process::Output {
+    let mut command = build_base_command(db_path, assets_dir);
+    command.arg("user").arg("edit");
+    for arg in args {
+        command.arg(arg);
+    }
+
+    if let Some(input) = input {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn user edit failed");
+        {
+            let stdin = child.stdin.as_mut().expect("stdin missing");
+            use std::io::Write;
+            write!(stdin, "{}", input).expect("write user edit stdin failed");
+        }
+        child.wait_with_output().expect("wait user edit failed")
+    } else {
+        command.output().expect("user edit failed")
+    }
+}
+
+struct CliServerGuard {
+    child: Child,
+    stderr_path: std::path::PathBuf,
+}
+
+impl CliServerGuard {
+    fn start(
+        db_path: &Path,
+        assets_dir: &Path,
+        port: u16,
+        enable_mcp: bool,
+    ) -> Self {
+        let exe = test_binary_path();
+        let base_dir = db_path.parent().expect("db_path parent missing");
+        let fts_index = common::fts_index_path(db_path);
+        let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
+        fs::create_dir_all(&config_dir).expect("create config dir failed");
+        let config_path = config_dir.join("config.toml");
+        fs::write(&config_path, "[run]\nuse_tls = false\n")
+            .expect("write test config failed");
+        let stdout_path = base_dir.join("server.stdout.log");
+        let stdout =
+            std::fs::File::create(&stdout_path).expect("create stdout failed");
+        let stderr_path = base_dir.join("server.stderr.log");
+        let stderr =
+            std::fs::File::create(&stderr_path).expect("create stderr failed");
+        let mut command = Command::new(exe);
+        command
+            .env("XDG_CONFIG_HOME", base_dir)
+            .env("XDG_DATA_HOME", base_dir)
+            .arg("--db-path")
+            .arg(db_path)
+            .arg("--assets-path")
+            .arg(assets_dir)
+            .arg("--fts-index")
+            .arg(fts_index)
+            .arg("run");
+        if enable_mcp {
+            command.arg("--mcp");
+        }
+        let child = command
+            .arg(format!("127.0.0.1:{}", port))
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .expect("spawn server failed");
+
+        Self { child, stderr_path }
+    }
+
+    fn stderr_path(&self) -> &Path {
+        &self.stderr_path
+    }
+}
+
+impl Drop for CliServerGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
@@ -193,7 +310,9 @@ fn token_create_outputs_expected_fields_and_persists_to_db() {
 
     let expected_name = "api-client";
     let expected_scope = "write";
+    let expected_effective = "read, create, delete, update, append";
     let expected_ttl_seconds = 12 * 60 * 60;
+    let expected_path_prefix = "/docs";
     let output = build_base_command(&db_path, &assets_dir)
         .arg("token")
         .arg("create")
@@ -203,39 +322,41 @@ fn token_create_outputs_expected_fields_and_persists_to_db() {
         .arg("12h")
         .arg("--name")
         .arg(expected_name)
+        .arg("--path-prefix")
+        .arg(expected_path_prefix)
         .arg(TEST_USERNAME)
         .output()
         .expect("token create failed");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout decode failed");
-    let token_id = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("token_id: "))
-        .expect("token_id missing");
-    let user_name = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("user_name: "))
-        .expect("user_name missing");
-    let scopes = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("scopes: "))
-        .expect("scopes missing");
+    let token_id = find_label_value(&stdout, "TOKEN ID:     ");
+    let token_name = find_label_value(&stdout, "TOKEN NAME:   ");
+    let user_name = find_label_value(&stdout, "USERNAME:     ");
+    let scopes = find_label_value(&stdout, "SCOPES:       ");
+    let effective_permissions = find_label_value(&stdout, "PERMISSIONS:  ");
+    let ttl = find_label_value(&stdout, "TTL:          ");
     let created_at = stdout
         .lines()
-        .find_map(|line| line.strip_prefix("created_at: "))
-        .expect("created_at missing");
+        .find_map(|line| line.trim().strip_prefix("create: "))
+        .expect("create timestamp missing");
     let expire_at = stdout
         .lines()
-        .find_map(|line| line.strip_prefix("expire_at: "))
-        .expect("expire_at missing");
+        .find_map(|line| line.trim().strip_prefix("expire: "))
+        .expect("expire timestamp missing");
     let token = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("token: "))
+        .split_once("TOKEN VALUE:\n")
+        .map(|(_, value)| value.trim())
         .expect("token missing");
 
+    assert_eq!(token_name, expected_name);
     assert_eq!(user_name, TEST_USERNAME);
     assert_eq!(scopes, expected_scope);
+    assert_eq!(effective_permissions, expected_effective);
+    assert_eq!(ttl, "12h");
+    assert!(stdout.contains("PATH PREFIXES:\n"));
+    assert!(stdout.contains(&format!("    - {}", expected_path_prefix)));
+    assert!(stdout.contains("TIMESTAMPS:\n"));
     assert_cli_timestamp(created_at);
     assert_cli_timestamp(expire_at);
     assert_eq!(token_id.len(), 26, "unexpected token_id: {}", token_id);
@@ -259,6 +380,10 @@ fn token_create_outputs_expected_fields_and_persists_to_db() {
     assert_eq!(snapshot.token_id, token_id);
     assert_eq!(snapshot.scopes, vec![expected_scope.to_string()]);
     assert_eq!(snapshot.ttl_seconds, expected_ttl_seconds);
+    assert_eq!(
+        snapshot.path_prefixes,
+        vec![expected_path_prefix.to_string()]
+    );
     assert_eq!(snapshot.revoked, false);
     assert_eq!(snapshot.name, Some(expected_name.to_string()));
 
@@ -304,6 +429,28 @@ fn token_create_rejects_invalid_ttl_format() {
 }
 
 #[test]
+fn token_create_rejects_non_normalized_path_prefix() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("create")
+        .arg("--path-prefix")
+        .arg("/docs/")
+        .arg(TEST_USERNAME)
+        .output()
+        .expect("token create failed");
+
+    assert_cli_error(
+        output,
+        "error: invalid path prefix: path must be normalized",
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 fn token_create_rejects_non_positive_ttl() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     run_add_user(&db_path, &assets_dir);
@@ -317,6 +464,142 @@ fn token_create_rejects_non_positive_ttl() {
         .expect("token create failed");
 
     assert_cli_error(output, "error: ttl must be greater than zero");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn token_info_outputs_full_token_details() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let expected_name = "api-client";
+    let create_output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("create")
+        .arg("--scope")
+        .arg("read,append")
+        .arg("--name")
+        .arg(expected_name)
+        .arg("--path-prefix")
+        .arg("/docs")
+        .arg(TEST_USERNAME)
+        .output()
+        .expect("token create failed");
+    assert!(create_output.status.success());
+
+    let token_id = String::from_utf8(create_output.stdout)
+        .expect("create stdout decode failed")
+        .lines()
+        .find_map(|line| line.strip_prefix("TOKEN ID:     "))
+        .map(str::to_string)
+        .expect("token_id missing");
+
+    let info_output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("info")
+        .arg(&token_id)
+        .output()
+        .expect("token info failed");
+
+    assert!(info_output.status.success());
+    let stdout = String::from_utf8(info_output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains(&format!("TOKEN ID:     {}", token_id)));
+    assert!(stdout.contains(&format!("USERNAME:     {}", TEST_USERNAME)));
+    assert!(stdout.contains(&format!("TOKEN NAME:   {}", expected_name)));
+    assert!(stdout.contains("SCOPES:       read,append"));
+    assert!(stdout.contains("PERMISSIONS:  read, append"));
+    assert!(stdout.contains("PATH PREFIXES:\n    - /docs"));
+    assert!(stdout.contains("STATUS:       alive"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn token_add_path_updates_token_path_prefixes() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let token_id = create_token_and_get_id(&db_path, &assets_dir, TEST_USERNAME);
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("add_path")
+        .arg(&token_id)
+        .arg("/docs")
+        .output()
+        .expect("token add_path failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains(&format!("token_id: {}", token_id)));
+    assert!(stdout.contains("path_prefixes: /docs"));
+
+    let snapshot = get_bearer_token_snapshot_for_test(&db_path, &assets_dir, &token_id)
+        .expect("get bearer token snapshot failed")
+        .expect("token not found");
+    assert_eq!(snapshot.path_prefixes, vec!["/docs".to_string()]);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn token_remove_path_restores_unrestricted_access_when_last_prefix_is_removed() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let create_output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("create")
+        .arg("--path-prefix")
+        .arg("/docs")
+        .arg(TEST_USERNAME)
+        .output()
+        .expect("token create failed");
+    assert!(create_output.status.success());
+
+    let token_id = String::from_utf8(create_output.stdout)
+        .expect("create stdout decode failed")
+        .lines()
+        .find_map(|line| line.strip_prefix("TOKEN ID:     "))
+        .map(str::to_string)
+        .expect("token_id missing");
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("remove_path")
+        .arg(&token_id)
+        .arg("/docs")
+        .output()
+        .expect("token remove_path failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains(&format!("token_id: {}", token_id)));
+    assert!(stdout.contains("path_prefixes: all"));
+    assert!(stdout.contains("warning: token allows access to all paths"));
+
+    let snapshot = get_bearer_token_snapshot_for_test(&db_path, &assets_dir, &token_id)
+        .expect("get bearer token snapshot failed")
+        .expect("token not found");
+    assert!(snapshot.path_prefixes.is_empty());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn token_remove_path_rejects_missing_prefix() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let token_id = create_token_and_get_id(&db_path, &assets_dir, TEST_USERNAME);
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("remove_path")
+        .arg(&token_id)
+        .arg("/docs")
+        .output()
+        .expect("token remove_path failed");
+
+    assert_cli_error(output, "error: path prefix not found: /docs");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -738,13 +1021,16 @@ fn token_purge_requires_target_specification() {
 }
 
 #[test]
-fn token_list_default_output_shows_state_token_user_and_expire_at() {
+fn token_list_default_output_shows_scope_path_token_user_name_and_expire_at() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     run_add_user(&db_path, &assets_dir);
+    let expected_name = "default-client";
 
     let create_output = build_base_command(&db_path, &assets_dir)
         .arg("token")
         .arg("create")
+        .arg("--name")
+        .arg(expected_name)
         .arg(TEST_USERNAME)
         .output()
         .expect("token create failed");
@@ -760,18 +1046,22 @@ fn token_list_default_output_shows_state_token_user_and_expire_at() {
     let stdout = String::from_utf8(list_output.stdout).expect("stdout decode failed");
     let mut lines = stdout.lines();
     let header = lines.next().expect("header missing");
-    assert!(header.contains("STAT"));
-    assert!(header.contains("TOKEN_ID"));
+    assert!(header.contains("SCOPE"));
+    assert!(header.contains("PATH"));
+    assert!(header.contains("ID"));
     assert!(header.contains("USER"));
-    assert!(header.contains("EXPIRE_AT"));
+    assert!(header.contains("NAME"));
+    assert!(header.contains("EXPIRES"));
 
     let row = lines.next().expect("row missing");
     let fields: Vec<&str> = row.split_whitespace().collect();
-    assert_eq!(fields.len(), 4, "unexpected row: {}", row);
-    assert_eq!(fields[0], "rw--");
-    assert_eq!(fields[1].len(), 26, "unexpected token_id: {}", fields[1]);
-    assert_eq!(fields[2], TEST_USERNAME);
-    assert_cli_timestamp(fields[3]);
+    assert_eq!(fields.len(), 6, "unexpected row: {}", row);
+    assert_eq!(fields[0], "rcdua");
+    assert_eq!(fields[1], "*");
+    assert_eq!(fields[2].len(), 26, "unexpected token_id: {}", fields[2]);
+    assert_eq!(fields[3], TEST_USERNAME);
+    assert_eq!(fields[4], expected_name);
+    assert_cli_timestamp(fields[5]);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -803,26 +1093,26 @@ fn token_list_long_info_outputs_detail_columns_and_values() {
     let stdout = String::from_utf8(list_output.stdout).expect("stdout decode failed");
     let mut lines = stdout.lines();
     let header = lines.next().expect("header missing");
-    assert!(header.contains("STAT"));
-    assert!(header.contains("TOKEN_ID"));
+    assert!(header.contains("SCOPE"));
+    assert!(header.contains("PATH"));
+    assert!(header.contains("ID"));
     assert!(header.contains("USER"));
-    assert!(header.contains("EXPIRE_AT"));
-    assert!(header.contains("CREATED_AT"));
-    assert!(header.contains("UPDATED_AT"));
-    assert!(header.contains("REVOKED"));
     assert!(header.contains("NAME"));
+    assert!(header.contains("EXPIRES"));
+    assert!(header.contains("CREATE"));
+    assert!(header.contains("STATUS"));
 
     let row = lines.next().expect("row missing");
     let fields: Vec<&str> = row.split_whitespace().collect();
     assert_eq!(fields.len(), 8, "unexpected row: {}", row);
-    assert_eq!(fields[0], "rw--");
-    assert_eq!(fields[1].len(), 26, "unexpected token_id: {}", fields[1]);
-    assert_eq!(fields[2], TEST_USERNAME);
-    assert_cli_timestamp(fields[3]);
-    assert_cli_timestamp(fields[4]);
+    assert_eq!(fields[0], "rcdua");
+    assert_eq!(fields[1], "*");
+    assert_eq!(fields[2].len(), 26, "unexpected token_id: {}", fields[2]);
+    assert_eq!(fields[3], TEST_USERNAME);
+    assert_eq!(fields[4], expected_name);
     assert_cli_timestamp(fields[5]);
-    assert_eq!(fields[6], "false");
-    assert_eq!(fields[7], expected_name);
+    assert_cli_timestamp(fields[6]);
+    assert_eq!(fields[7], "alive");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -849,8 +1139,8 @@ fn token_list_filters_by_user() {
     );
 
     assert_eq!(rows.len(), 1, "unexpected rows: {:?}", rows);
-    assert_eq!(rows[0][1], target_token_id);
-    assert_eq!(rows[0][2], TEST_USERNAME);
+    assert_eq!(rows[0][2], target_token_id);
+    assert_eq!(rows[0][3], TEST_USERNAME);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -874,8 +1164,8 @@ fn token_list_filters_revoked_tokens() {
     let rows = list_token_rows(&db_path, &assets_dir, &["--revoked"]);
 
     assert_eq!(rows.len(), 1, "unexpected rows: {:?}", rows);
-    assert_eq!(rows[0][0], "rwv-");
-    assert_eq!(rows[0][1], revoked_token_id);
+    assert_eq!(rows[0][0], "rcdua");
+    assert_eq!(rows[0][2], revoked_token_id);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -893,8 +1183,8 @@ fn token_list_filters_expired_tokens() {
     let rows = list_token_rows(&db_path, &assets_dir, &["--expired"]);
 
     assert_eq!(rows.len(), 1, "unexpected rows: {:?}", rows);
-    assert_eq!(rows[0][0], "r--e");
-    assert_eq!(rows[0][1], expired_token_id);
+    assert_eq!(rows[0][0], "r----");
+    assert_eq!(rows[0][2], expired_token_id);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -925,9 +1215,240 @@ fn token_list_filters_union_of_revoked_and_expired_tokens() {
     );
 
     assert_eq!(rows.len(), 2, "unexpected rows: {:?}", rows);
-    let listed_ids: Vec<&str> = rows.iter().map(|row| row[1].as_str()).collect();
+    let listed_ids: Vec<&str> = rows.iter().map(|row| row[2].as_str()).collect();
     assert!(listed_ids.contains(&expired_token_id.as_str()));
     assert!(listed_ids.contains(&revoked_token_id.as_str()));
 
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn token_list_marks_limited_path_tokens_with_l() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("create")
+        .arg("--scope")
+        .arg("read")
+        .arg("--path-prefix")
+        .arg("/docs")
+        .arg(TEST_USERNAME)
+        .output()
+        .expect("token create failed");
+    assert!(output.status.success());
+
+    let rows = list_token_rows(&db_path, &assets_dir, &[]);
+    assert_eq!(rows.len(), 1, "unexpected rows: {:?}", rows);
+    assert_eq!(rows[0][0], "r----");
+    assert_eq!(rows[0][1], "L");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn token_info_shows_all_for_unrestricted_path_prefixes() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let token_id = create_token_and_get_id(&db_path, &assets_dir, TEST_USERNAME);
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("token")
+        .arg("info")
+        .arg(&token_id)
+        .output()
+        .expect("token info failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains("PATH PREFIXES:\n    - all"));
+    assert!(stdout.contains("PERMISSIONS:  read, create, delete, update, append"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_add_with_no_basic_auth_succeeds_without_password_prompt() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("user")
+        .arg("add")
+        .arg("--attribute")
+        .arg("no_basic_auth")
+        .arg("nobasic_user")
+        .stdin(Stdio::null())
+        .output()
+        .expect("user add failed");
+
+    assert!(output.status.success());
+    let info_output = run_user_info(&db_path, &assets_dir, "nobasic_user");
+    assert!(info_output.status.success());
+    let stdout =
+        String::from_utf8(info_output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains("USERNAME:     nobasic_user"));
+    assert!(stdout.contains("ATTRIBUTES:\n    - NoBasicAuth"));
+    assert!(stdout.contains("BASIC AUTH:   denied"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_add_rejects_invalid_attribute() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("user")
+        .arg("add")
+        .arg("--attribute")
+        .arg("unknown")
+        .arg("invalid_user")
+        .stdin(Stdio::null())
+        .output()
+        .expect("user add failed");
+
+    assert_cli_error(output, "error: invalid user attribute: unknown");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_edit_can_add_no_basic_auth_and_user_info_reflects_it() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let output = run_user_edit_with_input(
+        &db_path,
+        &assets_dir,
+        &[
+            "--display-name",
+            "updated-user",
+            "--add-attribute",
+            "no_basic_auth",
+            TEST_USERNAME,
+        ],
+        None,
+    );
+    assert!(output.status.success());
+
+    let info_output = run_user_info(&db_path, &assets_dir, TEST_USERNAME);
+    assert!(info_output.status.success());
+    let stdout =
+        String::from_utf8(info_output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains("DISPLAY NAME: updated-user"));
+    assert!(stdout.contains("ATTRIBUTES:\n    - NoBasicAuth"));
+    assert!(stdout.contains("BASIC AUTH:   denied"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_edit_removing_no_basic_auth_requires_password() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let add_output = build_base_command(&db_path, &assets_dir)
+        .arg("user")
+        .arg("add")
+        .arg("--attribute")
+        .arg("no_basic_auth")
+        .arg(TEST_USERNAME)
+        .stdin(Stdio::null())
+        .output()
+        .expect("user add failed");
+    assert!(add_output.status.success());
+
+    let output = run_user_edit_with_input(
+        &db_path,
+        &assets_dir,
+        &["--remove-attribute", "no_basic_auth", TEST_USERNAME],
+        None,
+    );
+    assert_cli_error(
+        output,
+        "error: password must be specified when removing NoBasicAuth",
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_info_rejects_missing_user() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let output = run_user_info(&db_path, &assets_dir, "missing_user");
+
+    assert_cli_error(output, "error: user not found: missing_user");
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_list_keeps_existing_columns_without_attribute_details() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("user")
+        .arg("list")
+        .output()
+        .expect("user list failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout decode failed");
+    let mut lines = stdout.lines();
+    let header = lines.next().expect("header missing");
+    assert!(header.contains("USER_ID"));
+    assert!(header.contains("TIMESTAMP"));
+    assert!(header.contains("USER_NAME"));
+    assert!(header.contains("DISPLAY_NAME"));
+    assert!(!header.contains("ATTRIBUTE"));
+
+    let row = lines.next().expect("row missing");
+    assert!(row.contains(TEST_USERNAME));
+    assert!(!row.contains("NoBasicAuth"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn run_without_mcp_does_not_publish_mcp_endpoint() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let port = reserve_port();
+    let server = CliServerGuard::start(&db_path, &assets_dir, port, false);
+    let (base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+
+    let response = client
+        .get(format!(
+            "{}/mcp",
+            base_url.trim_end_matches("/api")
+        ))
+        .send()
+        .expect("request /mcp failed");
+    assert_eq!(response.status().as_u16(), 404);
+
+    drop(server);
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn run_with_mcp_publishes_mcp_endpoint() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let port = reserve_port();
+    let server = CliServerGuard::start(&db_path, &assets_dir, port, true);
+    let (base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+
+    let response = client
+        .get(format!(
+            "{}/mcp",
+            base_url.trim_end_matches("/api")
+        ))
+        .send()
+        .expect("request /mcp failed");
+    assert_eq!(response.status().as_u16(), 405);
+
+    drop(server);
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

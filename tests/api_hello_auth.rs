@@ -16,12 +16,13 @@ use luwiki::database::{
 
 use common::{
     ServerGuard, build_client, prepare_test_dirs, reserve_port, run_add_user,
-    run_add_user_with_credentials, run_create_token,
+    run_add_user_with_credentials, run_create_token, test_binary_path,
     wait_for_server_with_scheme, TEST_PASSWORD, TEST_USERNAME,
 };
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::fs;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -433,6 +434,66 @@ fn api_hello_sets_x_bearer_expire_only_when_bearer_ttl_is_extended() {
         .expect("request with basic auth failed");
     assert_eq!(response.status().as_u16(), 200);
     assert!(response.headers().get("X-Bearer-Expire").is_none());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn api_hello_rejects_basic_auth_for_no_basic_auth_user_but_allows_bearer() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+    let base_path = db_path.parent().expect("db_path parent missing");
+
+    let output = Command::new(test_binary_path())
+        .env("XDG_CONFIG_HOME", base_path)
+        .env("XDG_DATA_HOME", base_path)
+        .arg("--db-path")
+        .arg(&db_path)
+        .arg("--assets-path")
+        .arg(&assets_dir)
+        .arg("--fts-index")
+        .arg(common::fts_index_path(&db_path))
+        .arg("user")
+        .arg("add")
+        .arg("--attribute")
+        .arg("no_basic_auth")
+        .arg(TEST_USERNAME)
+        .stdin(Stdio::null())
+        .output()
+        .expect("user add failed");
+    assert!(
+        output.status.success(),
+        "user add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let token = run_create_token(&db_path, &assets_dir, "read");
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_without_auth(port, server.stderr_path());
+    let base_url = format!("{}/hello", api_base_url);
+
+    let basic_response = client
+        .get(&base_url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("basic request failed");
+    assert_eq!(basic_response.status().as_u16(), 401);
+    assert_eq!(
+        basic_response.text().expect("read basic body failed"),
+        r#"{"reason":"unauthorized"}"#
+    );
+
+    let bearer_response = client
+        .get(&base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", token))
+        .send()
+        .expect("bearer request failed");
+    assert_eq!(bearer_response.status().as_u16(), 200);
+    assert_eq!(
+        bearer_response.text().expect("read bearer body failed"),
+        "hello"
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

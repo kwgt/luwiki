@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 use anyhow::{anyhow, Result};
+use chrono::Duration;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
@@ -34,9 +35,11 @@ use crate::command::{
     asset_undelete, commands, export as export_command, fts_merge,
     fts_rebuild, fts_search, help_all, import as import_command,
     lock_delete, lock_list, page_add, page_delete, page_list, page_move_to,
-    page_undelete, page_unlock, run as run_command, token_create,
-    token_list, token_purge, token_revoke,
-    user_add, user_delete, user_edit, user_list, CommandContext,
+    page_undelete, page_unlock, run as run_command, token_add_path,
+    token_create, token_info, token_list, token_purge, token_remove_path,
+    token_revoke,
+    user_add, user_delete, user_edit, user_info, user_list,
+    CommandContext,
 };
 use crate::database::DatabaseManager;
 use config::Config;
@@ -82,7 +85,9 @@ pub(crate) use run::RunOpts;
 pub(crate) use token::{
     TokenCommand,
     TokenCreateOpts,
+    TokenInfoOpts,
     TokenListOpts,
+    TokenPathUpdateOpts,
     TokenPurgeOpts,
     TokenRevokeOpts,
     TokenSubCommand,
@@ -92,6 +97,7 @@ pub(crate) use user::{
     UserCommand,
     UserDeleteOpts,
     UserEditOpts,
+    UserInfoOpts,
     UserListOpts,
     UserListSortMode,
     UserSubCommand,
@@ -133,6 +139,16 @@ fn default_config_path() -> PathBuf {
 ///
 fn default_log_path() -> PathBuf {
     DEFAULT_DATA_PATH.join("log")
+}
+
+///
+/// デフォルトの監査ログ出力先のパスを生成
+///
+/// # 戻り値
+/// 監査ログ出力先ディレクトリのパス情報
+///
+fn default_audit_path() -> PathBuf {
+    DEFAULT_DATA_PATH.join("audit")
 }
 
 ///
@@ -192,6 +208,12 @@ const DEFAULT_ASSET_LIMIT_SIZE: u64 = 10 * ASSET_SIZE_MIB;
 
 /// アセットサイズ上限として許可する最大値(100MiB)
 const MAX_ASSET_LIMIT_SIZE: u64 = 100 * ASSET_SIZE_MIB;
+
+/// 監査ログ保持期間のデフォルト値
+const DEFAULT_AUDIT_RETENTION_TEXT: &str = "90d";
+
+/// 監査ログローテーション閾値のデフォルト値
+const DEFAULT_AUDIT_ROTATE_SIZE_TEXT: &str = "2M";
 
 ///
 /// show_options()実装を要求するトレイト
@@ -344,6 +366,18 @@ pub struct Options {
     /// アセットサイズ上限
     #[arg(short = 'S', long = "asset-limit-size", value_name = "SIZE")]
     asset_limit_size: Option<String>,
+
+    /// 監査ログ出力先
+    #[arg(long = "audit-log-dir", value_name = "DIR")]
+    audit_log_dir: Option<PathBuf>,
+
+    /// 監査ログ保持期間
+    #[arg(long = "audit-log-retention", value_name = "DURATION")]
+    audit_log_retention: Option<String>,
+
+    /// 監査ログローテーション閾値
+    #[arg(long = "audit-log-rotate-size", value_name = "SIZE")]
+    audit_log_rotate_size: Option<String>,
 
     /// 設定情報の表示
     #[arg(long = "show-options")]
@@ -530,6 +564,48 @@ impl Options {
     }
 
     ///
+    /// 監査ログ出力先へのアクセサ
+    ///
+    /// # 戻り値
+    /// 監査ログ出力先ディレクトリのパス情報を返す。
+    ///
+    pub(crate) fn audit_log_dir(&self) -> PathBuf {
+        if let Some(path) = &self.audit_log_dir {
+            path.clone()
+        } else {
+            default_audit_path()
+        }
+    }
+
+    ///
+    /// 監査ログ保持期間へのアクセサ
+    ///
+    /// # 戻り値
+    /// 解決済みの監査ログ保持期間を返す。
+    ///
+    pub(crate) fn audit_log_retention(&self) -> Result<Duration> {
+        let raw = self
+            .audit_log_retention
+            .as_deref()
+            .unwrap_or(DEFAULT_AUDIT_RETENTION_TEXT);
+        parse_audit_log_retention(raw)
+    }
+
+    ///
+    /// 監査ログローテーション閾値へのアクセサ
+    ///
+    /// # 戻り値
+    /// 解決済みのローテーション閾値(バイト)を返す。
+    ///
+    pub(crate) fn audit_log_rotate_size(&self) -> Result<u64> {
+        let raw = self
+            .audit_log_rotate_size
+            .as_deref()
+            .unwrap_or(DEFAULT_AUDIT_ROTATE_SIZE_TEXT);
+        parse_audit_log_rotate_size(raw)
+    }
+
+    ///
     /// コンフィギュレーションファイルの適用
     ///
     /// # 戻り値
@@ -624,6 +700,24 @@ impl Options {
                     }
                 }
 
+                if self.audit_log_dir.is_none() {
+                    if let Some(path) = config.audit_path() {
+                        self.audit_log_dir = Some(path);
+                    }
+                }
+
+                if self.audit_log_retention.is_none() {
+                    if let Some(retention) = config.audit_retention() {
+                        self.audit_log_retention = Some(retention);
+                    }
+                }
+
+                if self.audit_log_rotate_size.is_none() {
+                    if let Some(rotate_size) = config.audit_rotate_size() {
+                        self.audit_log_rotate_size = Some(rotate_size);
+                    }
+                }
+
                 if let Some(opts) = self
                     .command
                     .as_mut()
@@ -658,6 +752,12 @@ impl Options {
 
         if let Some(value) = self.asset_limit_size.as_deref() {
             parse_asset_limit_size(value)?;
+        }
+        if let Some(value) = self.audit_log_retention.as_deref() {
+            parse_audit_log_retention(value)?;
+        }
+        if let Some(value) = self.audit_log_rotate_size.as_deref() {
+            parse_audit_log_rotate_size(value)?;
         }
 
         /*
@@ -712,6 +812,22 @@ impl Options {
         println!(
             "   asset limit size: {}",
             self.asset_limit_size().unwrap_or(DEFAULT_ASSET_LIMIT_SIZE),
+        );
+        println!(
+            "   audit log dir:    {}",
+            self.audit_log_dir().display()
+        );
+        println!(
+            "   audit retention:  {}",
+            self.audit_log_retention
+                .as_deref()
+                .unwrap_or(DEFAULT_AUDIT_RETENTION_TEXT)
+        );
+        println!(
+            "   audit rotate:     {}",
+            self.audit_log_rotate_size
+                .as_deref()
+                .unwrap_or(DEFAULT_AUDIT_ROTATE_SIZE_TEXT)
         );
 
         // サブコマンドが指定されており、そのサブコマンドがオプションを持つなら
@@ -822,9 +938,12 @@ impl Command {
             },
             Self::Token(token) => match &mut token.subcommand {
                 TokenSubCommand::Create(opts) => Some(opts),
+                TokenSubCommand::AddPath(opts) => Some(opts),
+                TokenSubCommand::RemovePath(opts) => Some(opts),
                 TokenSubCommand::Revoke(opts) => Some(opts),
                 TokenSubCommand::Purge(opts) => Some(opts),
                 TokenSubCommand::List(opts) => Some(opts),
+                TokenSubCommand::Info(opts) => Some(opts),
             },
             Self::Export(_) => None,
             Self::Import(_) => None,
@@ -840,10 +959,11 @@ impl Command {
         match self {
             Self::Run(opts) => Some(opts),
             Self::User(user) => match &mut user.subcommand {
+                UserSubCommand::Add(opts) => Some(opts),
                 UserSubCommand::Delete(opts) => Some(opts),
                 UserSubCommand::Edit(opts) => Some(opts),
                 UserSubCommand::List(opts) => Some(opts),
-                _ => None,
+                UserSubCommand::Info(opts) => Some(opts),
             },
             Self::Page(page) => match &mut page.subcommand {
                 PageSubCommand::Add(opts) => Some(opts),
@@ -871,9 +991,12 @@ impl Command {
             },
             Self::Token(token) => match &mut token.subcommand {
                 TokenSubCommand::Create(opts) => Some(opts),
+                TokenSubCommand::AddPath(opts) => Some(opts),
+                TokenSubCommand::RemovePath(opts) => Some(opts),
                 TokenSubCommand::Revoke(_) => None,
                 TokenSubCommand::Purge(_) => None,
                 TokenSubCommand::List(_) => None,
+                TokenSubCommand::Info(opts) => Some(opts),
             },
             Self::Export(opts) => Some(opts),
             Self::Import(opts) => Some(opts),
@@ -893,6 +1016,7 @@ impl Command {
                 UserSubCommand::Delete(opts) => Some(opts),
                 UserSubCommand::Edit(opts) => Some(opts),
                 UserSubCommand::List(opts) => Some(opts),
+                UserSubCommand::Info(opts) => Some(opts),
             },
             Self::Page(page) => match &page.subcommand {
                 PageSubCommand::Add(opts) => Some(opts),
@@ -920,9 +1044,12 @@ impl Command {
             },
             Self::Token(token) => match &token.subcommand {
                 TokenSubCommand::Create(opts) => Some(opts),
+                TokenSubCommand::AddPath(opts) => Some(opts),
+                TokenSubCommand::RemovePath(opts) => Some(opts),
                 TokenSubCommand::Revoke(opts) => Some(opts),
                 TokenSubCommand::Purge(opts) => Some(opts),
                 TokenSubCommand::List(opts) => Some(opts),
+                TokenSubCommand::Info(opts) => Some(opts),
             },
             Self::Export(opts) => Some(opts),
             Self::Import(opts) => Some(opts),
@@ -949,6 +1076,9 @@ impl Command {
                 }
                 UserSubCommand::List(sub_opts) => {
                     user_list::build_context(opts, sub_opts)
+                }
+                UserSubCommand::Info(sub_opts) => {
+                    user_info::build_context(opts, sub_opts)
                 }
             },
             Self::Page(page) => match &page.subcommand {
@@ -1010,6 +1140,12 @@ impl Command {
                 TokenSubCommand::Create(sub_opts) => {
                     token_create::build_context(opts, sub_opts)
                 }
+                TokenSubCommand::AddPath(sub_opts) => {
+                    token_add_path::build_context(opts, sub_opts)
+                }
+                TokenSubCommand::RemovePath(sub_opts) => {
+                    token_remove_path::build_context(opts, sub_opts)
+                }
                 TokenSubCommand::Revoke(sub_opts) => {
                     token_revoke::build_context(opts, sub_opts)
                 }
@@ -1018,6 +1154,9 @@ impl Command {
                 }
                 TokenSubCommand::List(sub_opts) => {
                     token_list::build_context(opts, sub_opts)
+                }
+                TokenSubCommand::Info(sub_opts) => {
+                    token_info::build_context(opts, sub_opts)
                 }
             },
             Self::Export(sub_opts) => {
@@ -1039,6 +1178,7 @@ impl Command {
             Self::Run(opts) => {
                 config.set_run_bind_addr(opts.bind_addr());
                 config.set_run_bind_port(opts.bind_port());
+                config.set_run_use_mcp(opts.use_mcp());
                 config.set_run_use_tls(opts.use_tls());
                 config.set_run_server_cert(opts.cert_path());
             }
@@ -1208,6 +1348,17 @@ fn save_config(opts: &Options) -> Result<()> {
     config.set_template_root(opts.template_root());
     config.set_wiki_title(opts.wiki_title.clone());
     config.set_asset_limit_size(opts.asset_limit_size.clone());
+    config.set_audit_path(opts.audit_log_dir());
+    config.set_audit_retention(
+        opts.audit_log_retention
+            .clone()
+            .unwrap_or_else(|| DEFAULT_AUDIT_RETENTION_TEXT.to_string())
+    );
+    config.set_audit_rotate_size(
+        opts.audit_log_rotate_size
+            .clone()
+            .unwrap_or_else(|| DEFAULT_AUDIT_ROTATE_SIZE_TEXT.to_string())
+    );
 
     if let Some(command) = &opts.command {
         command.save_config(&mut config);
@@ -1325,6 +1476,90 @@ fn parse_asset_limit_size(raw: &str) -> Result<u64> {
     Ok(bytes)
 }
 
+///
+/// 監査ログ保持期間を解析する
+///
+/// # 引数
+/// * `raw` - 解析対象文字列
+///
+/// # 戻り値
+/// 解決済みの保持期間を返す。
+///
+fn parse_audit_log_retention(raw: &str) -> Result<Duration> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(anyhow!("audit log retention is empty"));
+    }
+
+    let unit = value
+        .chars()
+        .last()
+        .ok_or_else(|| anyhow!("audit log retention is empty"))?;
+    let number_text = &value[..value.len() - unit.len_utf8()];
+    if number_text.is_empty() {
+        return Err(anyhow!("audit log retention format is invalid"));
+    }
+
+    let number = number_text
+        .parse::<i64>()
+        .map_err(|_| anyhow!("audit log retention format is invalid"))?;
+    if number <= 0 {
+        return Err(anyhow!("audit log retention must be greater than zero"));
+    }
+
+    match unit {
+        'd' => Ok(Duration::days(number)),
+        'h' => Ok(Duration::hours(number)),
+        'm' => Ok(Duration::minutes(number)),
+        _ => Err(anyhow!("audit log retention unit is invalid")),
+    }
+}
+
+///
+/// 監査ログローテーション閾値を解析する
+///
+/// # 引数
+/// * `raw` - 解析対象文字列
+///
+/// # 戻り値
+/// 解決済みのローテーション閾値(バイト)を返す。
+///
+fn parse_audit_log_rotate_size(raw: &str) -> Result<u64> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(anyhow!("audit log rotate size is empty"));
+    }
+
+    let (number_text, unit) = match value.chars().last() {
+        Some(last) if last.is_ascii_alphabetic() => {
+            (&value[..value.len() - last.len_utf8()], Some(last))
+        }
+        Some(_) => (value, None),
+        None => return Err(anyhow!("audit log rotate size is empty")),
+    };
+    if number_text.is_empty() {
+        return Err(anyhow!("audit log rotate size format is invalid"));
+    }
+
+    let number = number_text
+        .parse::<u64>()
+        .map_err(|_| anyhow!("audit log rotate size format is invalid"))?;
+    let multiplier = match unit {
+        None => 1_u64,
+        Some('k') | Some('K') => ASSET_SIZE_KIB,
+        Some('m') | Some('M') => ASSET_SIZE_MIB,
+        _ => return Err(anyhow!("audit log rotate size unit is invalid")),
+    };
+    let bytes = number
+        .checked_mul(multiplier)
+        .ok_or_else(|| anyhow!("audit log rotate size is too large"))?;
+    if bytes == 0 {
+        return Err(anyhow!("audit log rotate size must be greater than zero"));
+    }
+
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1374,6 +1609,49 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_mcp_option() {
+        let opts = Options::try_parse_from(["luwiki", "run", "--mcp"])
+            .expect("parse failed");
+        let run_opts = match opts.command {
+            Some(Command::Run(run_opts)) => run_opts,
+            _ => panic!("run options missing"),
+        };
+
+        assert!(run_opts.use_mcp());
+    }
+
+    #[test]
+    fn save_config_writes_mcp_and_audit_settings() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        let config_arg = config_path.to_string_lossy().to_string();
+        let audit_path = dir.path().join("audit");
+        let audit_arg = audit_path.to_string_lossy().to_string();
+        let args = [
+            "luwiki",
+            "--config-path",
+            &config_arg,
+            "--audit-log-dir",
+            &audit_arg,
+            "--audit-log-retention",
+            "72h",
+            "--audit-log-rotate-size",
+            "512K",
+            "run",
+            "--mcp",
+        ];
+
+        let opts = Options::try_parse_from(args).expect("parse failed");
+        save_config(&opts).expect("save failed");
+
+        let config = config::load(&config_path).expect("load failed");
+        assert_eq!(config.run_use_mcp(), Some(true));
+        assert_eq!(config.audit_path(), Some(audit_path));
+        assert_eq!(config.audit_retention(), Some("72h".to_string()));
+        assert_eq!(config.audit_rotate_size(), Some("512K".to_string()));
+    }
+
+    #[test]
     fn parse_asset_limit_size_with_k_or_m() {
         assert_eq!(
             parse_asset_limit_size("10M").expect("parse failed"),
@@ -1406,6 +1684,52 @@ mod tests {
             100 * 1024 * 1024,
         );
         assert!(parse_asset_limit_size("101M").is_err());
+    }
+
+    #[test]
+    fn parse_audit_log_retention_accepts_supported_units() {
+        assert_eq!(
+            parse_audit_log_retention("90d").expect("parse failed"),
+            Duration::days(90),
+        );
+        assert_eq!(
+            parse_audit_log_retention("72h").expect("parse failed"),
+            Duration::hours(72),
+        );
+        assert_eq!(
+            parse_audit_log_retention("1440m").expect("parse failed"),
+            Duration::minutes(1440),
+        );
+    }
+
+    #[test]
+    fn parse_audit_log_retention_rejects_invalid_value() {
+        assert!(parse_audit_log_retention("").is_err());
+        assert!(parse_audit_log_retention("0d").is_err());
+        assert!(parse_audit_log_retention("10x").is_err());
+    }
+
+    #[test]
+    fn parse_audit_log_rotate_size_accepts_supported_units() {
+        assert_eq!(
+            parse_audit_log_rotate_size("2097152").expect("parse failed"),
+            2 * 1024 * 1024,
+        );
+        assert_eq!(
+            parse_audit_log_rotate_size("512K").expect("parse failed"),
+            512 * 1024,
+        );
+        assert_eq!(
+            parse_audit_log_rotate_size("2M").expect("parse failed"),
+            2 * 1024 * 1024,
+        );
+    }
+
+    #[test]
+    fn parse_audit_log_rotate_size_rejects_invalid_value() {
+        assert!(parse_audit_log_rotate_size("").is_err());
+        assert!(parse_audit_log_rotate_size("0").is_err());
+        assert!(parse_audit_log_rotate_size("1G").is_err());
     }
 
     #[test]

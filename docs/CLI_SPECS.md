@@ -24,6 +24,9 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 | `-t`, `--template-root` | テンプレートページのパスを指定する | 
 | `-T`, `--wiki-title` | Wiki名を指定する | LUWIKI
 | `-S`, `--asset-limit-size` | アップロード可能なアセットのサイズの上限 | 10Miバイト 
+|       `--audit-log-dir DIR` | 監査ログ出力ディレクトリを指定する | $XDG_DATA_HOME/luwiki/audit
+|       `--audit-log-retention DURATION` | 監査ログ保持期間を指定する | "90d"
+|       `--audit-log-rotate-size SIZE` | 監査ログローテーション閾値サイズを指定する | "2M"
 |       `--show-options` | 設定情報の表示 |
 |       `--save-config` | config.tomlへの設定情報の保存指示 |
 | `-h`, `--help`          | ヘルプメッセージの表示 |
@@ -44,6 +47,10 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 
 `--asset-limit-size`にはアップロード可能なアセットのサイズの上限を指定するが、"10K", "10M"などの補助単位を指定可能とする(いずれも2進接頭辞のKi,Miを意味する)。また最大は100Miまで指定可能。
 
+`--audit-log-retention` には監査ログの保持期間を指定し、`Nd`, `Nh`, `Nm` の形式を許可する。
+
+`--audit-log-rotate-size` には監査ログのローテーション閾値サイズを指定し、バイト数または `K`, `M` の補助単位を指定可能とする。
+
 ---
 ## サブコマンド
 以下のサブコマンドが使用できる。
@@ -56,6 +63,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - [delete](#subcmd-user-delete) : ユーザの削除
     - [list](#user-list) : ユーザ情報の一覧表示
     - [edit](#user-edit) : ユーザ情報の変更
+    - [info](#user-info) : ユーザ情報の詳細表示
 - page : ページの管理
     - [add](#page-add) : ページの追加
     - [list](#page-list) : ページ一覧の表示
@@ -79,9 +87,12 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - [search](#fts-search) : 検索の実施
 - token :  Bearerトークンの管理
     - [create](#token-create) : トークンの生成
+    - [add_path](#token-add-path) : トークンのpath制約追加
+    - [remove_path](#token-remove-path) : トークンのpath制約削除
     - [revoke](#token-revoke) : トークンの無効化
     - [purge](#token-purge) : トークンの削除
     - [list](#token-list) : トークン一覧の表示
+    - [info](#token-info) : トークン情報の詳細表示
 - [export](#export) : バックアップ／マイグレート用のエクスポートデータの作成
 - [import](#import) : エクスポートデータの取り込み
 
@@ -118,6 +129,8 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
     - search : `s`
 - token : `t`
     - create : `c`
+    - add_path : `a`, `add`
+    - remove_path : `rm`
     - revoke : `r`
     - purge : `p`
     - list : `l`
@@ -138,6 +151,7 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
 | `-b`, `--open-browser` | サーバ起動時にブラウザを起動する |
+|       `--mcp` | MCP機能を有効化して起動する |
 | `-T`, `--tls` | サーバをHTTPSで起動させる |
 | `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
  
@@ -150,6 +164,10 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 証明書を自動生成する場合、生成物は`$XDG_DATA_HOME/luwiki/server.pem`（PEM）に保存する。PEM以外の補助ファイルが必要な場合は、`$XDG_DATA_HOME/luwiki/cert/`配下に保存する。
 
 `--open-browser`オプションが指定された場合は、同時に規定のブラウザを起動する（デスクトップ環境でのみ有効）。
+
+`--mcp`オプションが指定された場合は、HTTP/HTTPSサーバに加えてMCP機能を有効化する。
+
+`--mcp`オプションが指定されていない場合は、設定ファイルの`run.use_mcp`を既定値として扱う。`run.use_mcp=true`であればMCP機能を有効化し、`run.use_mcp=false`または未設定であればMCP機能は無効とする。
 
 ユーザ未登録の状態で`run`コマンドを実行した場合はエラーとする。
 
@@ -269,6 +287,41 @@ luwiki [OPTIONS] user list [OPTIONS]
   - `last_update`: 更新日時順
 
 `--reverse-sort`で順序を反転させる。
+
+<a id="user-info"></a>
+### user infoコマンド
+ユーザ情報の詳細表示
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] user info <USER-NAME>
+```
+
+#### 概要
+引数 `USER-NAME` で指定されたユーザ名の詳細情報を大文字ラベル形式で表示する。
+
+少なくとも以下の項目を表示する。
+
+  - `USER ID`
+  - `USERNAME`
+  - `DISPLAY NAME`
+  - `BASIC AUTH`
+  - `ATTRIBUTES:`
+  - `TIMESTAMPS:`
+    - `update`
+
+`BASIC AUTH` は `allowed` または `denied` を表示する。
+
+`ATTRIBUTES:` には表示上の正式名称を用いる。初期実装では `NoBasicAuth` を表示対象に含める。
+属性が存在しない場合は `- none` を表示する。
+
+以下の場合はエラーとする。
+
+  - 指定されたユーザが存在しない
+
+#### 注記
+  - パスワード平文、パスワードハッシュ、ソルトは表示しない
+  - Bearer トークン情報は表示しない
 
 <a id="page-add"></a>
 ### page addコマンド
@@ -726,9 +779,10 @@ luwiki [OPTIONS] token create [OPTIONS] <USER-NAME>
 
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
-| `-s`, `--scope <PERMISSION>` | スコープの指定 | `read,write`
+| `-s`, `--scope <PERMISSION>` | スコープの指定 | `write`
 | `-t`, `--ttl <DURATION>` | TTLの指定 | "30d"
 | `-n`, `--name <TOKEN-NAME>` | トークン名の指定 |
+|       `--path-prefix <PATH>` | 操作可能なpath prefix制約を追加する |
 
 #### 概要
 `<USER-NAME>` で指定した登録済みユーザに対して Bearer トークンを新規発行する。
@@ -737,24 +791,54 @@ luwiki [OPTIONS] token create [OPTIONS] <USER-NAME>
 
   - `read`
   - `write`
+  - `create`
+  - `update`
+  - `append`
+  - `delete`
 
-`write` を指定したトークンは `read` 相当の操作も許可する。
+`write` を指定したトークンは `read` / `create` / `update` / `append` / `delete` 相当の操作も許可する。
+
+`--path-prefix` には正規化済みの絶対パスを指定する。複数指定を許可し、指定された prefix のいずれかに一致する path のみを操作可能とする。
+
+`--path-prefix` が指定されなかった場合は、全領域へのアクセスを許可するトークンを生成する。この場合、コマンド成功時に全領域アクセスである旨の警告を表示する。
 
 `--ttl` には `30d`, `12h`, `90m` などの期間指定を受け付ける。指定がない場合は30日を使用する。
 
-トークン本体の平文は発行時にのみ生成され、DBには保存しない。コマンド成功時は標準出力に以下を出力する。
+トークン本体の平文は発行時にのみ生成され、DBには保存しない。コマンド成功時は標準出力に以下を大文字ラベル形式で出力する。
 
-  - `token_id`
-  - 対象ユーザ名
-  - スコープ
-  - 作成日時
-  - 有効期限
-  - トークン文字列
+  - `TOKEN ID`
+  - `TOKEN NAME`
+  - `USERNAME`
+  - `SCOPES`
+  - `PERMISSIONS`
+  - `TTL`
+  - `PATH PREFIXES:`
+  - `TIMESTAMPS:`
+    - `create`
+    - `expire`
+  - `WARNING:`
+    - 全領域アクセス可の場合のみ表示
+  - `TOKEN VALUE:`
+
+`TOKEN NAME` は未指定時に `-` を表示する。
+
+`SCOPES` は保存値としての指定内容をカンマ区切りで表示する。
+
+`PERMISSIONS` は導出値としての実効権限を `read, create, delete, update, append` の順に完全名のカンマ区切りで表示する。
+
+`TTL` は `30d` / `12h` / `90m` / `3600s` の短縮形式で表示する。
+
+`PATH PREFIXES:` はセクション形式で表示し、path 制約がない場合は `- all` を表示する。
+
+`TIMESTAMPS:` は `create` と `expire` を表示する。
+
+`TOKEN VALUE:` は末尾に独立したセクションとして表示する。
 
 以下の場合はエラーとする。
 
   - 指定されたユーザが存在しない
   - `--scope` に未定義のスコープが含まれている
+  - `--path-prefix` に正規化済み絶対パスではない値が含まれている
   - `--ttl` の形式が不正
   - `--ttl` に0以下の期間が指定された
 
@@ -762,6 +846,52 @@ luwiki [OPTIONS] token create [OPTIONS] <USER-NAME>
   - 発行されたトークン文字列はこのコマンドの実行時にのみ確認可能であり、後から再表示できない
   - 管理用識別子としてULID形式の `token_id` を付与する
   - スライディング期限は実際の認証成功時にのみ延長される
+  - `--path-prefix /` を含む指定は全領域アクセスとして扱う
+
+<a id="token-add-path"></a>
+### token add_pathコマンド
+トークンのpath制約追加
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] token add_path <TOKEN-ID> <PATH-PREFIX>
+```
+
+#### 概要
+`TOKEN-ID` で指定した Bearer トークンに、操作可能な path prefix 制約を1件追加する。
+
+`PATH-PREFIX` には正規化済みの絶対パスのみを指定できる。
+
+以下の場合はエラーとする。
+
+  - 指定された `TOKEN-ID` が存在しない
+  - `PATH-PREFIX` が正規化済みの絶対パスではない
+
+#### 注記
+  - `PATH-PREFIX` に `/` を指定した場合は全領域アクセス可として扱う
+  - 包含関係にある複数 prefix は、より広い側へ縮約して保持してよい
+
+<a id="token-remove-path"></a>
+### token remove_pathコマンド
+トークンのpath制約削除
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] token remove_path <TOKEN-ID> <PATH-PREFIX>
+```
+
+#### 概要
+`TOKEN-ID` で指定した Bearer トークンから、指定した path prefix 制約を1件削除する。
+
+以下の場合はエラーとする。
+
+  - 指定された `TOKEN-ID` が存在しない
+  - `PATH-PREFIX` が正規化済みの絶対パスではない
+  - 指定された path prefix 制約が存在しない
+
+#### 注記
+  - path prefix 制約が全て取り除かれた場合は、全領域アクセス可の状態へ戻る
+  - 全領域アクセス可の状態へ戻った場合は、その旨の警告を表示する
 
 <a id="token-revoke"></a>
 ### token revokeコマンド 
@@ -870,27 +1000,40 @@ Bearer トークンの一覧を表示する。
 
 `--long-info` を指定していない場合の表示項目は以下とする。
 
-  - `token_id`
-  - 対象ユーザ名
-  - 有効期限
+  - `SCOPE`
+  - `PATH`
+  - `ID`
+  - `USER`
+  - `NAME`
+  - `EXPIRES`
 
-`--long-info` を指定していない場合は、一覧の先頭に固定幅4文字の状態表示欄 `STAT` を設ける。この欄にはUNIXの `ls -l` におけるパーミッション表示に類する省略表現を用い、各文字の意味は以下の通りとする。
+`--long-info` を指定していない場合は、一覧の先頭に実効権限表示欄 `SCOPE` を設ける。この欄では、実効権限を `r` / `c` / `d` / `u` / `a` の各文字で表す。各文字の意味は以下の通りとする。
 
   - 1文字目 : `read` スコープを持つ場合は `r` 、持たない場合は `-`
-  - 2文字目 : `write` スコープを持つ場合は `w` 、持たない場合は `-`
-  - 3文字目 : `revoked=true` の場合は `v` 、そうでない場合は `-`
-  - 4文字目 : コマンド実行時点で期限切れの場合は `e` 、そうでない場合は `-`
+  - 2文字目 : `create` スコープを持つ場合は `c` 、持たない場合は `-`
+  - 3文字目 : `delete` スコープを持つ場合は `d` 、持たない場合は `-`
+  - 4文字目 : `update` スコープを持つ場合は `u` 、持たない場合は `-`
+  - 5文字目 : `append` スコープを持つ場合は `a` 、持たない場合は `-`
 
-したがって、たとえば `rw--` は `read` / `write` の両スコープを持つ有効トークン、`r-ve` は `read` のみを持ち、失効済みかつ期限切れでもあるトークンを表す。
+`write` スコープを持つ場合は、`SCOPE` 欄では `rcdua` として表示する。
+
+`PATH` 欄では、一覧では詳細な制約内容ではなく、path制約の有無のみを表示する。
+
+  - `*` : 全領域アクセス可
+  - `L` : path制約あり
 
 `--long-info` を指定した場合は、上記に加えて以下を表示する。
 
-  - 作成日時
-  - 最終更新日時
-  - 失効状態
-  - 任意のトークン名
+  - `CREATE`
+  - `STATUS`
 
-`--long-info` の `最終更新日時` は Bearer トークン管理情報の最終更新日時を表し、最終使用日時を意味しない。少なくとも `token revoke` による失効更新と、Bearer認証成功時の TTL 延長更新が反映される。
+`STATUS` は以下の何れかを表示する。
+
+  - `alive`
+  - `expired`
+  - `revoked`
+
+状態判定では、`revoked` を `expired` より優先する。
 
 以下の場合はエラーとする。
 
@@ -900,6 +1043,57 @@ Bearer トークンの一覧を表示する。
 #### 注記
   - 一覧表示ではトークン平文は表示しない
   - 期限切れかどうかはコマンド実行時点の現在時刻で判定する
+
+<a id="token-info"></a>
+### token infoコマンド
+トークン情報の詳細表示
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] token info <TOKEN-ID>
+```
+
+#### 概要
+引数 `TOKEN-ID` で指定された Bearer トークンの詳細情報を大文字ラベル形式で表示する。
+
+少なくとも以下の項目を表示する。
+
+  - `TOKEN ID`
+  - `TOKEN NAME`
+  - `USERNAME`
+  - `STATUS`
+  - `SCOPES`
+  - `PERMISSIONS`
+  - `PATH PREFIXES:`
+  - `TTL`
+  - `TIMESTAMPS:`
+    - `create`
+    - `update`
+    - `expire`
+
+`TOKEN NAME` は未設定時に `-` を表示する。
+
+`STATUS` は以下の何れかを表示する。
+
+  - `alive`
+  - `expired`
+  - `revoked`
+
+状態判定では、`revoked` を `expired` より優先する。
+
+`PERMISSIONS` は保存値ではなく導出値を `read, create, delete, update, append` の順に完全名のカンマ区切りで表示する。
+
+`TTL` は `30d` / `12h` / `90m` / `3600s` の短縮形式で表示する。
+
+`PATH PREFIXES:` は詳細一覧としてセクション表示し、全領域アクセス可の場合は `- all` を表示する。
+
+以下の場合はエラーとする。
+
+  - 指定された `TOKEN-ID` が存在しない
+
+#### 注記
+  - トークン平文は表示しない
+  - ユーザ属性は表示しない
 
 <a id="export"></a>
 ### exportコマンド
@@ -1030,6 +1224,9 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
 | `template_root` | テンプレートページの格納パス(Wiki上のパス) | `--template-root` |
 | `wiki_title` | Wiki名 | `--wiki-title` |
 | `asset_limit_size` | アップロード可能なアセットサイズの上限 | `--asset-limit-size` |
+| `audit_path` | 監査ログ出力ディレクトリのパス | `--audit-log-dir` | `$XDG_DATA_HOME/luwiki/audit`
+| `audit_retention` | 監査ログ保持期間 | `--audit-log-retention` | "90d"
+| `audit_rotate_size` | 監査ログローテーション閾値サイズ | `--audit-log-rotate-size` | "2M"
 
 <a id="config-run"></a>
 ### runテーブル
@@ -1039,6 +1236,7 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
 |:--|:--|:--|:--
 | `bind` | サーバがバインドするアドレスを指定する | `BIND-ADDR` | "0.0.0.0"
 | `port` | サーバがバインドするポートを指定する | `PORT` | 8080
+| `use_mcp` | MCP機能を有効化するか否か | `--mcp` | false
 | `use_tls` | TLSの使用 | `--tls` | false
 | `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
  

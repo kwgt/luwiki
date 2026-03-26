@@ -146,6 +146,9 @@ pub(crate) enum DbError {
     /// ページがロックされている
     PageLocked,
 
+    /// draft ページである
+    DraftPage,
+
     /// ロック情報が存在しない
     LockNotFound,
 
@@ -154,6 +157,9 @@ pub(crate) enum DbError {
 
     /// amend指定が許可されない
     AmendForbidden,
+
+    /// 保存前提の最新 revision が一致しない
+    RevisionConflict,
 
     /// ページが削除済み
     PageDeleted,
@@ -190,9 +196,11 @@ impl std::fmt::Display for DbError {
             DbError::UserNotFound => write!(f, "user not found"),
             DbError::RootPageProtected => write!(f, "root page is protected"),
             DbError::PageLocked => write!(f, "page is locked"),
+            DbError::DraftPage => write!(f, "draft page"),
             DbError::LockNotFound => write!(f, "lock not found"),
             DbError::LockForbidden => write!(f, "lock forbidden"),
             DbError::AmendForbidden => write!(f, "amend forbidden"),
+            DbError::RevisionConflict => write!(f, "revision conflict"),
             DbError::PageDeleted => write!(f, "page deleted"),
             DbError::InvalidRevision => write!(f, "invalid revision"),
             DbError::AssetNotFound => write!(f, "asset not found"),

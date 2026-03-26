@@ -24,35 +24,14 @@ use chrono::{DateTime, Local};
 use log::warn;
 use serde_json::json;
 
-use crate::database::types::{
-    BearerScope,
-    BearerScopeSet,
-    BearerTokenPlaintext,
-};
+use crate::auth::{AuthContext, AuthUser, authenticate_bearer_token};
+use crate::database::types::{BearerScope, BearerScopeSet, BearerTokenPlaintext, PathPrefixSet};
 use crate::http_server::app_state::AppState;
 
 use super::{BASIC_AUTH_REALM, CACHE_CONTROL_NO_STORE};
 
 /// Bearer期限通知ヘッダ名
 pub(crate) const X_BEARER_EXPIRE_HEADER: &str = "X-Bearer-Expire";
-
-///
-/// 認証済みユーザ情報
-///
-#[derive(Clone, Debug)]
-pub(crate) struct AuthUser {
-    user_id: String,
-}
-
-///
-/// 認証済みリクエストの共通文脈
-///
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(crate) struct AuthContext {
-    user: AuthUser,
-    scopes: BearerScopeSet,
-}
 
 ///
 /// Bearer有効期限ヘッダ引き継ぎ情報
@@ -90,78 +69,6 @@ enum ParsedAuthorization {
 struct AuthErrorResponse {
     status: StatusCode,
     reason: &'static str,
-}
-
-impl AuthUser {
-    ///
-    /// 認証済みユーザ情報の生成
-    ///
-    /// # 引数
-    /// * `user_id` - ユーザID
-    ///
-    /// # 戻り値
-    /// 生成したユーザ情報を返す。
-    ///
-    pub(crate) fn new(user_id: String) -> Self {
-        Self { user_id }
-    }
-
-    ///
-    /// ユーザIDへのアクセサ
-    ///
-    /// # 戻り値
-    /// ユーザIDを返す。
-    ///
-    pub(crate) fn user_id(&self) -> &str {
-        &self.user_id
-    }
-}
-
-#[allow(dead_code)]
-impl AuthContext {
-    ///
-    /// 認証文脈の生成
-    ///
-    /// # 引数
-    /// * `user` - 認証済みユーザ
-    /// * `scopes` - 付与スコープ集合
-    ///
-    /// # 戻り値
-    /// 生成した認証文脈を返す。
-    ///
-    pub(crate) fn new(user: AuthUser, scopes: BearerScopeSet) -> Self {
-        Self { user, scopes }
-    }
-
-    ///
-    /// 認証済みユーザへのアクセサ
-    ///
-    /// # 戻り値
-    /// 認証済みユーザを返す。
-    ///
-    pub(crate) fn user(&self) -> &AuthUser {
-        &self.user
-    }
-
-    ///
-    /// ユーザIDへのアクセサ
-    ///
-    /// # 戻り値
-    /// 認証済みユーザのユーザIDを返す。
-    ///
-    pub(crate) fn user_id(&self) -> &str {
-        self.user.user_id()
-    }
-
-    ///
-    /// 付与スコープ集合へのアクセサ
-    ///
-    /// # 戻り値
-    /// 認証文脈が保持するスコープ集合を返す。
-    ///
-    pub(crate) fn scopes(&self) -> &BearerScopeSet {
-        &self.scopes
-    }
 }
 
 #[allow(dead_code)]
@@ -453,6 +360,8 @@ async fn validate_basic_auth(
     req.extensions_mut().insert(AuthContext::new(
         AuthUser::new(username),
         BearerScopeSet::all(),
+        PathPrefixSet::new(),
+        None,
     ));
 
     Ok(req)
@@ -482,9 +391,10 @@ async fn validate_bearer_auth(
             return Err((ErrorInternalServerError("state lock failed"), req));
         }
     };
-    let result = match state.db().verify_bearer_token(token) {
-        Ok(Ok(result)) => result,
-        Ok(Err(reason)) => {
+    let success =
+        match authenticate_bearer_token(state.db(), token, Local::now()) {
+            Ok(Ok(success)) => success,
+            Ok(Err(reason)) => {
             if let Some(token_id) = reason.token_id() {
                 warn!(
                     "bearer auth failed: status=401 reason={} token_id={}",
@@ -501,22 +411,8 @@ async fn validate_bearer_auth(
         }
         Err(_) => return Err((ErrorInternalServerError("auth failed"), req)),
     };
-
-    let user_info = result.user_info();
-    let token_info = result.token_info();
-    let updated_expire_at = match state
-        .db()
-        .extend_bearer_token_ttl_if_needed(&token_info.token_id(), Local::now())
-    {
-        Ok(updated_expire_at) => updated_expire_at,
-        Err(_) => return Err((ErrorInternalServerError("auth failed"), req)),
-    };
-
-    req.extensions_mut().insert(AuthContext::new(
-        AuthUser::new(user_info.username()),
-        token_info.scopes(),
-    ));
-    if let Some(expire_at) = updated_expire_at {
+    req.extensions_mut().insert(success.auth().clone());
+    if let Some(expire_at) = success.updated_expire_at() {
         req.extensions_mut()
             .insert(BearerExpireHeaderValue::new(expire_at));
     }

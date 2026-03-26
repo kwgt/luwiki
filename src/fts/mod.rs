@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use clap::ValueEnum;
 use lindera_core::mode::Mode;
 use lindera_dictionary::{DictionaryConfig, DictionaryKind};
 use lindera_tokenizer::tokenizer::{
@@ -20,6 +21,7 @@ use lindera_tokenizer::tokenizer::{
     TokenizerConfig,
 };
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
@@ -42,9 +44,25 @@ use tantivy::tokenizer::{
 };
 use tantivy::{doc, Index, Score, TantivyDocument, Term};
 
-use crate::cmd_args::FtsSearchTarget;
 use crate::database::DatabaseManager;
 use crate::database::types::PageId;
+
+///
+/// 全文検索の検索対象
+///
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
+#[clap(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FtsSearchTarget {
+    /// 見出し
+    Headings,
+
+    /// 本文
+    Body,
+
+    /// コードブロック
+    Code,
+}
 
 ///
 /// 利用するトークナイザ種別
