@@ -1621,6 +1621,55 @@ mod tests {
     }
 
     #[test]
+    fn apply_config_enables_run_mcp_when_cli_is_unspecified() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "[run]\nuse_mcp = true\n")
+            .expect("write config failed");
+        let config_arg = config_path.to_string_lossy().to_string();
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "--config-path",
+            &config_arg,
+            "run",
+        ])
+        .expect("parse failed");
+
+        opts.apply_config().expect("apply config failed");
+
+        let run_opts = match opts.command {
+            Some(Command::Run(run_opts)) => run_opts,
+            _ => panic!("run options missing"),
+        };
+        assert!(run_opts.use_mcp());
+    }
+
+    #[test]
+    fn apply_config_does_not_override_explicit_run_mcp_option() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "[run]\nuse_mcp = false\n")
+            .expect("write config failed");
+        let config_arg = config_path.to_string_lossy().to_string();
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "--config-path",
+            &config_arg,
+            "run",
+            "--mcp",
+        ])
+        .expect("parse failed");
+
+        opts.apply_config().expect("apply config failed");
+
+        let run_opts = match opts.command {
+            Some(Command::Run(run_opts)) => run_opts,
+            _ => panic!("run options missing"),
+        };
+        assert!(run_opts.use_mcp());
+    }
+
+    #[test]
     fn save_config_writes_mcp_and_audit_settings() {
         let dir = TempDir::new().expect("temp dir");
         let config_path = dir.path().join("config.toml");

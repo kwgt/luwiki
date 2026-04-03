@@ -74,13 +74,13 @@ claude mcp add local_wiki --transport http --header "Authorization: Bearer ${ア
 ```
 
 ##### settings.jsonを編集する場合
-`~/.claude/settings.json`を編集し、"mcpServers"に以下のようなエントリを追加します(※動作確認は行っていません)。
+`~/.claude.json`を編集し、"mcpServers"に以下のようなエントリを追加します
 
 ```json
 "mcpServers": {
   "local_wiki": {
     "type": "http",
-    "httpUrl": "https://${サーバのアドレス}:8080/mcp",
+    "url": "https://${サーバのアドレス}:8080/mcp",
     "headers": {
       "Authorization": "Bearer ${アクセストークン}"
     }
@@ -110,5 +110,5 @@ luwiki run --mcp
 ```
 
 ## その他
-- Wikiサーバを自己署名証書で運用している場合、Codex CLIなどの一般的なエージェントの場合署名検証で弾かれます(アクセスしてくれない)。この場合、環境変数SSL_CERT_FILEに証明書ファイルへのパスを設定してサーバを起動してください。
+- Wikiサーバを自己署名証書で運用している場合、Codex CLIなどの一般的なエージェントの場合署名検証で弾かれます(アクセスしてくれない)。この場合、Codex CLIでは環境変数SSL_CERT_FILEに、Claude Codeでは環境変数NODE_EXTRA_CA_CERTSに証明書ファイルへのパスを設定してサーバを起動してください。
 

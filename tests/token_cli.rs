@@ -212,6 +212,7 @@ impl CliServerGuard {
         assets_dir: &Path,
         port: u16,
         enable_mcp: bool,
+        config_use_mcp: bool,
     ) -> Self {
         let exe = test_binary_path();
         let base_dir = db_path.parent().expect("db_path parent missing");
@@ -219,8 +220,12 @@ impl CliServerGuard {
         let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
         fs::create_dir_all(&config_dir).expect("create config dir failed");
         let config_path = config_dir.join("config.toml");
-        fs::write(&config_path, "[run]\nuse_tls = false\n")
-            .expect("write test config failed");
+        let config_body = if config_use_mcp {
+            "[run]\nuse_tls = false\nuse_mcp = true\n"
+        } else {
+            "[run]\nuse_tls = false\n"
+        };
+        fs::write(&config_path, config_body).expect("write test config failed");
         let stdout_path = base_dir.join("server.stdout.log");
         let stdout =
             std::fs::File::create(&stdout_path).expect("create stdout failed");
@@ -1413,7 +1418,13 @@ fn run_without_mcp_does_not_publish_mcp_endpoint() {
     run_add_user(&db_path, &assets_dir);
 
     let port = reserve_port();
-    let server = CliServerGuard::start(&db_path, &assets_dir, port, false);
+    let server = CliServerGuard::start(
+        &db_path,
+        &assets_dir,
+        port,
+        false,
+        false,
+    );
     let (base_url, client) =
         wait_for_server_with_scheme(port, server.stderr_path());
 
@@ -1436,7 +1447,13 @@ fn run_with_mcp_publishes_mcp_endpoint() {
     run_add_user(&db_path, &assets_dir);
 
     let port = reserve_port();
-    let server = CliServerGuard::start(&db_path, &assets_dir, port, true);
+    let server = CliServerGuard::start(
+        &db_path,
+        &assets_dir,
+        port,
+        true,
+        false,
+    );
     let (base_url, client) =
         wait_for_server_with_scheme(port, server.stderr_path());
 
@@ -1447,7 +1464,36 @@ fn run_with_mcp_publishes_mcp_endpoint() {
         ))
         .send()
         .expect("request /mcp failed");
-    assert_eq!(response.status().as_u16(), 405);
+    assert_eq!(response.status().as_u16(), 401);
+
+    drop(server);
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn run_with_mcp_enabled_in_config_publishes_mcp_endpoint() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let port = reserve_port();
+    let server = CliServerGuard::start(
+        &db_path,
+        &assets_dir,
+        port,
+        false,
+        true,
+    );
+    let (base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+
+    let response = client
+        .get(format!(
+            "{}/mcp",
+            base_url.trim_end_matches("/api")
+        ))
+        .send()
+        .expect("request /mcp failed");
+    assert_eq!(response.status().as_u16(), 401);
 
     drop(server);
     fs::remove_dir_all(base_dir).expect("cleanup failed");

@@ -27,7 +27,12 @@ pub(crate) struct RunOpts {
     open_browser: bool,
 
     /// MCPの有効化指定
-    #[arg(long = "mcp", action = clap::ArgAction::SetTrue)]
+    #[arg(
+        long = "mcp",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
     use_mcp: Option<bool>,
 
     /// TLSでの通信を有効にする
