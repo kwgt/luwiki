@@ -2460,6 +2460,10 @@ pub(crate) enum UserAttribute {
     /// Basic認証を拒否する属性
     #[serde(rename = "NoBasicAuth")]
     NoBasicAuth,
+
+    /// write 系操作を拒否する属性
+    #[serde(rename = "ReadOnly")]
+    ReadOnly,
 }
 
 impl UserAttribute {
@@ -2472,6 +2476,7 @@ impl UserAttribute {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::NoBasicAuth => "NoBasicAuth",
+            Self::ReadOnly => "ReadOnly",
         }
     }
 }
@@ -2488,6 +2493,7 @@ impl TryFrom<&str> for UserAttribute {
     fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
         match value {
             "NoBasicAuth" => Ok(Self::NoBasicAuth),
+            "ReadOnly" => Ok(Self::ReadOnly),
             _ => Err(anyhow!("invalid user attribute: {}", value)),
         }
     }
@@ -2858,6 +2864,17 @@ impl UserInfo {
     ///
     pub(crate) fn allows_basic_auth(&self) -> bool {
         !self.attributes.contains(UserAttribute::NoBasicAuth)
+    }
+
+    ///
+    /// write 系操作を許可できるかを返す
+    ///
+    /// # 戻り値
+    /// `ReadOnly` 属性を持たない場合は `true` を返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn allows_write(&self) -> bool {
+        !self.attributes.contains(UserAttribute::ReadOnly)
     }
 }
 

@@ -175,8 +175,10 @@ mod tests {
 
     #[test]
     fn format_attributes_uses_formal_attribute_name() {
-        let attributes =
-            UserAttributeSet::from_iter([UserAttribute::NoBasicAuth]);
-        assert_eq!(format_attributes(&attributes), "NoBasicAuth");
+        let attributes = UserAttributeSet::from_iter([
+            UserAttribute::NoBasicAuth,
+            UserAttribute::ReadOnly,
+        ]);
+        assert_eq!(format_attributes(&attributes), "NoBasicAuth, ReadOnly");
     }
 }

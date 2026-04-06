@@ -610,24 +610,27 @@ MCP の path ベース認可は、入力文字列ベースではなく、
 そのため、page_id 解決を内部で利用する場合でも、
 認可基準そのものは current path / target path / requested prefix のいずれかで説明可能な形を維持する。
 
-#### 5.1.5 `NoBasicAuth` の反映箇所
+#### 5.1.5 `NoBasicAuth` / `ReadOnly` の反映箇所
 
-`NoBasicAuth` は MCP 専用属性ではなく、
+`NoBasicAuth` および `ReadOnly` は MCP 専用属性ではなく、
 ユーザ情報に付与される共通属性として設計する。
 MCP 自体は Basic 認証を受理しないが、
 MCP 機能と同時に導入される Bearer 前提運用を成立させるため、
-ユーザ属性モデル、Basic 認証拒否、CLI 管理表示の 3 箇所で反映を要する。
+ユーザ属性モデル、認証・認可、CLI 管理表示の 3 箇所で反映を要する。
 
 ユーザ属性モデルへの反映方針は以下とする。
 
 - `UserInfo` 側に、将来拡張可能な属性集合を保持する
-- 初期実装で導入する属性は `NoBasicAuth` のみとする
+- 初期実装で導入する属性は `NoBasicAuth` と `ReadOnly` とする
 - Basic 認証可否は `UserInfo` 側の責務とし、Bearer トークン管理情報へ重複保持しない
+- `ReadOnly` による write 系操作可否も `UserInfo` 側の責務とし、Bearer トークン管理情報へ重複保持しない
 - export / import では、ユーザ属性をユーザ情報の一部として扱う
 
 この方針により、
 「どのユーザが Basic を使えないか」はトークン単位ではなく
-ユーザ単位で一貫して説明できる。
+ユーザ単位で一貫して説明できる。また、
+「どのユーザが MCP の write 系操作を行えないか」も
+同じくユーザ単位で一貫して説明できる。
 
 Basic 認証拒否への反映方針は以下とする。
 
@@ -635,11 +638,18 @@ Basic 認証拒否への反映方針は以下とする。
 - `NoBasicAuth` を持つユーザが Basic 認証を試行した場合は 401 Unauthorized とする
 - Bearer 認証時には `NoBasicAuth` を拒否条件として用いない
 - MCP 認証入口では Basic 認証自体を受理しないため、`NoBasicAuth` 判定は行わない
+- `ReadOnly` は MCP 認証入口で認証失敗理由には使わず、認証成功後の write 系認可で判定する
+- `ReadOnly` は required scope および path prefix 制約と並ぶ上位認可制約として扱い、write 系操作では Bearer スコープより優先して拒否できるようにする
 
 この整理により、`NoBasicAuth` は
 「Basic 認証を禁止する共通ユーザ属性」であり、
 MCP では直接判定しないが、
 MCP 前提運用で使うユーザを UI / REST 側の Basic 経路から明示的に排除する役割を持つ。
+
+一方で `ReadOnly` は
+「write 系操作を禁止する共通ユーザ属性」であり、
+MCP では read 系操作を妨げず、write 系操作に対してのみ
+`forbidden` を返すための認可属性として扱う。
 
 CLI 表示および管理操作への反映方針は以下とする。
 
@@ -651,17 +661,19 @@ CLI 表示および管理操作への反映方針は以下とする。
 
 この表示方針により、トークン管理情報とユーザ属性情報の責務が混線しない。
 Bearer トークンの一覧や詳細はトークン自身の情報に専念し、
-`NoBasicAuth` を含むユーザ属性は user 系コマンドで確認する。
+`NoBasicAuth` や `ReadOnly` を含むユーザ属性は user 系コマンドで確認する。
 
 MCP 実装設計としての依存関係は以下の通りとする。
 
 - 本書のユーザ属性モデル設計で保存形式を定義する
 - 本書の CLI / 設定 / 起動経路設計で `user add` / `user edit` / `user info` への反映を具体化する
-- 本書のテスト設計で Basic 拒否と CLI 表示の観点へ接続する
+- 本書のテスト設計で Basic 拒否、ReadOnly による write 拒否、および CLI 表示の観点へ接続する
 
 本節で確定するのは、`NoBasicAuth` を
 「MCP で直接判定する属性」ではなく、
 「MCP と同時導入される認証運用のために周辺経路へ反映する共通属性」
+として扱うこと、ならびに `ReadOnly` を
+「MCP の write 系操作で直接判定する共通認可属性」
 として扱う責務境界である。
 
 #### 5.1.6 認可失敗時の監査ログ連携点

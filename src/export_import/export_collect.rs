@@ -130,6 +130,7 @@ pub(crate) fn collect_export(
             password: user.password(),
             salt: user.salt(),
             display_name: user.display_name(),
+            attributes: user.attributes(),
         });
     }
 
@@ -240,6 +241,7 @@ mod tests {
 
     use super::*;
     use crate::database::DatabaseManager;
+    use crate::database::types::UserAttribute;
     use crate::export_import::policy::ExportImportPolicy;
 
     #[test]
@@ -342,6 +344,43 @@ mod tests {
         assert_eq!(delete_plan.lock_page_ids.len(), 2);
         assert!(delete_plan.lock_page_ids.contains(&page_id));
         assert!(delete_plan.lock_page_ids.contains(&draft_id));
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// export 収集時にユーザ属性が `users.jsonl` モデルへ保持されることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test backup_collect_preserves_user_attributes -- --exact`
+    /// で実行する。
+    ///
+    #[test]
+    fn backup_collect_preserves_user_attributes() {
+        let (base_dir, db_path, asset_path) = prepare_test_dirs();
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user_with_attributes(
+                "alice",
+                Some("pass"),
+                None,
+                crate::database::types::UserAttributeSet::from_iter([
+                    UserAttribute::ReadOnly,
+                ]),
+            )
+            .expect("add user failed");
+        manager
+            .create_page("/tree/a", "alice", "# body".to_string())
+            .expect("create page failed");
+
+        let collected = collect_export(&manager, &ExportImportPolicy::backup())
+            .expect("collect export failed");
+
+        assert_eq!(collected.bundle.users.len(), 1);
+        assert!(collected.bundle.users[0]
+            .attributes
+            .contains(UserAttribute::ReadOnly));
 
         fs::remove_dir_all(base_dir).expect("cleanup failed");
     }

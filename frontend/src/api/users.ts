@@ -4,6 +4,7 @@ export interface CurrentUserResponse {
   id: string;
   username: string;
   display_name: string;
+  attributes: string[];
   timestamp: string;
 }
 

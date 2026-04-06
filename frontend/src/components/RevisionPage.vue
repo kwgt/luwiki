@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RevisionRenameInfo } from '../api/pages';
+import { useCurrentUser } from '../composables/useCurrentUser';
 import { usePageRevision } from '../composables/usePageRevision';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
 import { getWikiTitle } from '../lib/pageCommon';
+import {
+  canExecuteRevisionWriteAction,
+  isWriteActionDisabled,
+} from '../lib/readOnlyUi';
 
 const {
   themeOptions,
@@ -52,6 +57,7 @@ const {
   rollbackRevision,
   compactRevision,
 } = usePageRevision(selectedDiffMode);
+const { isReadOnlyUser, loadCurrentUser } = useCurrentUser();
 
 const settingsOpen = ref(false);
 const sidePanelCollapsed = ref(false);
@@ -117,7 +123,10 @@ const canRollback = computed(() => {
   if (!target || !latest) {
     return false;
   }
-  return canExecuteAction.value && target < latest;
+  return canExecuteRevisionWriteAction(
+    isReadOnlyUser.value,
+    canExecuteAction.value && target < latest,
+  );
 });
 const canCompaction = computed(() => {
   const target = selectedSingleRevision.value;
@@ -125,7 +134,10 @@ const canCompaction = computed(() => {
   if (!target || !oldest) {
     return false;
   }
-  return canExecuteAction.value && target > oldest;
+  return canExecuteRevisionWriteAction(
+    isReadOnlyUser.value,
+    canExecuteAction.value && target > oldest,
+  );
 });
 
 const selectionLabel = computed(() => {
@@ -224,14 +236,14 @@ function setupRevisionObserver(): void {
 }
 
 function openRollbackConfirm(): void {
-  if (!canExecuteAction.value) {
+  if (!canRollback.value) {
     return;
   }
   rollbackConfirmOpen.value = true;
 }
 
 function openCompactionConfirm(): void {
-  if (!canExecuteAction.value) {
+  if (!canCompaction.value) {
     return;
   }
   compactionConfirmOpen.value = true;
@@ -283,6 +295,7 @@ onMounted(() => {
   if (!window.matchMedia('(min-width: 768px)').matches) {
     sidePanelCollapsed.value = true;
   }
+  void loadCurrentUser();
   setupRevisionObserver();
   void loadPage();
 });
@@ -581,7 +594,7 @@ watch(pageTitle, (value) => {
           <button class="btn" type="button" @click="rollbackConfirmOpen = false">
             キャンセル
           </button>
-          <button class="btn btn-primary" type="button" :disabled="isActionLoading" @click="confirmRollback">
+          <button class="btn btn-primary" type="button" :disabled="isWriteActionDisabled(isReadOnlyUser, isActionLoading)" @click="confirmRollback">
             実行
           </button>
         </div>
@@ -598,7 +611,7 @@ watch(pageTitle, (value) => {
           <button class="btn" type="button" @click="compactionConfirmOpen = false">
             キャンセル
           </button>
-          <button class="btn btn-primary" type="button" :disabled="isActionLoading" @click="confirmCompaction">
+          <button class="btn btn-primary" type="button" :disabled="isWriteActionDisabled(isReadOnlyUser, isActionLoading)" @click="confirmCompaction">
             実行
           </button>
         </div>

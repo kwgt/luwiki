@@ -98,6 +98,9 @@ pub(crate) enum AuditResult {
     /// path prefix 制約違反
     PathPrefixDenied,
 
+    /// ReadOnly 属性による拒否
+    ReadOnlyDenied,
+
     /// 対象未発見
     NotFound,
 
@@ -126,6 +129,7 @@ impl AuditResult {
             Self::Success => "success",
             Self::ScopeDenied => "scope_denied",
             Self::PathPrefixDenied => "path_prefix_denied",
+            Self::ReadOnlyDenied => "read_only_denied",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::InvalidInput => "invalid_input",

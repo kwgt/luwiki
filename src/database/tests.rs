@@ -360,8 +360,8 @@ fn bearer_token_info_stores_and_updates_management_fields() {
 /// 集合操作を扱えることを確認する。
 ///
 /// # 注記
-/// `NoBasicAuth` の表示、パース、JSON変換、集合包含判定を
-/// 検証する。
+/// `NoBasicAuth` と `ReadOnly` の表示、パース、JSON変換、
+/// 集合包含判定を検証する。
 ///
 #[test]
 fn user_attribute_and_set_work_as_expected() {
@@ -374,6 +374,13 @@ fn user_attribute_and_set_work_as_expected() {
         UserAttribute::try_from("NoBasicAuth")
             .expect("parse NoBasicAuth failed"),
         UserAttribute::NoBasicAuth,
+    );
+    assert_eq!(UserAttribute::ReadOnly.as_str(), "ReadOnly");
+    assert_eq!(UserAttribute::ReadOnly.to_string(), "ReadOnly");
+    assert_eq!(
+        UserAttribute::try_from("ReadOnly")
+            .expect("parse ReadOnly failed"),
+        UserAttribute::ReadOnly,
     );
     assert!(UserAttribute::try_from("Unknown").is_err());
 
@@ -390,6 +397,16 @@ fn user_attribute_and_set_work_as_expected() {
             .expect("deserialize NoBasicAuth failed"),
         UserAttribute::NoBasicAuth,
     );
+    assert_eq!(
+        serde_json::to_string(&UserAttribute::ReadOnly)
+            .expect("serialize ReadOnly failed"),
+        "\"ReadOnly\"",
+    );
+    assert_eq!(
+        serde_json::from_str::<UserAttribute>("\"ReadOnly\"")
+            .expect("deserialize ReadOnly failed"),
+        UserAttribute::ReadOnly,
+    );
 
     /*
      * 集合操作を検証する
@@ -399,39 +416,60 @@ fn user_attribute_and_set_work_as_expected() {
     assert!(attributes.insert(UserAttribute::NoBasicAuth));
     assert!(!attributes.insert(UserAttribute::NoBasicAuth));
     assert!(attributes.contains(UserAttribute::NoBasicAuth));
+    assert!(attributes.insert(UserAttribute::ReadOnly));
+    assert!(!attributes.insert(UserAttribute::ReadOnly));
+    assert!(attributes.contains(UserAttribute::ReadOnly));
 }
 
 ///
 /// UserInfo が属性集合を保持し、`NoBasicAuth` から
-/// Basic認証許可判定を導出できることを確認する。
+/// Basic認証許可判定と write 許可判定を導出できることを確認する。
 ///
 /// # 注記
-/// 通常ユーザと `NoBasicAuth` 属性付きユーザの
-/// `allows_basic_auth()` を検証する。
+/// 通常ユーザと `NoBasicAuth` / `ReadOnly` 属性付きユーザの
+/// `allows_basic_auth()` と `allows_write()` を検証する。
 ///
 #[test]
 fn user_info_tracks_attributes_and_basic_auth_permission() {
     /*
-     * 通常ユーザでは Basic認証が許可されることを検証する
+     * 通常ユーザでは Basic認証と write が許可されることを検証する
      */
     let plain_user = UserInfo::new("user", "password", None);
     assert!(plain_user.attributes().is_empty());
     assert!(plain_user.allows_basic_auth());
+    assert!(plain_user.allows_write());
 
     /*
-     * `NoBasicAuth` 属性付きユーザでは Basic認証が拒否されることを検証する
+     * `NoBasicAuth` 属性付きユーザでは Basic認証だけが拒否されることを検証する
      */
-    let restricted_user = UserInfo::new_for_test(
+    let no_basic_auth_user = UserInfo::new_for_test(
         UserId::new(),
         Local::now(),
         "user2",
         "User 2",
         UserAttributeSet::from_iter([UserAttribute::NoBasicAuth]),
     );
-    assert!(restricted_user
+    assert!(no_basic_auth_user
         .attributes()
         .contains(UserAttribute::NoBasicAuth));
-    assert!(!restricted_user.allows_basic_auth());
+    assert!(!no_basic_auth_user.allows_basic_auth());
+    assert!(no_basic_auth_user.allows_write());
+
+    /*
+     * `ReadOnly` 属性付きユーザでは write だけが拒否されることを検証する
+     */
+    let read_only_user = UserInfo::new_for_test(
+        UserId::new(),
+        Local::now(),
+        "user3",
+        "User 3",
+        UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+    );
+    assert!(read_only_user
+        .attributes()
+        .contains(UserAttribute::ReadOnly));
+    assert!(read_only_user.allows_basic_auth());
+    assert!(!read_only_user.allows_write());
 }
 
 ///
@@ -1662,6 +1700,7 @@ fn import_bundle_and_asset_staging_api_work() {
         password: "hashed".to_string(),
         salt: [7u8; 16],
         display_name: "Import User".to_string(),
+        attributes: UserAttributeSet::new(),
     });
     bundle.pages.push(ExportPage {
         id: page_id.clone(),

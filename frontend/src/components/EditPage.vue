@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePageEdit } from '../composables/usePageEdit';
+import { useCurrentUser } from '../composables/useCurrentUser';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
-import { fetchCurrentUser } from '../api/users';
 import {
   createMarkdownRenderer,
   extractTitle,
@@ -13,6 +13,11 @@ import {
 } from '../lib/pageCommon';
 import { expandRenderMacros } from '../lib/macroEngine';
 import { renderMermaidBlocks } from '../lib/mermaidRenderer';
+import {
+  canSaveFromEdit,
+  canWriteAction,
+  isWriteActionDisabled,
+} from '../lib/readOnlyUi';
 
 const {
   pageId,
@@ -85,6 +90,7 @@ const {
   dismissAssetReplace,
   dismissError,
 } = usePageEdit();
+const { currentUser, isReadOnlyUser, loadCurrentUser } = useCurrentUser();
 
 const sidePanelCollapsed = ref(false);
 const settingsOpen = ref(false);
@@ -169,6 +175,15 @@ function updateScreenState(): void {
 const showEditorPanel = computed(() => isLargeScreen.value || !previewMode.value);
 const showPreviewPanel = computed(() => isLargeScreen.value || previewMode.value);
 const wikiTitle = getWikiTitle();
+const readOnlyAssetUploadDisabled = computed(
+  () => isWriteActionDisabled(isReadOnlyUser.value, assetUploadDisabled.value),
+);
+const canApplyTemplateForUser = computed(
+  () => canWriteAction(isReadOnlyUser.value, canApplyTemplate.value),
+);
+const canSaveForUser = computed(
+  () => canSaveFromEdit(isReadOnlyUser.value, canSave.value, isSaving.value),
+);
 
 async function renderPreviewMermaid(): Promise<void> {
   if (!renderedHtml.value) {
@@ -199,7 +214,11 @@ onMounted(async () => {
     await loadPage();
   }
   try {
-    const me = await fetchCurrentUser();
+    await loadCurrentUser();
+    const me = currentUser.value;
+    if (!me) {
+      throw new Error('current user missing');
+    }
     macroUserId.value = me.id;
     macroUserDisplayName.value = me.display_name;
   } catch {
@@ -313,7 +332,7 @@ const isGlobalDragging = ref(false);
 const globalDragDepth = ref(0);
 
 function openAssetPicker(): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   assetInputRef.value?.click();
@@ -328,7 +347,7 @@ function isFileDrag(event: DragEvent): boolean {
 }
 
 function handleAssetInputChange(event: Event): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   const input = event.target as HTMLInputElement;
@@ -340,7 +359,7 @@ function handleAssetInputChange(event: Event): void {
 }
 
 function handleAssetDragEnter(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -352,7 +371,7 @@ function handleAssetDragEnter(event: DragEvent): void {
 }
 
 function handleAssetDragOver(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -365,7 +384,7 @@ function handleAssetDragOver(event: DragEvent): void {
 }
 
 function handleAssetDragLeave(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -379,7 +398,7 @@ function handleAssetDragLeave(event: DragEvent): void {
 }
 
 function handleAssetDrop(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -399,7 +418,7 @@ function handleWindowDragOver(event: DragEvent): void {
   if (!isFileDrag(event)) {
     return;
   }
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   event.preventDefault();
@@ -413,7 +432,7 @@ function handleWindowDrop(event: DragEvent): void {
   event.preventDefault();
   globalDragDepth.value = 0;
   isGlobalDragging.value = false;
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   const fileList = event.dataTransfer?.files;
@@ -427,7 +446,7 @@ function handleWindowDragEnter(event: DragEvent): void {
   if (!isFileDrag(event)) {
     return;
   }
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   event.preventDefault();
@@ -439,7 +458,7 @@ function handleWindowDragLeave(event: DragEvent): void {
   if (!isFileDrag(event)) {
     return;
   }
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   event.preventDefault();
@@ -461,7 +480,7 @@ function buildAssetDownloadUrl(fileName: string): string {
 <template>
   <div class="min-h-screen bg-base-200 text-base-content" :data-theme="selectedTheme">
     <div
-      v-if="isGlobalDragging && assetUploadAllowed"
+      v-if="isGlobalDragging && assetUploadAllowed && !isReadOnlyUser"
       class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/80"
     >
       <div class="border-2 border-dashed border-info/70 bg-base-100/95 px-8 py-6">
@@ -505,7 +524,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           <button
             class="btn btn-link btn-sm pl-1 text-info"
             type="button"
-            :disabled="assetUploadDisabled"
+            :disabled="readOnlyAssetUploadDisabled"
             @click="openAssetPicker"
           >
             アセット追加
@@ -515,7 +534,7 @@ function buildAssetDownloadUrl(fileName: string): string {
             v-if="templateFeatureEnabled"
             class="btn btn-link btn-sm text-info"
             type="button"
-            :disabled="!canApplyTemplate"
+            :disabled="!canApplyTemplateForUser"
             @click="openTemplateModal"
           >
             テンプレート
@@ -524,7 +543,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           <button
             class="btn btn-link btn-sm text-info"
             type="button"
-            :disabled="!canSave || isSaving"
+            :disabled="!canSaveForUser"
             @click="savePage(sourceText)"
           >
             保存
@@ -751,6 +770,7 @@ function buildAssetDownloadUrl(fileName: string): string {
                   <button
                     class="link link-hover text-error"
                     type="button"
+                    :disabled="isWriteActionDisabled(isReadOnlyUser)"
                     @click="openAssetDeleteConfirm(asset)"
                   >
                     削除
@@ -873,7 +893,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           <button
             class="btn btn-primary"
             type="button"
-            :disabled="templateApplyLoading || !selectedTemplateId"
+            :disabled="isWriteActionDisabled(isReadOnlyUser, templateApplyLoading || !selectedTemplateId)"
             @click="applyTemplate"
           >
             適用
@@ -1041,7 +1061,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           <button
             class="btn btn-error"
             type="button"
-            :disabled="assetDeleteLoading"
+            :disabled="isWriteActionDisabled(isReadOnlyUser, assetDeleteLoading)"
             @click="confirmAssetDelete"
           >
             削除

@@ -14,7 +14,13 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
-use crate::database::types::{AssetId, Id, PageId, UserId};
+use crate::database::types::{
+    AssetId,
+    Id,
+    PageId,
+    UserAttributeSet,
+    UserId,
+};
 
 pub(crate) const EXPORT_FORMAT_VERSION: u64 = 1;
 
@@ -104,6 +110,8 @@ pub(crate) struct ExportUser {
     pub(crate) password: String,
     pub(crate) salt: [u8; 16],
     pub(crate) display_name: String,
+    #[serde(default, skip_serializing_if = "UserAttributeSet::is_empty")]
+    pub(crate) attributes: UserAttributeSet,
 }
 
 ///
@@ -237,5 +245,61 @@ impl ExportBundle {
         self.manifest.page_count = self.pages.len() as u64;
         self.manifest.revision_count = self.revisions.len() as u64;
         self.manifest.asset_count = self.assets.len() as u64;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExportUser;
+    use crate::database::types::{
+        UserAttribute,
+        UserAttributeSet,
+        UserId,
+    };
+
+    ///
+    /// users.jsonl の `attributes` 欠落を後方互換として空集合で読めることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test export_user_deserialize_accepts_missing_attributes -- --exact`
+    /// で実行する。
+    ///
+    #[test]
+    fn export_user_deserialize_accepts_missing_attributes() {
+        let json = r#"{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","username":"legacy","password":"hashed","salt":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"display_name":"Legacy User"}"#;
+        let user: ExportUser =
+            serde_json::from_str(json).expect("deserialize user failed");
+
+        assert!(user.attributes.is_empty());
+    }
+
+    ///
+    /// users.jsonl へ `ReadOnly` 属性を含めて直列化・復元できることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test export_user_serde_preserves_attributes -- --exact`
+    /// で実行する。
+    ///
+    #[test]
+    fn export_user_serde_preserves_attributes() {
+        let user = ExportUser {
+            id: UserId::new(),
+            username: "alice".to_string(),
+            password: "hashed".to_string(),
+            salt: [7u8; 16],
+            display_name: "Alice".to_string(),
+            attributes: UserAttributeSet::from_iter([
+                UserAttribute::NoBasicAuth,
+                UserAttribute::ReadOnly,
+            ]),
+        };
+
+        let json = serde_json::to_string(&user).expect("serialize user failed");
+        let decoded: ExportUser =
+            serde_json::from_str(&json).expect("deserialize user failed");
+
+        assert!(json.contains("\"attributes\""));
+        assert!(decoded.attributes.contains(UserAttribute::NoBasicAuth));
+        assert!(decoded.attributes.contains(UserAttribute::ReadOnly));
     }
 }

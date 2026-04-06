@@ -89,6 +89,11 @@ pub async fn get(
         "id": user_id,
         "username": user_info.username(),
         "display_name": user_info.display_name(),
+        "attributes": user_info
+            .attributes()
+            .iter()
+            .map(|attribute| attribute.as_str())
+            .collect::<Vec<_>>(),
         "timestamp": timestamp_iso,
     });
 

@@ -163,6 +163,15 @@ properties:
     description: >-
       ユーザの表示名が格納される
     type: "string"
+
+  attributes:
+    description: >-
+      ユーザ属性の配列が格納される。属性が無い場合は空配列とする。
+      後方互換のため省略を許容し、省略時も空配列として扱う。
+      初期実装では "NoBasicAuth" および "ReadOnly" を保持対象に含める。
+    type: "array"
+    items:
+      type: "string"
 ```
 
 ### ページ情報リスト

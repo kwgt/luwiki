@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue';
+import { useCurrentUser } from '../composables/useCurrentUser';
 import { usePageList } from '../composables/usePageList';
 import { useUiSettings } from '../composables/useUiSettings';
 import { getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
+import { isWriteActionDisabled } from '../lib/readOnlyUi';
 
 const { selectedTheme } = useUiSettings();
 
@@ -30,6 +32,7 @@ const {
   closeRestore,
   confirmRestore,
 } = usePageList();
+const { isReadOnlyUser, loadCurrentUser } = useCurrentUser();
 
 const pageTitle = computed(() => pagePath.value || '/');
 const pageIndexLabel = computed(() => `ページ ${currentIndex.value + 1}`);
@@ -76,6 +79,7 @@ function formatListTimestamp(raw: string): string {
 }
 
 onMounted(() => {
+  void loadCurrentUser();
   void loadPageList(true);
 });
 
@@ -167,6 +171,7 @@ watch(pageTitle, (value) => {
                     class="link link-hover text-error truncate"
                     type="button"
                     :title="item.path"
+                    :disabled="isWriteActionDisabled(isReadOnlyUser)"
                     @click="openRestore(item)"
                   >
                     {{ item.path }}
@@ -252,7 +257,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-primary"
             type="button"
-            :disabled="restoreInProgress || !!restoreInputError"
+            :disabled="isWriteActionDisabled(isReadOnlyUser, restoreInProgress || !!restoreInputError)"
             @click="confirmRestore"
           >
             復元

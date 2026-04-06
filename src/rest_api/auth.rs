@@ -25,7 +25,13 @@ use log::warn;
 use serde_json::json;
 
 use crate::auth::{AuthContext, AuthUser, authenticate_bearer_token};
-use crate::database::types::{BearerScope, BearerScopeSet, BearerTokenPlaintext, PathPrefixSet};
+use crate::database::types::{
+    BearerScope,
+    BearerScopeSet,
+    BearerTokenPlaintext,
+    PathPrefixSet,
+    UserAttribute,
+};
 use crate::http_server::app_state::AppState;
 
 use super::{BASIC_AUTH_REALM, CACHE_CONTROL_NO_STORE};
@@ -175,11 +181,33 @@ pub(crate) fn require_scope(
     auth: &AuthContext,
     required: BearerScope,
 ) -> Result<(), HttpResponse> {
+    /*
+     * ReadOnly による write 系操作拒否を先に判定する
+     */
+    if is_write_scope(required)
+        && auth.user_attributes().contains(UserAttribute::ReadOnly)
+    {
+        return Err(AuthErrorResponse::forbidden().error_response());
+    }
+
     if auth.scopes().allows(required) {
         return Ok(());
     }
 
     Err(AuthErrorResponse::forbidden().error_response())
+}
+
+///
+/// write 系スコープかどうかを返す
+///
+/// # 引数
+/// * `scope` - 判定対象スコープ
+///
+/// # 戻り値
+/// write 系スコープの場合は `true` を返す。
+///
+fn is_write_scope(scope: BearerScope) -> bool {
+    !matches!(scope, BearerScope::Read)
 }
 
 ///
@@ -357,10 +385,21 @@ async fn validate_basic_auth(
         return Err((AuthErrorResponse::unauthorized().into(), req));
     }
 
-    req.extensions_mut().insert(AuthContext::new(
+    let user_info = match state.db().get_user_info_by_name(&username) {
+        Ok(Some(user_info)) => user_info,
+        Ok(None) => {
+            return Err((ErrorInternalServerError("user not found"), req));
+        }
+        Err(_) => {
+            return Err((ErrorInternalServerError("auth failed"), req));
+        }
+    };
+
+    req.extensions_mut().insert(AuthContext::new_with_attributes(
         AuthUser::new(username),
         BearerScopeSet::all(),
         PathPrefixSet::new(),
+        user_info.attributes(),
         None,
     ));
 

@@ -70,6 +70,19 @@ impl McpError {
     }
 
     ///
+    /// ReadOnly 属性による認可拒否エラーを生成する
+    ///
+    /// # 戻り値
+    /// `forbidden` として公開する認可拒否エラーを返す。
+    ///
+    pub(crate) fn forbidden_read_only() -> Self {
+        Self::new(
+            McpErrorCode::Forbidden,
+            "read only denied: write operation is not allowed",
+        )
+    }
+
+    ///
     /// 論理エラーコードへのアクセサ
     ///
     /// # 戻り値

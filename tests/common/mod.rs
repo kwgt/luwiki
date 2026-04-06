@@ -169,13 +169,44 @@ pub fn run_add_user_with_credentials(
     user_name: &str,
     password: &str,
 ) {
+    run_add_user_with_credentials_and_attributes(
+        db_path,
+        assets_dir,
+        user_name,
+        password,
+        &[],
+    );
+}
+
+///
+/// 任意の資格情報と属性でテスト用ユーザを追加する
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `user_name` - ユーザ名
+/// * `password` - パスワード
+/// * `attributes` - CLI 属性指定群
+///
+/// # 戻り値
+/// なし
+///
+#[allow(dead_code)]
+pub fn run_add_user_with_credentials_and_attributes(
+    db_path: &Path,
+    assets_dir: &Path,
+    user_name: &str,
+    password: &str,
+    attributes: &[&str],
+) {
     /*
      * CLI起動
      */
     let exe = test_binary_path();
     let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
-    let mut child = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .env("XDG_CONFIG_HOME", base_dir)
         .env("XDG_DATA_HOME", base_dir)
         .arg("--db-path")
@@ -185,7 +216,13 @@ pub fn run_add_user_with_credentials(
         .arg("--fts-index")
         .arg(fts_index)
         .arg("user")
-        .arg("add")
+        .arg("add");
+
+    for attribute in attributes {
+        command.arg("--attribute").arg(attribute);
+    }
+
+    let mut child = command
         .arg(user_name)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -226,6 +263,28 @@ pub fn run_create_token(
     assets_dir: &Path,
     scope: &str,
 ) -> String {
+    run_create_token_for_user(db_path, assets_dir, scope, TEST_USERNAME)
+}
+
+///
+/// 指定ユーザ向けにテスト用 Bearer トークンを発行する
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `scope` - `token create --scope` に渡す文字列
+/// * `user_name` - トークン発行対象ユーザ
+///
+/// # 戻り値
+/// 発行された Bearer トークン平文
+///
+#[allow(dead_code)]
+pub fn run_create_token_for_user(
+    db_path: &Path,
+    assets_dir: &Path,
+    scope: &str,
+    user_name: &str,
+) -> String {
     /*
      * CLI起動
      */
@@ -245,7 +304,7 @@ pub fn run_create_token(
         .arg("create")
         .arg("--scope")
         .arg(scope)
-        .arg(TEST_USERNAME)
+        .arg(user_name)
         .stdin(Stdio::null())
         .output()
         .expect("spawn token create failed");
@@ -261,11 +320,23 @@ pub fn run_create_token(
 
     let stdout =
         String::from_utf8(output.stdout).expect("token create stdout decode failed");
-    stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("token: "))
-        .map(str::to_string)
-        .expect("created token missing")
+    let mut lines = stdout.lines();
+    while let Some(line) = lines.next() {
+        if let Some(value) = line.strip_prefix("token: ") {
+            return value.to_string();
+        }
+
+        if line.trim() == "TOKEN VALUE:" {
+            return lines
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .expect("created token missing");
+        }
+    }
+
+    panic!("created token missing");
 }
 
 ///

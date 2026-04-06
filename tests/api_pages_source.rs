@@ -317,6 +317,90 @@ fn put_page_source_enforces_bearer_read_and_write_scopes() {
 }
 
 #[test]
+/// PUT: ReadOnly な Basic ユーザは更新できないことを確認する。
+fn put_page_source_rejects_read_only_basic_user() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    run_add_user_with_credentials_and_attributes(
+        &db_path,
+        &assets_dir,
+        "readonly_user",
+        "readonly-pass",
+        &["read_only"],
+    );
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-readonly-basic", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let response = client
+        .put(&url)
+        .basic_auth("readonly_user", Some("readonly-pass"))
+        .header("Content-Type", "text/markdown")
+        .body("readonly should fail".to_string())
+        .send()
+        .expect("put source with readonly basic failed");
+
+    assert_eq!(response.status().as_u16(), 403);
+    assert_eq!(
+        response.text().expect("read forbidden body failed"),
+        r#"{"reason":"forbidden"}"#
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT: ReadOnly な Bearer ユーザは write スコープを持っていても更新できないことを確認する。
+fn put_page_source_rejects_read_only_bearer_user() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    run_add_user_with_credentials_and_attributes(
+        &db_path,
+        &assets_dir,
+        "readonly_user",
+        "readonly-pass",
+        &["read_only"],
+    );
+    let readonly_write_token = run_create_token_for_user(
+        &db_path,
+        &assets_dir,
+        "write",
+        "readonly_user",
+    );
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-readonly-bearer", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let response = client
+        .put(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", readonly_write_token))
+        .header("Content-Type", "text/markdown")
+        .body("readonly should fail".to_string())
+        .send()
+        .expect("put source with readonly bearer failed");
+
+    assert_eq!(response.status().as_u16(), 403);
+    assert_eq!(
+        response.text().expect("read forbidden body failed"),
+        r#"{"reason":"forbidden"}"#
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 /// PUT: amend=true で同一リビジョン更新になることを確認する。
 fn put_page_source_amend_updates_latest_without_revision() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();

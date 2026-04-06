@@ -307,7 +307,13 @@ mod tests {
 
     use super::apply_import;
     use crate::database::DatabaseManager;
-    use crate::database::types::{AssetId, PageId, UserId};
+    use crate::database::types::{
+        AssetId,
+        PageId,
+        UserAttribute,
+        UserAttributeSet,
+        UserId,
+    };
     use crate::export_import::model::{
         ExportActiveRename,
         ExportAsset,
@@ -460,6 +466,9 @@ mod tests {
                 password: "hashed".to_string(),
                 salt: [1u8; 16],
                 display_name: "Import User".to_string(),
+                attributes: UserAttributeSet::from_iter([
+                    UserAttribute::ReadOnly,
+                ]),
             }],
             pages: vec![ExportPage {
                 id: page_id.clone(),
@@ -519,6 +528,9 @@ mod tests {
                 password: "hashed".to_string(),
                 salt: [2u8; 16],
                 display_name: "Bundle User".to_string(),
+                attributes: UserAttributeSet::from_iter([
+                    UserAttribute::ReadOnly,
+                ]),
             }],
             pages: vec![ExportPage {
                 id: page_id.clone(),
@@ -584,5 +596,41 @@ mod tests {
             .as_nanos();
         let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
         format!("{}-{}-{}", pid, now, seq)
+    }
+
+    ///
+    /// import 適用時にユーザ属性が DB へ保持されることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test apply_import_preserves_user_attributes -- --exact`
+    /// で実行する。
+    ///
+    #[test]
+    fn apply_import_preserves_user_attributes() {
+        let (base_dir, db_path, asset_path) = prepare_test_dirs();
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        let bundle = build_backup_bundle();
+        let validated = super::super::validate::ValidatedImportBundle {
+            bundle,
+            link_plan: None,
+            warnings: Vec::new(),
+        };
+
+        apply_import(
+            &manager,
+            &ExportImportPolicy::backup(),
+            &[],
+            validated,
+        )
+        .expect("apply import failed");
+
+        let user = manager
+            .get_user_info_by_name("import-user")
+            .expect("get user failed")
+            .expect("user not found");
+        assert!(user.attributes().contains(UserAttribute::ReadOnly));
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
     }
 }

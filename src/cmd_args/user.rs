@@ -469,6 +469,7 @@ fn parse_user_attributes(raw_attributes: &[String]) -> Result<UserAttributeSet> 
 fn parse_user_attribute(raw_attribute: &str) -> Result<UserAttribute> {
     match raw_attribute {
         "no_basic_auth" => Ok(UserAttribute::NoBasicAuth),
+        "read_only" => Ok(UserAttribute::ReadOnly),
         "" => Err(anyhow!("attribute must not be empty")),
         _ => Err(anyhow!("invalid user attribute: {}", raw_attribute)),
     }
@@ -480,7 +481,7 @@ mod tests {
 
     #[test]
     ///
-    /// `user add` の属性指定が `NoBasicAuth` へ変換されることを確認
+    /// `user add` の属性指定が `NoBasicAuth` と `ReadOnly` へ変換されることを確認
     ///
     /// # 注記
     /// 複数指定と重複除去の両方を一度に検証する。
@@ -490,6 +491,7 @@ mod tests {
             display_name: None,
             attributes: vec![
                 "no_basic_auth".to_string(),
+                "read_only".to_string(),
                 "no_basic_auth".to_string(),
             ],
             user_name: "alice".to_string(),
@@ -497,6 +499,7 @@ mod tests {
 
         let attributes = opts.attributes().expect("attributes parse failed");
         assert!(attributes.contains(UserAttribute::NoBasicAuth));
+        assert!(attributes.contains(UserAttribute::ReadOnly));
     }
 
     #[test]

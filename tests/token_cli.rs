@@ -1299,6 +1299,30 @@ fn user_add_with_no_basic_auth_succeeds_without_password_prompt() {
 }
 
 #[test]
+fn user_add_with_read_only_persists_attribute() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let output = build_base_command(&db_path, &assets_dir)
+        .arg("user")
+        .arg("add")
+        .arg("--attribute")
+        .arg("read_only")
+        .arg("readonly_user")
+        .output()
+        .expect("user add failed");
+
+    assert!(output.status.success());
+    let info_output = run_user_info(&db_path, &assets_dir, "readonly_user");
+    assert!(info_output.status.success());
+    let stdout =
+        String::from_utf8(info_output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains("USERNAME:     readonly_user"));
+    assert!(stdout.contains("ATTRIBUTES:\n    - ReadOnly"));
+    assert!(stdout.contains("BASIC AUTH:   allowed"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 fn user_add_rejects_invalid_attribute() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
     let output = build_base_command(&db_path, &assets_dir)
@@ -1342,6 +1366,73 @@ fn user_edit_can_add_no_basic_auth_and_user_info_reflects_it() {
     assert!(stdout.contains("DISPLAY NAME: updated-user"));
     assert!(stdout.contains("ATTRIBUTES:\n    - NoBasicAuth"));
     assert!(stdout.contains("BASIC AUTH:   denied"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_edit_can_add_and_remove_read_only() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+
+    let add_output = run_user_edit_with_input(
+        &db_path,
+        &assets_dir,
+        &["--add-attribute", "read_only", TEST_USERNAME],
+        None,
+    );
+    assert!(add_output.status.success());
+
+    let add_info_output = run_user_info(&db_path, &assets_dir, TEST_USERNAME);
+    assert!(add_info_output.status.success());
+    let add_stdout = String::from_utf8(add_info_output.stdout)
+        .expect("stdout decode failed");
+    assert!(add_stdout.contains("ATTRIBUTES:\n    - ReadOnly"));
+
+    let remove_output = run_user_edit_with_input(
+        &db_path,
+        &assets_dir,
+        &["--remove-attribute", "read_only", TEST_USERNAME],
+        None,
+    );
+    assert!(remove_output.status.success());
+
+    let remove_info_output =
+        run_user_info(&db_path, &assets_dir, TEST_USERNAME);
+    assert!(remove_info_output.status.success());
+    let remove_stdout = String::from_utf8(remove_info_output.stdout)
+        .expect("stdout decode failed");
+    assert!(remove_stdout.contains("ATTRIBUTES:\n    - none"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+fn user_edit_clear_attributes_removes_read_only() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let add_output = build_base_command(&db_path, &assets_dir)
+        .arg("user")
+        .arg("add")
+        .arg("--attribute")
+        .arg("read_only")
+        .arg(TEST_USERNAME)
+        .output()
+        .expect("user add failed");
+    assert!(add_output.status.success());
+
+    let clear_output = run_user_edit_with_input(
+        &db_path,
+        &assets_dir,
+        &["--clear-attributes", TEST_USERNAME],
+        None,
+    );
+    assert!(clear_output.status.success());
+
+    let info_output = run_user_info(&db_path, &assets_dir, TEST_USERNAME);
+    assert!(info_output.status.success());
+    let stdout =
+        String::from_utf8(info_output.stdout).expect("stdout decode failed");
+    assert!(stdout.contains("ATTRIBUTES:\n    - none"));
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

@@ -17,6 +17,7 @@ use crate::database::types::{
     BearerTokenPlaintext,
     PathPrefixSet,
     TokenId,
+    UserAttributeSet,
 };
 
 ///
@@ -36,6 +37,7 @@ pub(crate) struct AuthContext {
     user: AuthUser,
     scopes: BearerScopeSet,
     path_prefixes: PathPrefixSet,
+    user_attributes: UserAttributeSet,
     token_id: Option<TokenId>,
 }
 
@@ -93,10 +95,40 @@ impl AuthContext {
         path_prefixes: PathPrefixSet,
         token_id: Option<TokenId>,
     ) -> Self {
+        Self::new_with_attributes(
+            user,
+            scopes,
+            path_prefixes,
+            UserAttributeSet::new(),
+            token_id,
+        )
+    }
+
+    ///
+    /// ユーザ属性付き認証文脈の生成
+    ///
+    /// # 引数
+    /// * `user` - 認証済みユーザ
+    /// * `scopes` - 付与スコープ集合
+    /// * `path_prefixes` - path prefix 制約集合
+    /// * `user_attributes` - ユーザ属性集合
+    /// * `token_id` - BearerトークンID
+    ///
+    /// # 戻り値
+    /// 生成した認証文脈を返す。
+    ///
+    pub(crate) fn new_with_attributes(
+        user: AuthUser,
+        scopes: BearerScopeSet,
+        path_prefixes: PathPrefixSet,
+        user_attributes: UserAttributeSet,
+        token_id: Option<TokenId>,
+    ) -> Self {
         Self {
             user,
             scopes,
             path_prefixes,
+            user_attributes,
             token_id,
         }
     }
@@ -139,6 +171,16 @@ impl AuthContext {
     ///
     pub(crate) fn path_prefixes(&self) -> &PathPrefixSet {
         &self.path_prefixes
+    }
+
+    ///
+    /// ユーザ属性集合へのアクセサ
+    ///
+    /// # 戻り値
+    /// 認証文脈が保持するユーザ属性集合を返す。
+    ///
+    pub(crate) fn user_attributes(&self) -> &UserAttributeSet {
+        &self.user_attributes
     }
 
     ///
@@ -223,12 +265,95 @@ pub(crate) fn authenticate_bearer_token(
     let token_id = token_info.token_id();
     let updated_expire_at =
         db.extend_bearer_token_ttl_if_needed(&token_id, now)?;
-    let auth = AuthContext::new(
+    let auth = AuthContext::new_with_attributes(
         AuthUser::new(user_info.username()),
         token_info.scopes(),
         token_info.path_prefixes(),
+        user_info.attributes(),
         Some(token_id),
     );
 
     Ok(Ok(BearerAuthSuccess::new(auth, updated_expire_at)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use chrono::Local;
+
+    use super::*;
+    use crate::database::types::{
+        BearerScope,
+        PathPrefixSet,
+        UserAttribute,
+        UserAttributeSet,
+    };
+
+    ///
+    /// Bearer 認証成功時に `ReadOnly` 属性が認証文脈へ引き継がれることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test authenticate_bearer_token_propagates_user_attributes -- --exact`
+    /// で実行する。
+    ///
+    #[test]
+    fn authenticate_bearer_token_propagates_user_attributes() {
+        let (base_dir, db_path) = prepare_test_dirs();
+        let asset_path = base_dir.join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user_with_attributes(
+                "alice",
+                Some("password123"),
+                None,
+                UserAttributeSet::from_iter([
+                    UserAttribute::NoBasicAuth,
+                    UserAttribute::ReadOnly,
+                ]),
+            )
+            .expect("add user failed");
+        let (token, token_info) = manager
+            .create_bearer_token(
+                "alice",
+                BearerScopeSet::from_iter([BearerScope::Read]),
+                PathPrefixSet::new(),
+                chrono::Duration::minutes(30),
+                Some("auth test token".to_string()),
+            )
+            .expect("create bearer token failed");
+
+        let success = authenticate_bearer_token(&manager, &token, Local::now())
+            .expect("authenticate failed")
+            .expect("bearer auth must succeed");
+        let auth = success.auth();
+
+        assert_eq!(auth.user_id(), "alice");
+        assert!(auth.user_attributes().contains(UserAttribute::NoBasicAuth));
+        assert!(auth.user_attributes().contains(UserAttribute::ReadOnly));
+        assert_eq!(
+            auth.token_id().expect("missing token id").to_string(),
+            token_info.token_id().to_string(),
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    fn prepare_test_dirs() -> (PathBuf, PathBuf) {
+        let base = Path::new("tests").join("tmp").join(unique_suffix());
+        fs::create_dir_all(&base).expect("create test dir failed");
+        let db_path = base.join("database.redb");
+        (base, db_path)
+    }
+
+    fn unique_suffix() -> String {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        format!("auth-{}-{}", std::process::id(), timestamp)
+    }
 }

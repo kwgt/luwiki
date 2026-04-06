@@ -426,6 +426,9 @@ export function toErrorMessage(err: unknown): string {
       423: 'ページがロックされています',
       500: 'サーバ内でエラーが発生しました',
     };
+    if (status === 403 && reason === 'forbidden') {
+      return 'ReadOnly ユーザのため書き込み操作はできません';
+    }
     if (typeof reason === 'string' && reason.trim().length > 0) {
       return reason;
     }
@@ -467,6 +470,16 @@ export function toErrorMessage(err: unknown): string {
       423: 'ページがロックされています',
       500: 'サーバ内でエラーが発生しました',
     };
+    if (status === 403) {
+      const reason = (
+        data && typeof data === 'object' && 'reason' in data
+          ? (data as { reason?: unknown }).reason
+          : undefined
+      );
+      if (reason === 'forbidden') {
+        return 'ReadOnly ユーザのため書き込み操作はできません';
+      }
+    }
     if (status && statusMessageMap[status]) {
       return statusMessageMap[status];
     }

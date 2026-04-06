@@ -214,9 +214,15 @@ luwiki [OPTIONS] user add [Option] <USER-NAME>
 | オプション | 意味 | デフォルト値
 |:--|:--|:--
 | `-d`, `--display-name <NAME>` | 表示名の指定 |
+|       `--attribute <ATTRIBUTE>` | 初期ユーザ属性の指定 |
  
 #### 概要
 引数 `USER-NAME` で指定されたユーザ名でユーザ登録を行う。このコマンドを実行するとパスワード登録用のプロンプトが表示され、パスワード入力が求められる。入力されたパスワードに問題が無ければユーザの登録が行われる。
+
+`--attribute` を指定した場合は、作成時にユーザ属性を付与する。複数指定を許可する。初期実装では以下を指定可能。
+
+  - `no_basic_auth`
+  - `read_only`
 
 同名のユーザが既に登録されていた場合はエラーとする。
 
@@ -248,6 +254,9 @@ luwiki [OPTIONS] user edit <USER-NAME>
 |:--|:--|:--
 | `-d`, `--display-name <NEW-NAME>` | 表示名の指定 |
 | `-p`, `--password` | パスワードの指定 |
+|       `--add-attribute <ATTRIBUTE>` | ユーザ属性の追加 |
+|       `--remove-attribute <ATTRIBUTE>` | ユーザ属性の削除 |
+|       `--clear-attributes` | ユーザ属性の全消去 |
  
 #### 概要
 引数 `USER-NAME` で指定されたユーザ名のユーザ情報を変更する。
@@ -256,7 +265,16 @@ luwiki [OPTIONS] user edit <USER-NAME>
 
 `--password`オプションが指定された場合はパスワード入力用プロンプトを表示しユーザに新パスワードの入力を促し、その入力内容でパスワードの更新を行う。
 
-`--display-name`, `--password`オプションのいずれも指定されなかった場合はエラーとなる。
+`--add-attribute` と `--remove-attribute` には複数指定を許可する。初期実装では以下を指定可能。
+
+  - `no_basic_auth`
+  - `read_only`
+
+`--clear-attributes` が指定された場合は、既存属性を一旦すべて取り除いた上で、`--add-attribute` による追加を適用する。
+
+ユーザ属性の追加・削除は本コマンドで行う。`user add_attr` や `user remove_attr` のような専用コマンドは導入しない。
+
+`--display-name`, `--password`, `--add-attribute`, `--remove-attribute`, `--clear-attributes` のいずれも指定されなかった場合はエラーとなる。
 
 同名のユーザが登録されていない場合はエラーとする。
 
@@ -312,7 +330,7 @@ luwiki [OPTIONS] user info <USER-NAME>
 
 `BASIC AUTH` は `allowed` または `denied` を表示する。
 
-`ATTRIBUTES:` には表示上の正式名称を用いる。初期実装では `NoBasicAuth` を表示対象に含める。
+`ATTRIBUTES:` には表示上の正式名称を用いる。初期実装では `NoBasicAuth` および `ReadOnly` を表示対象に含める。
 属性が存在しない場合は `- none` を表示する。
 
 以下の場合はエラーとする。

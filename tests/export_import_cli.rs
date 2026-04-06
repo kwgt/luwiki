@@ -194,6 +194,73 @@ fn migrate_export_import_cli_relocates_and_cleans_source_tree() {
     fs::remove_dir_all(dst_base_dir).expect("destination cleanup failed");
 }
 
+#[test]
+///
+/// backup export/import で `ReadOnly` 属性が保持されることを確認する。
+///
+/// # 注記
+/// 1) `ReadOnly` 属性付きユーザを元DBへ作成する
+/// 2) CLI で backup export / import を実行する
+/// 3) import 先で `user info` を実行し属性表示を確認する
+///
+fn backup_export_import_cli_preserves_read_only_user_attributes() {
+    /*
+     * 元データを準備する
+     */
+    let (src_base_dir, src_db_path, src_assets_dir) = prepare_test_dirs();
+    run_add_user(&src_db_path, &src_assets_dir);
+    run_add_user_with_credentials_and_attributes(
+        &src_db_path,
+        &src_assets_dir,
+        "readonly_user",
+        "readonly-pass",
+        &["read_only"],
+    );
+    let markdown_path = src_base_dir.join("readonly-user.md");
+    fs::write(&markdown_path, "# readonly export source\n")
+        .expect("write readonly markdown failed");
+    run_page_add_as_user(
+        &src_db_path,
+        &src_assets_dir,
+        "readonly_user",
+        &markdown_path,
+        "/backup/readonly-user",
+    );
+
+    /*
+     * backup export / import を実行する
+     */
+    let archive_path = src_base_dir.join("backup-readonly.zip");
+    let export_output = run_export(
+        &src_db_path,
+        &src_assets_dir,
+        None,
+        &archive_path,
+    );
+    assert!(export_output.contains("export completed: type=backup"));
+
+    let (dst_base_dir, dst_db_path, dst_assets_dir) = prepare_test_dirs();
+    let import_output = run_import(
+        &dst_db_path,
+        &dst_assets_dir,
+        None,
+        &archive_path,
+    );
+    assert!(import_output.contains("import completed: type=backup"));
+
+    /*
+     * import 先の属性表示を確認する
+     */
+    let user_info =
+        run_user_info(&dst_db_path, &dst_assets_dir, "readonly_user");
+    assert!(user_info.contains("USERNAME:     readonly_user"));
+    assert!(user_info.contains("ATTRIBUTES:\n    - ReadOnly"));
+    assert!(user_info.contains("BASIC AUTH:   allowed"));
+
+    fs::remove_dir_all(src_base_dir).expect("source cleanup failed");
+    fs::remove_dir_all(dst_base_dir).expect("destination cleanup failed");
+}
+
 ///
 /// ページを作成する。
 ///
@@ -531,6 +598,70 @@ fn run_cli_command(
     }
 
     String::from_utf8(output.stdout).expect("stdout decode failed")
+}
+
+///
+/// user info コマンドを実行する。
+///
+/// # 引数
+/// * `db_path` - DB パス
+/// * `assets_dir` - アセットディレクトリ
+/// * `user_name` - 対象ユーザ名
+///
+/// # 戻り値
+/// 標準出力文字列を返す。
+///
+fn run_user_info(db_path: &Path, assets_dir: &Path, user_name: &str) -> String {
+    run_cli_command(db_path, assets_dir, &["user", "info", user_name])
+}
+
+///
+/// page add を指定ユーザで実行する。
+///
+/// # 引数
+/// * `db_path` - DB パス
+/// * `assets_dir` - アセットディレクトリ
+/// * `user_name` - 作成者ユーザ名
+/// * `file_path` - 取り込む Markdown ファイル
+/// * `page_path` - 作成先ページパス
+///
+/// # 戻り値
+/// 標準出力文字列を返す。
+///
+fn run_page_add_as_user(
+    db_path: &Path,
+    assets_dir: &Path,
+    user_name: &str,
+    file_path: &Path,
+    page_path: &str,
+) -> String {
+    let exe = test_binary_path();
+    let base_dir = db_path.parent().expect("db_path parent missing");
+    let output = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
+        .arg("--db-path")
+        .arg(db_path)
+        .arg("--assets-path")
+        .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index_path(db_path))
+        .arg("page")
+        .arg("add")
+        .arg("--user")
+        .arg(user_name)
+        .arg(file_path)
+        .arg(page_path)
+        .output()
+        .expect("page add failed");
+
+    assert!(
+        output.status.success(),
+        "page add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8(output.stdout).expect("page add stdout decode failed")
 }
 
 ///

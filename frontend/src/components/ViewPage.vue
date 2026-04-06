@@ -2,10 +2,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RevisionRenameInfo } from '../api/pages';
 import { usePageView } from '../composables/usePageView';
+import { useCurrentUser } from '../composables/useCurrentUser';
 import { useUiSettings } from '../composables/useUiSettings';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
 import { renderMermaidBlocks } from '../lib/mermaidRenderer';
 import { getWikiTitle } from '../lib/pageCommon';
+import {
+  canCreatePageFromView,
+  canDeletePageFromView,
+  canEditPageFromView,
+  canMovePageFromView,
+  isWriteActionDisabled,
+} from '../lib/readOnlyUi';
 
 const {
   pageId,
@@ -83,6 +91,7 @@ const {
   reportError,
   dismissError,
 } = usePageView();
+const { isReadOnlyUser, loadCurrentUser } = useCurrentUser();
 
 const {
   themeOptions,
@@ -139,15 +148,41 @@ const breadcrumbItems = computed(() => {
 const editUrl = computed(() => buildEditUrl(pagePath.value));
 const revisionUrl = computed(() => buildRevisionUrl(pagePath.value));
 const pageListUrl = computed(() => buildPageListUrl(pagePath.value));
+const canEditPage = computed(() =>
+  canEditPageFromView(
+    isReadOnlyUser.value,
+    interactionDisabled.value,
+    isLocking.value,
+    tabIdReady.value,
+  ),
+);
 const canDeletePage = computed(
-  () => !interactionDisabled.value
-    && !pageMeta.value?.page_info.deleted
-    && (pagePath.value || '/') !== '/',
+  () => canDeletePageFromView({
+    interactionDisabled: interactionDisabled.value,
+    isDeleted: pageMeta.value?.page_info.deleted ?? false,
+    isReadOnlyUser: isReadOnlyUser.value,
+    isRootPage: (pagePath.value || '/') === '/',
+    tabIdReady: tabIdReady.value,
+  }),
 );
 const canMovePage = computed(
-  () => !interactionDisabled.value
-    && !pageMeta.value?.page_info.deleted
-    && (pagePath.value || '/') !== '/',
+  () => canMovePageFromView({
+    interactionDisabled: interactionDisabled.value,
+    isDeleted: pageMeta.value?.page_info.deleted ?? false,
+    isReadOnlyUser: isReadOnlyUser.value,
+    isRootPage: (pagePath.value || '/') === '/',
+    tabIdReady: tabIdReady.value,
+  }),
+);
+const canCreatePage = computed(
+  () => canCreatePageFromView({
+    interactionDisabled: interactionDisabled.value,
+    isReadOnlyUser: isReadOnlyUser.value,
+    tabIdReady: tabIdReady.value,
+  }),
+);
+const readOnlyAssetUploadDisabled = computed(
+  () => isWriteActionDisabled(isReadOnlyUser.value, assetUploadDisabled.value),
 );
 const pageMetaRenameInfo = computed<RevisionRenameInfo | null>(
   () => pageMeta.value?.revision_info?.rename_info ?? null,
@@ -195,7 +230,7 @@ function toggleSidePanel(): void {
 }
 
 function openAssetPicker(): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   assetInputRef.value?.click();
@@ -210,7 +245,7 @@ function isFileDrag(event: DragEvent): boolean {
 }
 
 function handleAssetInputChange(event: Event): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   const input = event.target as HTMLInputElement;
@@ -222,7 +257,7 @@ function handleAssetInputChange(event: Event): void {
 }
 
 function handleAssetDragEnter(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -234,7 +269,7 @@ function handleAssetDragEnter(event: DragEvent): void {
 }
 
 function handleAssetDragOver(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -247,7 +282,7 @@ function handleAssetDragOver(event: DragEvent): void {
 }
 
 function handleAssetDragLeave(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -261,7 +296,7 @@ function handleAssetDragLeave(event: DragEvent): void {
 }
 
 function handleAssetDrop(event: DragEvent): void {
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   if (!isFileDrag(event)) {
@@ -289,7 +324,7 @@ function handleWindowDragOver(event: DragEvent): void {
   if (!isFileDrag(event)) {
     return;
   }
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   event.preventDefault();
@@ -303,7 +338,7 @@ function handleWindowDrop(event: DragEvent): void {
   event.preventDefault();
   globalDragDepth.value = 0;
   isGlobalDragging.value = false;
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   const fileList = event.dataTransfer?.files;
@@ -317,7 +352,7 @@ function handleWindowDragEnter(event: DragEvent): void {
   if (!isFileDrag(event)) {
     return;
   }
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   event.preventDefault();
@@ -329,7 +364,7 @@ function handleWindowDragLeave(event: DragEvent): void {
   if (!isFileDrag(event)) {
     return;
   }
-  if (assetUploadDisabled.value) {
+  if (readOnlyAssetUploadDisabled.value) {
     return;
   }
   event.preventDefault();
@@ -385,7 +420,12 @@ function buildPageListUrl(currentPath: string): string {
 }
 
 async function handleEditClick(): Promise<void> {
-  if (interactionDisabled.value || isLocking.value || !tabIdReady.value) {
+  if (
+    isReadOnlyUser.value
+    || interactionDisabled.value
+    || isLocking.value
+    || !tabIdReady.value
+  ) {
     return;
   }
 
@@ -416,6 +456,7 @@ onMounted(() => {
   if (savedCollapsed === '1') {
     sidePanelCollapsed.value = true;
   }
+  void loadCurrentUser();
   void initTabId();
   void loadPage();
 
@@ -498,7 +539,7 @@ watch(pageTitle, (value) => {
 <template>
   <div class="min-h-screen bg-base-200 text-base-content" :data-theme="selectedTheme">
     <div
-      v-if="isGlobalDragging && assetUploadAllowed"
+      v-if="isGlobalDragging && assetUploadAllowed && !isReadOnlyUser"
       class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/80"
     >
       <div class="border-2 border-dashed border-info/70 bg-base-100/95 px-8 py-6">
@@ -545,7 +586,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-link btn-sm pl-1 text-info"
             type="button"
-            :disabled="interactionDisabled || isLocking || !tabIdReady"
+            :disabled="!canEditPage"
             @click="handleEditClick"
           >
             編集
@@ -553,7 +594,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-link btn-sm text-info"
             type="button"
-            :disabled="assetUploadDisabled"
+            :disabled="readOnlyAssetUploadDisabled"
             @click="openAssetPicker"
           >
             アセット追加
@@ -582,7 +623,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-link btn-sm text-info ml-auto"
             type="button"
-            :disabled="interactionDisabled || !tabIdReady"
+            :disabled="!canCreatePage"
             @click="openPageCreateConfirm"
           >
             新規作成
@@ -755,6 +796,7 @@ watch(pageTitle, (value) => {
                   <button
                     class="link link-hover text-error"
                     type="button"
+                    :disabled="isWriteActionDisabled(isReadOnlyUser)"
                     @click="openAssetDeleteConfirm(asset)"
                   >
                     削除
@@ -936,7 +978,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-error"
             type="button"
-            :disabled="assetDeleteLoading"
+            :disabled="isWriteActionDisabled(isReadOnlyUser, assetDeleteLoading)"
             @click="confirmAssetDelete"
           >
             削除
@@ -989,7 +1031,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-error"
             type="button"
-            :disabled="pageDeleteLoading"
+            :disabled="isWriteActionDisabled(isReadOnlyUser, pageDeleteLoading)"
             @click="confirmPageDelete"
           >
             削除
@@ -1054,7 +1096,7 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-primary"
             type="button"
-            :disabled="pageMoveLoading || !!pageMoveInputError"
+            :disabled="isWriteActionDisabled(isReadOnlyUser, pageMoveLoading || !!pageMoveInputError)"
             @click="confirmPageMove"
           >
             移動
@@ -1111,7 +1153,10 @@ watch(pageTitle, (value) => {
           <button
             class="btn btn-primary"
             type="button"
-            :disabled="pageCreateLoading || !!pageCreateInputError || !!pageCreateError || !pageCreatePreviewPath"
+            :disabled="isWriteActionDisabled(
+              isReadOnlyUser,
+              pageCreateLoading || !!pageCreateInputError || !!pageCreateError || !pageCreatePreviewPath,
+            )"
             @click="confirmPageCreate"
           >
             作成

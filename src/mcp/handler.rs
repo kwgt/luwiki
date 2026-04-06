@@ -1164,6 +1164,11 @@ fn audit_result_from_error(error: &McpError) -> AuditResult {
                 .starts_with("path prefix denied:")
             {
                 AuditResult::PathPrefixDenied
+            } else if error
+                .message()
+                .starts_with("read only denied:")
+            {
+                AuditResult::ReadOnlyDenied
             } else {
                 AuditResult::Unsupported
             }
@@ -1199,7 +1204,8 @@ mod tests {
     /// 認可失敗のメッセージから監査結果分類を判定できることを確認する。
     ///
     /// 注記:
-    /// scope 不足、path prefix 制約違反、その他 forbidden を個別に与える。
+    /// scope 不足、path prefix 制約違反、ReadOnly 拒否、
+    /// その他 forbidden を個別に与える。
     ///
     #[test]
     fn audit_result_from_error_distinguishes_authorization_failure_kind() {
@@ -1210,6 +1216,10 @@ mod tests {
         let prefix_denied = McpError::new(
             McpErrorCode::Forbidden,
             "path prefix denied: /private",
+        );
+        let read_only_denied = McpError::new(
+            McpErrorCode::Forbidden,
+            "read only denied: write operation is not allowed",
         );
         let root_denied = McpError::new(
             McpErrorCode::Forbidden,
@@ -1223,6 +1233,10 @@ mod tests {
         assert_eq!(
             audit_result_from_error(&prefix_denied),
             AuditResult::PathPrefixDenied
+        );
+        assert_eq!(
+            audit_result_from_error(&read_only_denied),
+            AuditResult::ReadOnlyDenied
         );
         assert_eq!(
             audit_result_from_error(&root_denied),

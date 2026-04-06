@@ -395,6 +395,7 @@ mod tests {
                 None,
                 crate::database::types::UserAttributeSet::from_iter([
                     crate::database::types::UserAttribute::NoBasicAuth,
+                    crate::database::types::UserAttribute::ReadOnly,
                 ]),
             )
             .expect("add restricted user failed");
@@ -424,6 +425,12 @@ mod tests {
 
         assert_eq!(auth.user_id(), "alice");
         assert!(auth.scopes().contains(BearerScope::Read));
+        assert!(auth.user_attributes().contains(
+            crate::database::types::UserAttribute::NoBasicAuth
+        ));
+        assert!(auth.user_attributes().contains(
+            crate::database::types::UserAttribute::ReadOnly
+        ));
         assert_eq!(
             auth.token_id().expect("missing token id").to_string(),
             token_info.token_id().to_string(),

@@ -59,6 +59,10 @@ fn get_users_me_allows_bearer_read_scope() {
     assert!(value["id"].as_str().is_some());
     assert_eq!(value["username"], TEST_USERNAME);
     assert!(value["display_name"].as_str().is_some());
+    assert_eq!(
+        value["attributes"].as_array().map(Vec::len),
+        Some(0),
+    );
     assert!(value["timestamp"].as_str().is_some());
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -88,6 +92,57 @@ fn get_users_me_allows_bearer_write_scope() {
     let value: Value =
         serde_json::from_str(&body).expect("parse users/me response failed");
     assert_eq!(value["username"], TEST_USERNAME);
+    assert_eq!(
+        value["attributes"].as_array().map(Vec::len),
+        Some(0),
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// GET /api/users/me: ReadOnly ユーザでも参照系APIは利用できることを確認する。
+fn get_users_me_allows_read_only_bearer_user() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    run_add_user_with_credentials_and_attributes(
+        &db_path,
+        &assets_dir,
+        "readonly_user",
+        "readonly-pass",
+        &["read_only"],
+    );
+    let read_token = run_create_token_for_user(
+        &db_path,
+        &assets_dir,
+        "read",
+        "readonly_user",
+    );
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) =
+        wait_for_server_with_scheme(port, server.stderr_path());
+    let url = format!("{}/users/me", api_base_url);
+
+    let response = client
+        .get(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", read_token))
+        .send()
+        .expect("get users/me with readonly bearer failed");
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = response.text().expect("read body failed");
+    let value: Value =
+        serde_json::from_str(&body).expect("parse users/me response failed");
+    assert_eq!(value["username"], "readonly_user");
+    assert_eq!(
+        value["attributes"]
+            .as_array()
+            .and_then(|attributes| attributes.first())
+            .and_then(Value::as_str),
+        Some("ReadOnly"),
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

@@ -728,6 +728,7 @@ mod tests {
             password: "hash".to_string(),
             salt: [1u8; 16],
             display_name: "Bob".to_string(),
+            attributes: crate::database::types::UserAttributeSet::new(),
         });
         bundle.pages.push(ExportPage {
             id: page_id.clone(),
@@ -804,6 +805,7 @@ mod tests {
             password: "hash".to_string(),
             salt: [1u8; 16],
             display_name: "Bob".to_string(),
+            attributes: crate::database::types::UserAttributeSet::new(),
         });
         bundle.pages.push(ExportPage {
             id: page_id.clone(),

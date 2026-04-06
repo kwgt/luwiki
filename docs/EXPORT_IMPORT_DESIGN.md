@@ -28,6 +28,7 @@ Rust 実装へ直接落とし込める粒度で責務分割と処理手順を整
    - rename 情報は `RenameInfo`
 3. ユーザ
    - `src/database/types.rs` の `UserInfo`
+   - ユーザ属性は `NoBasicAuth` や `ReadOnly` を含めて保持対象とする
 4. アセット
    - `src/database/types.rs` の `AssetInfo`
    - 実体ファイルは `DatabaseManager::asset_file_path()` 配下
@@ -84,6 +85,7 @@ Rust 実装へ直接落とし込める粒度で責務分割と処理手順を整
 4. `migrate export` は「ZIP 生成成功」と「移送元削除完了」を同一成功条件とする
 5. `import` は検証完了後にのみ DB 反映を開始する
 6. 永続化済み `PageSource` との後方互換は `PageSource` 単位で吸収する
+7. ユーザ属性は export / import で欠落させず、そのまま維持する
 
 ### 3.2 非方針
 

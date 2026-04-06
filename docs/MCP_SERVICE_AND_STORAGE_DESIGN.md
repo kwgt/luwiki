@@ -966,7 +966,7 @@ Bearerトークン管理情報については、
 
 ### 2.5 ユーザ属性モデルの拡張設計
 
-`NoBasicAuth` を実装へ落とし込むため、
+`NoBasicAuth` および `ReadOnly` を実装へ落とし込むため、
 `UserInfo` は従来の「認証情報 + 表示名」だけでなく、
 将来拡張可能な属性集合を保持できる形へ拡張する。
 
@@ -996,18 +996,21 @@ struct UserInfo {
 
 - `NoBasicAuth` はトークン単位ではなくユーザ単位の性質である
 - Basic 認証可否は `UserInfo` 解決時点で判断できるべきである
+- `ReadOnly` もトークン単位ではなくユーザ単位の性質である
+- write 系操作可否も `UserInfo` 解決時点で判断できるべきである
 - Bearer トークン管理情報へ重複保持すると責務が分散する
 
 #### 2.5.2 属性集合の内部表現
 
 ユーザ属性は拡張可能な列挙集合として保持する。
-初期実装で導入する属性は `NoBasicAuth` のみとする。
+初期実装で導入する属性は `NoBasicAuth` と `ReadOnly` とする。
 
 概念上の型は以下を基本とする。
 
 ```rust
 enum UserAttribute {
     NoBasicAuth,
+    ReadOnly,
 }
 
 struct UserAttributeSet {
@@ -1025,10 +1028,10 @@ struct UserAttributeSet {
 `UserAttributeSet` が持つ責務は以下とする。
 
 - 属性集合の永続化
-- `NoBasicAuth` など個別属性の包含判定
+- `NoBasicAuth` や `ReadOnly` など個別属性の包含判定
 - CLI 詳細表示の基礎情報提供
 
-#### 2.5.3 `NoBasicAuth` の判定責務
+#### 2.5.3 `NoBasicAuth` / `ReadOnly` の判定責務
 
 `NoBasicAuth` は Basic 認証拒否のための共通ユーザ属性とし、
 判定責務は `UserInfo` 側へ置く。
@@ -1037,17 +1040,26 @@ struct UserAttributeSet {
 
 - `UserInfo`
   - `NoBasicAuth` を保持する
+  - `ReadOnly` を保持する
   - Basic 認証を許可できるかを判定できる
+  - write 系操作を許可できるかを判定できる
 - REST API Basic 認証入口
   - 資格情報検証後に `UserInfo` の属性を参照し、拒否時は 401 を返す
 - Bearer 認証入口
   - `NoBasicAuth` を拒否条件に使わない
+  - `ReadOnly` に必要な属性情報を後段認可へ渡す
 - MCP 認証入口
   - Basic 認証を受理しないため、`NoBasicAuth` 自体は判定しない
+  - `ReadOnly` は認証失敗理由には使わず、write 系認可で `forbidden` 判定に使う
+
+- MCP / REST の write 系認可
+  - `ReadOnly` を保持するユーザに対しては、required scope や path prefix 制約を満たしていても write 系操作を拒否する
 
 この方針により、
 `NoBasicAuth` は「Basic を禁止するユーザ属性」であり、
 Bearer や MCP の認可属性ではないことを明確に保てる。
+一方で `ReadOnly` は「write を禁止するユーザ属性」であり、
+Basic / Bearer / MCP を横断して後段認可で使う属性であることを明確に保てる。
 
 #### 2.5.4 CLI 管理情報との責務分離
 

@@ -25,7 +25,13 @@ use crate::database::{
     DbError,
     PageListEntry,
 };
-use crate::database::types::{BearerScope, PageId, PageIndex, UserId};
+use crate::database::types::{
+    BearerScope,
+    PageId,
+    PageIndex,
+    UserAttribute,
+    UserId,
+};
 use crate::fts::{self, FtsIndexConfig, FtsSearchTarget};
 
 use super::errors::{McpError, McpErrorCode};
@@ -355,6 +361,23 @@ impl McpOperation {
             Self::AppendPage => BearerScope::Append,
             Self::DeletePage => BearerScope::Delete,
         }
+    }
+
+    ///
+    /// write 系操作かどうかを返す
+    ///
+    /// # 戻り値
+    /// write 系操作なら `true` を返す。
+    ///
+    pub(crate) fn is_write(self) -> bool {
+        !matches!(
+            self,
+            Self::GetPage
+                | Self::GetPageToc
+                | Self::ListPages
+                | Self::SearchPages
+                | Self::GetPageSection
+        )
     }
 }
 
@@ -1127,6 +1150,12 @@ impl McpService {
         operation: McpOperation,
     ) -> Result<(), McpError> {
         let required = operation.required_scope();
+
+        if operation.is_write()
+            && auth.user_attributes().contains(UserAttribute::ReadOnly)
+        {
+            return Err(McpError::forbidden_read_only());
+        }
 
         if auth.scopes().allows(required) {
             return Ok(());
@@ -3066,7 +3095,12 @@ mod tests {
 
     use crate::auth::{AuthContext, AuthUser};
     use crate::database::DatabaseManager;
-    use crate::database::types::{BearerScopeSet, PathPrefixSet};
+    use crate::database::types::{
+        BearerScopeSet,
+        PathPrefixSet,
+        UserAttribute,
+        UserAttributeSet,
+    };
     use crate::fts::{FtsDocument, FtsIndexConfig, extract_markdown_sections};
 
     use super::*;
@@ -3190,6 +3224,150 @@ mod tests {
 
         assert_eq!(update_err.code(), McpErrorCode::Forbidden);
         assert_eq!(append_err.code(), McpErrorCode::Forbidden);
+    }
+
+    ///
+    /// ReadOnly 属性を持つユーザでは write 系操作だけが拒否されることを確認する。
+    ///
+    /// # 注記
+    /// read 系操作は従来どおり成功し、write 系操作だけが
+    /// `forbidden` になることを検証する。
+    ///
+    #[test]
+    fn operation_scope_rejects_read_only_user_only_for_write_operations() {
+        let service = McpService::new();
+        let auth = AuthContext::new_with_attributes(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::new(),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
+        );
+
+        assert!(service
+            .ensure_operation_scope(&auth, McpOperation::GetPage)
+            .is_ok());
+
+        let err = service
+            .ensure_operation_scope(&auth, McpOperation::UpdatePage)
+            .expect_err("read only user must not allow update");
+
+        assert_eq!(err.code(), McpErrorCode::Forbidden);
+        assert_eq!(
+            err.message(),
+            "read only denied: write operation is not allowed"
+        );
+    }
+
+    ///
+    /// ReadOnly 属性付きユーザで read 系が成功し、write 系が forbidden
+    /// になることを確認する。
+    ///
+    /// # 注記
+    /// `get_page` / `get_page_toc` / `list_pages` / `search_pages` /
+    /// `get_page_section` は成功し、`create_page` / `update_page` /
+    /// `rename_page` / `append_page` は `forbidden` になることを検証する。
+    ///
+    #[test]
+    fn read_only_user_allows_mcp_read_operations_and_rejects_write_operations() {
+        /*
+         * テスト用データベースを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        let fts_config = open_test_fts_config(&base_dir);
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/mcp/readonly",
+                "user",
+                "# Title\n\nintro\n\n## Child\n\nchild text\n".to_string(),
+            )
+            .expect("create page failed");
+        rebuild_test_fts_page(&manager, &fts_config, "/mcp/readonly");
+
+        let service = McpService::new();
+        let auth = AuthContext::new_with_attributes(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
+        );
+
+        /*
+         * read 系操作が成功することを検証する
+         */
+        let page = service
+            .get_page(&auth, &manager, "/mcp/readonly", None)
+            .expect("get page failed");
+        assert_eq!(page.path(), "/mcp/readonly");
+
+        let toc = service
+            .get_page_toc(&auth, &manager, "/mcp/readonly", None)
+            .expect("get page toc failed");
+        assert_eq!(toc.sections().len(), 2);
+
+        let list = service
+            .list_pages(&auth, &manager, "/mcp", Some(10), None)
+            .expect("list pages failed");
+        assert_eq!(list.items().len(), 1);
+        assert_eq!(list.items()[0].path(), "/mcp/readonly");
+
+        let search = service
+            .search_pages(
+                &auth,
+                &manager,
+                &fts_config,
+                "child",
+                Some("/mcp"),
+                Some(10),
+            )
+            .expect("search pages failed");
+        assert_eq!(search.items().len(), 1);
+        assert_eq!(search.items()[0].path(), "/mcp/readonly");
+
+        let section = service
+            .get_page_section(
+                &auth,
+                &manager,
+                "/mcp/readonly",
+                SectionSelector::ByTitle("Child".to_string()),
+                None,
+            )
+            .expect("get page section failed");
+        assert_eq!(section.section().title(), "Child");
+
+        /*
+         * write 系操作が forbidden になることを検証する
+         */
+        let create_err = service
+            .create_page(&auth, &manager, "/mcp/readonly-created", "# created")
+            .expect_err("read only user must not create page");
+        assert_eq!(create_err.code(), McpErrorCode::Forbidden);
+
+        let update_err = service
+            .update_page(&auth, &manager, "/mcp/readonly", "# updated")
+            .expect_err("read only user must not update page");
+        assert_eq!(update_err.code(), McpErrorCode::Forbidden);
+
+        let rename_err = service
+            .rename_page(
+                &auth,
+                &manager,
+                "/mcp/readonly",
+                "/mcp/readonly-renamed",
+            )
+            .expect_err("read only user must not rename page");
+        assert_eq!(rename_err.code(), McpErrorCode::Forbidden);
+
+        let append_err = service
+            .append_page(&auth, &manager, "/mcp/readonly", "\nnext")
+            .expect_err("read only user must not append page");
+        assert_eq!(append_err.code(), McpErrorCode::Forbidden);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
     }
 
     #[test]
