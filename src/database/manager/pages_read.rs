@@ -195,6 +195,74 @@ impl CurrentPathInfo {
     pub(crate) fn draft(&self) -> bool {
         self.draft
     }
+
+    ///
+    /// 短縮URL対象として利用可能かどうかを返す
+    ///
+    /// # 戻り値
+    /// 通常ページとして短縮URL対象にできる場合は `true` を返す。
+    ///
+    pub(crate) fn short_url_available(&self) -> bool {
+        !self.deleted && !self.draft
+    }
+}
+
+///
+/// page path から解決したページ状態
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum PagePathResolveState {
+    /// 通常ページとして解決できた状態
+    Current { page_id: PageId, draft: bool },
+
+    /// 削除済みページが存在する状態
+    Deleted,
+
+    /// 対応するページが存在しない状態
+    NotFound,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl PagePathResolveState {
+    ///
+    /// 通常ページとして解決したページIDを返す
+    ///
+    /// # 戻り値
+    /// 通常ページまたは draft として解決した場合はページIDを返す。
+    ///
+    pub(crate) fn page_id(&self) -> Option<PageId> {
+        match self {
+            Self::Current { page_id, .. } => Some(page_id.clone()),
+            Self::Deleted | Self::NotFound => None,
+        }
+    }
+
+    ///
+    /// draft 状態かどうかを返す
+    ///
+    /// # 戻り値
+    /// draft として解決した場合は `true` を返す。
+    ///
+    pub(crate) fn draft(&self) -> bool {
+        match self {
+            Self::Current { draft, .. } => *draft,
+            Self::Deleted | Self::NotFound => false,
+        }
+    }
+
+    ///
+    /// 短縮URL対象として返却可能なページIDを返す
+    ///
+    /// # 戻り値
+    /// 通常ページとして短縮URL対象にできる場合はページIDを返す。
+    ///
+    pub(crate) fn short_url_page_id(&self) -> Option<PageId> {
+        match self {
+            Self::Current { page_id, draft } if !draft => Some(page_id.clone()),
+            Self::Current { .. } | Self::Deleted | Self::NotFound => None,
+        }
+    }
 }
 
 ///
@@ -749,6 +817,50 @@ impl DatabaseManager {
     }
 
     ///
+    /// ページIDから current path 情報を取得
+    ///
+    /// # 引数
+    /// * `page_id` - 取得対象のページID
+    ///
+    /// # 戻り値
+    /// 対象ページが存在し、current path を解決できる場合は
+    /// `Ok(Some(CurrentPathInfo))` を返す。
+    /// 存在しない場合は `Ok(None)` を返す。
+    ///
+    pub(crate) fn get_current_page_path_by_id(
+        &self,
+        page_id: &PageId,
+    ) -> Result<Option<CurrentPathInfo>> {
+        /*
+         * 読み取りトランザクション開始
+         */
+        let txn = self.db.begin_read()?;
+        let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+
+        /*
+         * ページインデックスの解決
+         */
+        let index = match index_table.get(page_id.clone())? {
+            Some(entry) => entry.value(),
+            None => return Ok(None),
+        };
+
+        /*
+         * current path 情報の構築
+         */
+        let current_path = match index.current_path() {
+            Some(path) => path.to_string(),
+            None => return Ok(None),
+        };
+
+        Ok(Some(CurrentPathInfo::new(
+            current_path,
+            index.deleted(),
+            index.is_draft(),
+        )))
+    }
+
+    ///
     /// `append` 競合確認用の現在状態を取得
     ///
     /// # 引数
@@ -841,6 +953,45 @@ impl DatabaseManager {
         }
 
         Ok(page_ids)
+    }
+
+    ///
+    /// page path から短縮URL向けのページ状態を解決
+    ///
+    /// # 引数
+    /// * `path` - 正規化済み page path
+    ///
+    /// # 戻り値
+    /// 通常ページ、draft、削除済み、未存在のいずれかの状態を返す。
+    ///
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resolve_short_url_target_by_path(
+        &self,
+        path: &str,
+    ) -> Result<PagePathResolveState> {
+        /*
+         * current path としての解決
+         */
+        if let Some(page_id) = self.get_page_id_by_path(path)? {
+            let page_index = match self.get_page_index_by_id(&page_id)? {
+                Some(index) => index,
+                None => return Err(anyhow!("page index not found")),
+            };
+
+            return Ok(PagePathResolveState::Current {
+                page_id,
+                draft: page_index.is_draft(),
+            });
+        }
+
+        /*
+         * 削除済みページの解決
+         */
+        if !self.get_deleted_page_ids_by_path(path)?.is_empty() {
+            return Ok(PagePathResolveState::Deleted);
+        }
+
+        Ok(PagePathResolveState::NotFound)
     }
 }
 

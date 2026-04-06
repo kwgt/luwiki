@@ -12,6 +12,7 @@ use std::sync::{Arc, RwLock};
 
 use actix_web::{http::header, HttpResponse, web};
 
+use crate::database::short_id::decode_page_short_id;
 use crate::http_server::app_state::AppState;
 use crate::http_server::static_files;
 use crate::rest_api;
@@ -42,6 +43,130 @@ pub(crate) async fn get(
     data: web::Data<Arc<RwLock<AppState>>>,
 ) -> HttpResponse {
     get_by_path(path.into_inner(), data).await
+}
+
+///
+/// 短縮URLによるページ表示
+///
+/// # 引数
+/// * `path` - 短縮ID
+/// * `data` - アプリケーション状態
+///
+/// # 戻り値
+/// 短縮URL解決結果のHTTPレスポンス
+///
+pub(crate) async fn get_short(
+    path: web::Path<String>,
+    data: web::Data<Arc<RwLock<AppState>>>,
+) -> HttpResponse {
+    /*
+     * 短縮IDの復元
+     */
+    let short_id = path.into_inner();
+    let page_id = match decode_page_short_id(&short_id) {
+        // 短縮URLは既存ページ専用導線であり、未存在時に編集画面へは遷移しない
+        Ok(page_id) => page_id,
+        Err(_) => return short_url_not_found(),
+    };
+
+    /*
+     * ページ状態の取得
+     */
+    let state = match data.read() {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let page_index = match state.db().get_page_index_by_id(&page_id) {
+        Ok(Some(index)) => index,
+        Ok(None) => return short_url_not_found(),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    /*
+     * 削除済みページの判定
+     */
+    if page_index.deleted() {
+        return short_url_gone();
+    }
+
+    let current_path = match state.db().get_current_page_path_by_id(&page_id) {
+        Ok(Some(info)) => info,
+        Ok(None) => return short_url_not_found(),
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    if !current_path.short_url_available() {
+        return short_url_not_found();
+    }
+
+    /*
+     * current path へのリダイレクト
+     */
+    let location = build_wiki_location(current_path.current_path());
+
+    HttpResponse::Found()
+        .insert_header((header::CACHE_CONTROL, "no-store"))
+        .insert_header((header::LOCATION, location))
+        .finish()
+}
+
+///
+/// 短縮URL解決失敗時の 404 応答を返す
+///
+/// # 戻り値
+/// 不正 `short_id` および未存在 `page_id` を共通で扱う 404 応答を返す。
+///
+fn short_url_not_found() -> HttpResponse {
+    HttpResponse::NotFound().finish()
+}
+
+///
+/// 短縮URL解決時の 410 応答を返す
+///
+/// # 戻り値
+/// 削除済みページを共通で扱う 410 応答を返す。
+///
+fn short_url_gone() -> HttpResponse {
+    HttpResponse::Gone().finish()
+}
+
+///
+/// current path から閲覧URLを構築する
+///
+/// # 引数
+/// * `current_path` - current path
+///
+/// # 戻り値
+/// `/wiki/{current_path}` 形式の閲覧URLを返す。
+///
+fn build_wiki_location(current_path: &str) -> String {
+    /*
+     * ルートページの特別扱い
+     */
+    if current_path == "/" {
+        return "/wiki/".to_string();
+    }
+
+    /*
+     * セグメントごとのURLエンコード
+     */
+    let mut encoded_segments = Vec::new();
+    for segment in current_path.trim_start_matches('/').split('/') {
+        let mut encoded = String::new();
+        for byte in segment.bytes() {
+            if byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            {
+                encoded.push(byte as char);
+            } else {
+                encoded.push_str(&format!("%{:02X}", byte));
+            }
+        }
+        encoded_segments.push(encoded);
+    }
+
+    format!("/wiki/{}", encoded_segments.join("/"))
 }
 
 ///
@@ -147,12 +272,7 @@ async fn get_by_path(
 
     let page_id = match state.db().get_page_id_by_path(&page_path) {
         Ok(Some(page_id)) => page_id,
-        Ok(None) => {
-            let edit_path = build_edit_redirect_path(&page_path);
-            return HttpResponse::Found()
-                .insert_header((header::LOCATION, edit_path))
-                .finish();
-        }
+        Ok(None) => return redirect_missing_view_page_to_edit(&page_path),
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
@@ -339,6 +459,22 @@ fn build_edit_redirect_path(page_path: &str) -> String {
     }
 
     format!("/edit{}", page_path)
+}
+
+///
+/// 通常閲覧URLで未存在ページへアクセスした場合の編集画面遷移を返す
+///
+/// # 引数
+/// * `page_path` - 未存在だったページパス
+///
+/// # 戻り値
+/// 通常閲覧URL専用の編集画面リダイレクト応答を返す。
+///
+fn redirect_missing_view_page_to_edit(page_path: &str) -> HttpResponse {
+    let edit_path = build_edit_redirect_path(page_path);
+    HttpResponse::Found()
+        .insert_header((header::LOCATION, edit_path))
+        .finish()
 }
 
 ///

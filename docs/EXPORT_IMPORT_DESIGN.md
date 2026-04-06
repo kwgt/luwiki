@@ -465,6 +465,20 @@ trait ZipCipher {
 `migrate import` では、rename メタデータの意味だけを落とし、
 履歴番号・タイムスタンプ・編集者情報・本文は保持する。
 
+### 8.4 短縮URL安定性
+
+短縮URLは `page_id` を基準に導出されるため、export / import においても `page_id` を維持することが安定性の前提となる。
+本設計では `backup import` / `migrate import` のいずれにおいても、ページの識別子は再採番せず、エクスポートデータに含まれる `page_id` をそのまま反映する。
+
+このため、短縮URLの復元に追加の保存項目や変換テーブルは不要である。
+インポート後の環境では、保持された `page_id` から短縮用パス断片を再導出することで、
+短縮URLを再構成できる。
+
+rename / move は current path を変化させても `page_id` を変更しないため、
+既存の短縮URLは同一ページを指し続ける。
+また、subtree migrate においても import 後に `page_id` が維持される限り、
+短縮URLは移送先環境で再構成可能である。
+
 ## 9. 検証設計
 
 ### 9.1 検証段階

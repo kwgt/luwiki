@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::super::resp_error_json;
+use crate::database::short_id::encode_page_short_id;
 use crate::database::types::{BearerScope, PageId, PageIndex, RenameInfo};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
@@ -136,16 +137,7 @@ pub async fn get(
             }
         };
 
-        let page_info = json!({
-            "path": build_path_info(&page_index),
-            "revision_scope": {
-                "latest": 0,
-                "oldest": 0,
-            },
-            "rename_revisions": [],
-            "deleted": page_index.deleted(),
-            "locked": locked,
-        });
+        let page_info = build_page_info(&page_index, &page_id, locked);
 
         let mut body = Map::new();
         body.insert("page_info".to_string(), page_info);
@@ -233,16 +225,7 @@ pub async fn get(
         revision_info.insert("rename_info".to_string(), rename_info);
     }
 
-    let page_info = json!({
-        "path": build_path_info(&page_index),
-        "revision_scope": {
-            "latest": page_index.latest(),
-            "oldest": page_index.earliest(),
-        },
-        "rename_revisions": page_index.rename_revisions(),
-        "deleted": page_index.deleted(),
-        "locked": locked,
-    });
+    let page_info = build_page_info(&page_index, &page_id, locked);
 
     let mut body = Map::new();
     body.insert("page_info".to_string(), page_info);
@@ -273,6 +256,61 @@ fn build_path_info(page_index: &PageIndex) -> Value {
     json!({
         "kind": kind,
         "value": page_index.path(),
+    })
+}
+
+///
+/// ページメタ情報内のページ情報オブジェクトを構築する
+///
+/// # 引数
+/// * `page_index` - ページインデックス
+/// * `page_id` - ページID
+/// * `locked` - ロック状態
+///
+/// # 戻り値
+/// ページ情報のJSON値
+///
+fn build_page_info(
+    page_index: &PageIndex,
+    page_id: &PageId,
+    locked: bool,
+) -> Value {
+    json!({
+        "path": build_path_info(page_index),
+        "short_path": build_short_path_info(page_index, page_id),
+        "revision_scope": {
+            "latest": page_index.latest(),
+            "oldest": page_index.earliest(),
+        },
+        "rename_revisions": page_index.rename_revisions(),
+        "deleted": page_index.deleted(),
+        "locked": locked,
+    })
+}
+
+///
+/// ページ短縮パス情報オブジェクトを構築する
+///
+/// # 引数
+/// * `page_index` - ページインデックス
+/// * `page_id` - ページID
+///
+/// # 戻り値
+/// 短縮パス情報のJSON値
+///
+fn build_short_path_info(page_index: &PageIndex, page_id: &PageId) -> Value {
+    /*
+     * 短縮URL対象可否の判定
+     */
+    if page_index.is_draft() || page_index.deleted() {
+        return json!({
+            "kind": "unavailable",
+        });
+    }
+
+    json!({
+        "kind": "available",
+        "value": encode_page_short_id(page_id),
     })
 }
 

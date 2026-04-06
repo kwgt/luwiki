@@ -26,6 +26,9 @@ const {
   copyToastName,
   pageMeta,
   pageMetaOpen,
+  pageShortUrl,
+  pageShortUrlLoading,
+  pageShortUrlError,
   assetDetails,
   assetMetaDetails,
   assetDetailsLoading,
@@ -1166,6 +1169,30 @@ watch(pageTitle, (value) => {
           <div>
             <span class="text-base-content/60">ロック中</span>
             <div class="font-semibold">{{ pageMeta.page_info.locked ? 'はい' : 'いいえ' }}</div>
+          </div>
+          <div class="space-y-1">
+            <span class="text-base-content/60">短縮URL</span>
+            <div class="min-w-0">
+              <div v-if="pageShortUrlLoading" class="font-semibold text-base-content/70">
+                読み込み中...
+              </div>
+              <a
+                v-else-if="pageShortUrl"
+                :href="pageShortUrl"
+                class="font-semibold break-all text-info underline decoration-info/40 underline-offset-2"
+              >
+                {{ pageShortUrl }}
+              </a>
+              <div v-else class="font-semibold text-base-content/50">
+                -
+              </div>
+              <p
+                v-if="pageShortUrlError"
+                class="mt-1 text-xs text-error break-words"
+              >
+                {{ pageShortUrlError }}
+              </p>
+            </div>
           </div>
           <div v-if="pageMetaRenameInfo">
             <span class="text-base-content/60">リネーム</span>

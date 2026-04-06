@@ -5,8 +5,22 @@ export interface PagePathInfo {
   value: string;
 }
 
+export interface PageShortPathInfoAvailable {
+  kind: 'available';
+  value: string;
+}
+
+export interface PageShortPathInfoUnavailable {
+  kind: 'unavailable';
+}
+
+export type PageShortPathInfo =
+  | PageShortPathInfoAvailable
+  | PageShortPathInfoUnavailable;
+
 export interface PageInfo {
   path: PagePathInfo;
+  short_path: PageShortPathInfo;
   revision_scope: {
     latest: number;
     oldest: number;
@@ -41,6 +55,10 @@ export interface RemovedByMigrateRevisionRenameInfo {
 export interface PageMetaResponse {
   page_info: PageInfo;
   revision_info?: RevisionInfo;
+}
+
+export interface PageShortPathResponse {
+  short_path: string;
 }
 
 export interface CreatePageResponse {
@@ -147,6 +165,43 @@ export async function fetchPageMeta(
       params: revision ? { rev: revision } : undefined,
     },
   );
+  return res.data;
+}
+
+/**
+ * ページIDに対応する短縮用パス断片を取得する
+ */
+export async function fetchPageShortPath(
+  pageId: string,
+): Promise<PageShortPathResponse> {
+  const res = await apiClient.get<PageShortPathResponse>(
+    `/pages/${pageId}/short`,
+    {
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
+  return res.data;
+}
+
+/**
+ * ページパスに対応する短縮用パス断片を取得する
+ */
+export async function fetchPageShortPathByPath(
+  path: string,
+): Promise<PageShortPathResponse> {
+  const res = await apiClient.get<PageShortPathResponse>(
+    '/pages/short',
+    {
+      params: { path },
+      validateStatus: () => true,
+    },
+  );
+  if (res.status >= 400) {
+    throw buildRequestError(res.status, res.data);
+  }
   return res.data;
 }
 

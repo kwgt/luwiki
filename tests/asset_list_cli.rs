@@ -7,6 +7,7 @@
 mod common;
 
 use common::*;
+use luwiki::database::delete_user_for_test;
 
 use std::fs;
 use std::fs::File;
@@ -102,6 +103,67 @@ fn asset_list_cli_marks_deleted_zombie_as_b() {
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
+#[test]
+///
+/// asset list が所有者ユーザ欠落時も一覧表示できることを確認する。
+///
+/// # 注記
+/// 1) 通常ユーザと所有者ユーザを作成する
+/// 2) APIで所有者ユーザのページとアセットを作成する
+/// 3) 所有者ユーザを削除する
+/// 4) asset list --long-info を実行する
+/// 5) USER列が unknown で表示継続することを確認する
+fn asset_list_cli_falls_back_when_owner_user_missing() {
+    const OWNER_USERNAME: &str = "asset_owner";
+    const OWNER_PASSWORD: &str = "password123";
+
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    run_add_user_with_credentials(
+        &db_path,
+        &assets_dir,
+        OWNER_USERNAME,
+        OWNER_PASSWORD,
+    );
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+
+    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
+    wait_for_server(&hello_url);
+
+    let api_url = format!("http://127.0.0.1:{}/api", port);
+    let client = build_client();
+    let page_id = create_page_with_credentials(
+        &client,
+        &api_url,
+        "/asset-list-missing-user",
+        "body",
+        OWNER_USERNAME,
+        OWNER_PASSWORD,
+    );
+    let _ = upload_asset_by_page_id_with_credentials(
+        &client,
+        &api_url,
+        &page_id,
+        "ownerless.bin",
+        "application/octet-stream",
+        b"ownerless-asset",
+        OWNER_USERNAME,
+        OWNER_PASSWORD,
+    );
+
+    drop(server);
+    delete_user_for_test(&db_path, &assets_dir, OWNER_USERNAME)
+        .expect("delete owner user for test failed");
+
+    let output = run_asset_list(&db_path, &assets_dir, true);
+    assert!(output.contains("ownerless.bin"));
+    assert!(output.contains("unknown"));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
 ///
 /// テスト用の作業ディレクトリを作成する。
 ///
@@ -152,6 +214,22 @@ fn reserve_port() -> u16 {
 /// * `db_path` - DBファイルのパス
 /// * `assets_dir` - アセットディレクトリのパス
 fn run_add_user(db_path: &Path, assets_dir: &Path) {
+    run_add_user_with_credentials(
+        db_path,
+        assets_dir,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    );
+}
+
+///
+/// 指定資格情報でテスト用ユーザを作成する。
+fn run_add_user_with_credentials(
+    db_path: &Path,
+    assets_dir: &Path,
+    user_name: &str,
+    password: &str,
+) {
     let exe = test_binary_path();
     let base_dir = db_path.parent().expect("db_path parent missing");
     let fts_index = fts_index_path(db_path);
@@ -166,7 +244,7 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
         .arg(fts_index)
         .arg("user")
         .arg("add")
-        .arg(TEST_USERNAME)
+        .arg(user_name)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -176,8 +254,8 @@ fn run_add_user(db_path: &Path, assets_dir: &Path) {
     {
         use std::io::Write;
         let stdin = child.stdin.as_mut().expect("stdin missing");
-        writeln!(stdin, "{}", TEST_PASSWORD).expect("write password failed");
-        writeln!(stdin, "{}", TEST_PASSWORD).expect("write confirm failed");
+        writeln!(stdin, "{}", password).expect("write password failed");
+        writeln!(stdin, "{}", password).expect("write confirm failed");
     }
 
     let status = child.wait().expect("wait add_user failed");
@@ -273,10 +351,30 @@ fn build_client() -> Client {
 ///
 /// ページの作成
 fn create_page(api_url: &str, path: &str, body: &str) -> String {
+    let client = build_client();
+    create_page_with_credentials(
+        &client,
+        api_url,
+        path,
+        body,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    )
+}
+
+///
+/// 指定資格情報でページを作成する。
+fn create_page_with_credentials(
+    client: &Client,
+    api_url: &str,
+    path: &str,
+    body: &str,
+    username: &str,
+    password: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if api_url.ends_with("/pages") {
         api_url.to_string()
     } else {
@@ -285,7 +383,7 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
     let response = client
         .post(&pages_url)
         .query(&[("path", path)])
-        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .basic_auth(username, Some(password))
         .send()
         .expect("create page failed");
 
@@ -315,7 +413,7 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
      */
     let response = client
         .put(&format!("{}/{}/source", pages_url, page_id))
-        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .basic_auth(username, Some(password))
         .header("Content-Type", "text/markdown")
         .header("X-Lock-Authentication", format!("token={}", lock_token))
         .body(body.to_string())
@@ -337,12 +435,36 @@ fn upload_asset_by_page_id(
     data: &[u8],
 ) -> String {
     let client = build_client();
+    upload_asset_by_page_id_with_credentials(
+        &client,
+        api_url,
+        page_id,
+        file_name,
+        mime,
+        data,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    )
+}
+
+///
+/// 指定資格情報でアセットを作成する。
+fn upload_asset_by_page_id_with_credentials(
+    client: &Client,
+    api_url: &str,
+    page_id: &str,
+    file_name: &str,
+    mime: &str,
+    data: &[u8],
+    username: &str,
+    password: &str,
+) -> String {
     let response = client
         .post(&format!(
             "{}/pages/{}/assets/{}",
             api_url, page_id, file_name
         ))
-        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .basic_auth(username, Some(password))
         .header("Content-Type", mime)
         .body(data.to_vec())
         .send()

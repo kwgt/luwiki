@@ -17,12 +17,14 @@ use serde_json::json;
 
 use super::super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::{BearerScope, LockToken, PageId};
+use crate::database::types::{BearerScope, LockToken, PageId, UserId};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthContext;
 use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
 /// ロック認証ヘッダの名称
 const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
+/// 孤立した user_id を表示する際の代替ユーザ名
+const UNKNOWN_USERNAME: &str = "unknown";
 
 ///
 /// GET /api/pages/{page_id}/assets の実体
@@ -115,20 +117,9 @@ pub async fn get(
         /*
          * ユーザ名の取得
          */
-        let user_name = match state.db().get_user_name_by_id(&asset.user()) {
-            Ok(Some(name)) => name,
-            Ok(None) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "user not found",
-                ));
-            }
-            Err(_) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "user lookup failed",
-                ));
-            }
+        let user_name = match resolve_asset_username(state.db(), &asset.user()) {
+            Ok(name) => name,
+            Err(resp) => return Ok(resp),
         };
 
         /*
@@ -152,6 +143,31 @@ pub async fn get(
         .content_type("application/json")
         .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
         .body(json!(assets).to_string()))
+}
+
+///
+/// アセット所有者の表示名を解決する
+///
+/// # 引数
+/// * `db` - データベース参照
+/// * `user_id_raw` - 所有者ユーザID文字列
+///
+/// # 戻り値
+/// ユーザが存在する場合はユーザ名を返し、
+/// 存在しない場合は代替表示名を返す。
+///
+fn resolve_asset_username(
+    db: &crate::database::DatabaseManager,
+    user_id: &UserId,
+) -> Result<String, HttpResponse> {
+    match db.get_user_name_by_id(&user_id) {
+        Ok(Some(name)) => Ok(name),
+        Ok(None) => Ok(UNKNOWN_USERNAME.to_string()),
+        Err(_) => Err(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "user lookup failed",
+        )),
+    }
 }
 
 ///

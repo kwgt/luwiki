@@ -19,6 +19,8 @@ use super::super::resp_error_json;
 use crate::database::types::{AssetId, BearerScope};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
+/// 孤立した user_id を表示する際の代替ユーザ名
+const UNKNOWN_USERNAME: &str = "unknown";
 
 ///
 /// GET /api/assets/{asset_id}/meta の実体
@@ -91,12 +93,7 @@ pub async fn get(
      */
     let user_name = match state.db().get_user_name_by_id(&asset_info.user()) {
         Ok(Some(name)) => name,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "user not found",
-            ));
-        }
+        Ok(None) => UNKNOWN_USERNAME.to_string(),
         Err(_) => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -18,6 +18,7 @@ pub(crate) mod parent;
 pub(crate) mod path;
 pub(crate) mod revision;
 pub(crate) mod search;
+pub(crate) mod short;
 pub(crate) mod source;
 pub(crate) mod template;
 

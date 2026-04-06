@@ -403,6 +403,12 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
 /wiki/{page_path}
 ```
 
+また、短縮URLによる閲覧導線として以下の形式を別途提供する。
+
+```
+/w/{short_id}
+```
+
 サーバ側は当該パスに対して、Markdown本文を含まないフレーム HTML を返却し、この HTML 内に`page_path`に対応するページIDとそのページのリビジョン番号を meta タグとして埋め込む。
 
 ```html
@@ -429,6 +435,37 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
   - ローカル運用においても SPA 型 UI に近い軽量実装を維持できる
 
 また、将来的にページ編集機能（Markdown エディタ／ライブプレビュー）を実装する際も、同様の API 構成・フロントレンダリング方式を流用できる。
+
+### 16.1 短縮URLルーティング
+
+短縮URLは canonical な閲覧URLそのものではなく、現在の閲覧URLへ到達させるための導線として扱う。
+`GET /w/{short_id}` を受けたサーバは、少なくとも以下の順で処理を行う。
+
+  1. `short_id` をデコードして `page_id` を復元する
+  2. `page_id` に対応する現在のページ状態を取得する
+  3. 通常ページであれば current path を解決する
+  4. `Location: /wiki/{current_path}` を設定してリダイレクト応答を返す
+
+この方式により、短縮URL自体は `page_id` に対して安定しつつ、rename / move 後も最終到達先を常に現在の閲覧URLへ統一できる。
+
+### 16.2 短縮URL解決時の例外系
+
+短縮URL解決時の例外は、通常閲覧URLの未存在時挙動とは分けて扱う。
+`GET /w/{short_id}` に対しては、少なくとも以下の応答方針を採る。
+
+  - `short_id` が base62 として不正、または `page_id` へ復元不能な場合は `404 Not Found`
+  - `page_id` は復元できたが対応するページが存在しない場合は `404 Not Found`
+  - 対応するページが削除済み状態の場合は `410 Gone`
+
+短縮URLは既存ページへの到達導線であり、新規ページ作成導線へは遷移させない。
+
+### 16.3 canonical URL 方針
+
+ページ閲覧における canonical URL は常に `/wiki/{current_path}` とする。
+短縮URL `/w/{short_id}` は固定的な公開先URLとして扱うのではなく、現在の閲覧URLへ利用者を到達させるための補助導線として扱う。
+
+そのため、共有・ブックマーク・画面表示上の最終到達先は通常の閲覧URLへ統一し、
+rename / move に伴う現在位置の変化は `/wiki/{current_path}` 側で表現する。
 
 ---
 ## 17. ページ編集

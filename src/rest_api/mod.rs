@@ -204,11 +204,13 @@ pub(crate) fn create_api_scope(
         .route("/pages", web::get().to(pages::list::get))
         .route("/pages/deleted", web::get().to(pages::deleted::get))
         .route("/pages/search", web::get().to(pages::search::get))
+        .route("/pages/short", web::get().to(pages::short::get_by_path))
         .route("/pages/template", web::get().to(pages::template::get))
         .route("/pages/{page_id}/source", web::get().to(pages::source::get))
         .route("/pages/{page_id}/source", web::put().to(pages::source::put))
         .route("/pages/{page_id}/meta", web::get().to(pages::meta::get))
         .route("/pages/{page_id}/parent", web::get().to(pages::parent::get))
+        .route("/pages/{page_id}/short", web::get().to(pages::short::get))
         .route("/pages/{page_id}/path", web::get().to(pages::path::get))
         .route("/pages/{page_id}/path", web::post().to(pages::path::post))
         .route(

@@ -7,6 +7,7 @@
 mod common;
 
 use common::*;
+use luwiki::database::delete_user_for_test;
 
 use std::fs;
 use std::fs::File;
@@ -201,6 +202,103 @@ fn get_page_assets_list_excludes_deleted() {
     let value: Value = serde_json::from_str(&body).expect("parse page assets body failed");
     let assets = value.as_array().expect("assets is not array");
     assert!(assets.is_empty());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+///
+/// GET: /api/pages/{page_id}/assets で所有者ユーザ欠落時も一覧取得できることを確認する。
+///
+/// # 概要
+/// アセット作成後に作成者ユーザを削除しても、
+/// 一覧APIが 500 にならず代替ユーザ名で応答することを確認する。
+///
+/// # 戻り値
+/// なし
+///
+fn get_page_assets_list_falls_back_when_owner_user_missing() {
+    const OWNER_USERNAME: &str = "asset_owner";
+    const OWNER_PASSWORD: &str = "password123";
+    /*
+     * テスト環境の準備
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    run_add_user_with_credentials(
+        &db_path,
+        &assets_dir,
+        OWNER_USERNAME,
+        OWNER_PASSWORD,
+    );
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+
+    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
+    wait_for_server(&hello_url, server.stderr_path());
+
+    /*
+     * ページとアセットの作成
+     */
+    let api_url = format!("http://127.0.0.1:{}/api", port);
+    let client = build_client();
+    let page_id = create_page_with_credentials(
+        &client,
+        &api_url,
+        "/page-assets-missing-user",
+        "body",
+        OWNER_USERNAME,
+        OWNER_PASSWORD,
+    );
+    let _asset_id = upload_asset_by_page_id_with_credentials(
+        &client,
+        &api_url,
+        &page_id,
+        "ownerless.bin",
+        "application/octet-stream",
+        b"ownerless-asset",
+        OWNER_USERNAME,
+        OWNER_PASSWORD,
+    );
+
+    /*
+     * 所有者ユーザの削除
+     */
+    drop(server);
+    delete_user_for_test(&db_path, &assets_dir, OWNER_USERNAME)
+        .expect("delete owner user for test failed");
+
+    /*
+     * 一覧取得の検証
+     */
+    let restart_port = reserve_port();
+    let restart_server = ServerGuard::start(restart_port, &db_path, &assets_dir);
+    let restart_hello_url =
+        format!("http://127.0.0.1:{}/api/hello", restart_port);
+    wait_for_server(&restart_hello_url, restart_server.stderr_path());
+
+    let restart_api_url = format!("http://127.0.0.1:{}/api", restart_port);
+    let client = build_client();
+    let response = client
+        .get(&format!("{}/pages/{}/assets", restart_api_url, page_id))
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get page assets with missing user failed");
+
+    assert_eq!(response.status().as_u16(), 200);
+
+    let body = response
+        .text()
+        .expect("read page assets with missing user body failed");
+    let value: Value = serde_json::from_str(&body)
+        .expect("parse page assets with missing user body failed");
+    let assets = value.as_array().expect("assets is not array");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(
+        assets[0]["username"].as_str().expect("missing username"),
+        "unknown"
+    );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -451,6 +549,35 @@ impl Drop for ServerGuard {
 /// なし
 ///
 fn wait_for_server(url: &str, stderr_path: &Path) {
+    wait_for_server_with_credentials(
+        url,
+        stderr_path,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    );
+}
+
+///
+/// サーバ起動待機
+///
+/// # 概要
+/// 指定資格情報でヘルスチェックの応答を待つ。
+///
+/// # 引数
+/// * `url` - ヘルスチェックURL
+/// * `stderr_path` - 標準エラーログのパス
+/// * `username` - 認証ユーザ名
+/// * `password` - 認証パスワード
+///
+/// # 戻り値
+/// なし
+///
+fn wait_for_server_with_credentials(
+    url: &str,
+    stderr_path: &Path,
+    username: &str,
+    password: &str,
+) {
     /*
      * サーバ起動待ち
      */
@@ -459,7 +586,7 @@ fn wait_for_server(url: &str, stderr_path: &Path) {
     for _ in 0..300 {
         let response = client
             .get(url)
-            .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+            .basic_auth(username, Some(password))
             .send();
 
         if let Ok(resp) = response {
@@ -524,10 +651,45 @@ fn build_client() -> Client {
 /// 作成されたページIDを返す。
 ///
 fn create_page(api_url: &str, path: &str, body: &str) -> String {
+    let client = build_client();
+    create_page_with_credentials(
+        &client,
+        api_url,
+        path,
+        body,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    )
+}
+
+///
+/// ページの作成
+///
+/// # 概要
+/// 指定資格情報でAPIページを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `api_url` - APIのベースURL
+/// * `path` - ページパス
+/// * `body` - ページソース
+/// * `username` - 認証ユーザ名
+/// * `password` - 認証パスワード
+///
+/// # 戻り値
+/// 作成されたページIDを返す。
+///
+fn create_page_with_credentials(
+    client: &Client,
+    api_url: &str,
+    path: &str,
+    body: &str,
+    username: &str,
+    password: &str,
+) -> String {
     /*
      * ドラフト作成
      */
-    let client = build_client();
     let pages_url = if api_url.ends_with("/pages") {
         api_url.to_string()
     } else {
@@ -536,7 +698,7 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
     let response = client
         .post(&pages_url)
         .query(&[("path", path)])
-        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .basic_auth(username, Some(password))
         .send()
         .expect("create page failed");
 
@@ -567,7 +729,7 @@ fn create_page(api_url: &str, path: &str, body: &str) -> String {
      */
     let response = client
         .put(&format!("{}/{}/source", pages_url, page_id))
-        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .basic_auth(username, Some(password))
         .header("Content-Type", "text/markdown")
         .header("X-Lock-Authentication", format!("token={}", lock_token))
         .body(body.to_string())
@@ -602,16 +764,57 @@ fn upload_asset_by_page_id(
     content_type: &str,
     data: &[u8],
 ) -> String {
+    let client = build_client();
+    upload_asset_by_page_id_with_credentials(
+        &client,
+        api_url,
+        page_id,
+        file_name,
+        content_type,
+        data,
+        TEST_USERNAME,
+        TEST_PASSWORD,
+    )
+}
+
+///
+/// アセットの作成
+///
+/// # 概要
+/// 指定資格情報でAPIアセットを作成する。
+///
+/// # 引数
+/// * `client` - HTTPクライアント
+/// * `api_url` - APIのベースURL
+/// * `page_id` - ページID
+/// * `file_name` - ファイル名
+/// * `content_type` - MIME種別
+/// * `data` - アセットデータ
+/// * `username` - 認証ユーザ名
+/// * `password` - 認証パスワード
+///
+/// # 戻り値
+/// 作成されたアセットIDを返す。
+///
+fn upload_asset_by_page_id_with_credentials(
+    client: &Client,
+    api_url: &str,
+    page_id: &str,
+    file_name: &str,
+    content_type: &str,
+    data: &[u8],
+    username: &str,
+    password: &str,
+) -> String {
     /*
      * アセット作成リクエスト
      */
-    let client = build_client();
     let response = client
         .post(&format!(
             "{}/pages/{}/assets/{}",
             api_url, page_id, file_name
         ))
-        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .basic_auth(username, Some(password))
         .header("Content-Type", content_type)
         .body(data.to_vec())
         .send()

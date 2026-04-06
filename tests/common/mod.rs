@@ -269,6 +269,51 @@ pub fn run_create_token(
 }
 
 ///
+/// 指定ユーザを削除する
+///
+/// # 引数
+/// * `db_path` - DBパス
+/// * `assets_dir` - アセットディレクトリ
+/// * `user_name` - 削除対象のユーザ名
+///
+/// # 戻り値
+/// なし
+///
+#[allow(dead_code)]
+pub fn run_delete_user(db_path: &Path, assets_dir: &Path, user_name: &str) {
+    /*
+     * CLI起動
+     */
+    let exe = test_binary_path();
+    let base_dir = db_path.parent().expect("db_path parent missing");
+    let fts_index = fts_index_path(db_path);
+    let output = Command::new(exe)
+        .env("XDG_CONFIG_HOME", base_dir)
+        .env("XDG_DATA_HOME", base_dir)
+        .arg("--db-path")
+        .arg(db_path)
+        .arg("--assets-path")
+        .arg(assets_dir)
+        .arg("--fts-index")
+        .arg(fts_index)
+        .arg("user")
+        .arg("delete")
+        .arg(user_name)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn user delete failed");
+
+    /*
+     * 実行結果の確認
+     */
+    assert!(
+        output.status.success(),
+        "user delete failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+///
 /// APIサーバの起動を管理するガード
 ///
 #[allow(dead_code)]

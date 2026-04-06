@@ -24,6 +24,64 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use ulid::{DecodeError, Ulid};
 
+/// 短縮IDで利用する base62 文字集合
+#[allow(dead_code)]
+const BASE62_ALPHABET: &[u8; 62] =
+    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// 128bit 値を base62 で表現する際の固定長
+#[allow(dead_code)]
+const BASE62_FIXED_WIDTH_128: usize = 22;
+
+///
+/// base62 文字を数値へ変換する
+///
+/// # 引数
+/// * `ch` - 変換対象文字
+///
+/// # 戻り値
+/// 対応する数値を返す。base62 に含まれない文字の場合は `None` を返す。
+///
+fn decode_base62_char(ch: u8) -> Option<u8> {
+    match ch {
+        b'0'..=b'9' => Some(ch - b'0'),
+        b'A'..=b'Z' => Some(ch - b'A' + 10),
+        b'a'..=b'z' => Some(ch - b'a' + 36),
+        _ => None,
+    }
+}
+
+///
+/// 短縮ID復元時のエラー
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShortIdDecodeError {
+    /// 固定長でない
+    InvalidLength,
+
+    /// base62 に含まれない文字を含む
+    InvalidCharacter,
+
+    /// 128bit 範囲へ復元できない
+    Overflow,
+}
+
+// Displayトレイトの実装
+impl Display for ShortIdDecodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLength => write!(f, "invalid short id length"),
+            Self::InvalidCharacter => {
+                write!(f, "invalid short id character")
+            }
+            Self::Overflow => write!(f, "short id overflow"),
+        }
+    }
+}
+
+// std::error::Error トレイトの実装
+impl std::error::Error for ShortIdDecodeError {}
+
 ///
 /// データベース用のIDを表す構造体
 ///
@@ -50,6 +108,74 @@ impl Id {
     ///
     pub(crate) fn from_string(s: &str) -> Result<Self, DecodeError> {
         Ulid::from_string(s).map(Self)
+    }
+
+    ///
+    /// ID を base62 固定長文字列へ変換する
+    ///
+    /// # 戻り値
+    /// ID が保持する 128bit 値を base62 で表現した固定長文字列を返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn to_base62_fixed(&self) -> String {
+        /*
+         * 128bit 値の取り出し
+         */
+        let mut value = u128::from_be_bytes(self.0.to_bytes());
+        let mut encoded = [BASE62_ALPHABET[0]; BASE62_FIXED_WIDTH_128];
+
+        /*
+         * 下位桁から base62 へ変換
+         */
+        for index in (0..BASE62_FIXED_WIDTH_128).rev() {
+            let digit = (value % 62) as usize;
+            encoded[index] = BASE62_ALPHABET[digit];
+            value /= 62;
+        }
+
+        String::from_utf8(encoded.to_vec()).expect("invalid base62 text")
+    }
+
+    ///
+    /// base62 固定長文字列から ID を復元する
+    ///
+    /// # 引数
+    /// * `value` - 復元対象の base62 固定長文字列
+    ///
+    /// # 戻り値
+    /// 復元に成功した場合は対応する ID を返す。入力が不正な場合はエラーを返す。
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn from_base62_fixed(
+        value: &str,
+    ) -> std::result::Result<Self, ShortIdDecodeError> {
+        /*
+         * 入力長の検証
+         */
+        if value.len() != BASE62_FIXED_WIDTH_128 {
+            return Err(ShortIdDecodeError::InvalidLength);
+        }
+
+        /*
+         * base62 文字列の復元
+         */
+        let mut decoded: u128 = 0;
+        for ch in value.bytes() {
+            let digit = match decode_base62_char(ch) {
+                Some(digit) => digit as u128,
+                None => return Err(ShortIdDecodeError::InvalidCharacter),
+            };
+            decoded = match decoded.checked_mul(62) {
+                Some(value) => value,
+                None => return Err(ShortIdDecodeError::Overflow),
+            };
+            decoded = match decoded.checked_add(digit) {
+                Some(value) => value,
+                None => return Err(ShortIdDecodeError::Overflow),
+            };
+        }
+
+        Ok(Self(Ulid::from_bytes(decoded.to_be_bytes())))
     }
 
     ///

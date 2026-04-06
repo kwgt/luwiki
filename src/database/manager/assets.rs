@@ -10,7 +10,7 @@
 
 use std::fs;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use redb::{ReadableDatabase, ReadableTable};
 
 use super::DatabaseManager;
@@ -24,6 +24,8 @@ use crate::database::schema::{
     USER_INFO_TABLE,
 };
 use crate::database::types::{AssetId, AssetInfo, PageId};
+/// 孤立した user_id を表示する際の代替ユーザ名
+const UNKNOWN_USERNAME: &str = "unknown";
 
 impl DatabaseManager {
     ///
@@ -59,10 +61,10 @@ impl DatabaseManager {
             let asset_id = asset_id.value().clone();
             let asset_info = asset_info.value();
             let user_id = asset_info.user();
-            let user_info = user_table
-                .get(user_id.clone())?
-                .ok_or_else(|| anyhow!("user not found"))?
-                .value();
+            let user_name = match user_table.get(user_id.clone())? {
+                Some(user_info) => user_info.value().username(),
+                None => UNKNOWN_USERNAME.to_string(),
+            };
             let page_path = asset_info
                 .page_id()
                 .and_then(|page_id| page_map.get(&page_id).cloned());
@@ -73,7 +75,7 @@ impl DatabaseManager {
                 asset_info.mime(),
                 asset_info.size(),
                 asset_info.timestamp(),
-                user_info.username(),
+                user_name,
                 page_path,
                 asset_info.deleted(),
             ));

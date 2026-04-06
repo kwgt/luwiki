@@ -5,6 +5,7 @@ import {
   fetchDeletedPageCandidates,
   fetchParentPage,
   fetchPageMeta,
+  fetchPageShortPath,
   fetchPageSource,
   renamePagePath,
   unlockPageLock,
@@ -34,20 +35,27 @@ import { buildAmendRefreshKey } from '../lib/amendRefresh';
 import { expandRenderMacros } from '../lib/macroEngine';
 
 
-function copyToClipboard(text: string): void {
+async function copyToClipboard(text: string): Promise<boolean> {
   if (!navigator.clipboard || !window.isSecureContext) {
     console.warn('clipboard not available', {
       secureContext: window.isSecureContext,
       hasClipboard: !!navigator.clipboard,
     });
-    return;
+    return false;
   }
   console.log('[clipboard] write request', text);
-  navigator.clipboard.writeText(text).then(() => {
+  try {
+    await navigator.clipboard.writeText(text);
     console.log('[clipboard] write success');
-  }).catch((err) => {
+    return true;
+  } catch (err) {
     console.warn('clipboard write failed', err);
-  });
+    return false;
+  }
+}
+
+function buildShortWikiUrl(shortPath: string): string {
+  return new URL(`/w/${shortPath}`, window.location.origin).toString();
 }
 
 function isRequestError(err: unknown): err is { status?: number } {
@@ -71,6 +79,9 @@ export function usePageView() {
   const copyToastName = ref('');
   const pageMeta = ref<PageMetaResponse | null>(null);
   const pageMetaOpen = ref(false);
+  const pageShortUrl = ref('');
+  const pageShortUrlLoading = ref(false);
+  const pageShortUrlError = ref('');
   const assetDetails = ref<PageAsset | null>(null);
   const assetMetaDetails = ref<{
     file_name: string;
@@ -655,15 +666,41 @@ export function usePageView() {
     }
   }
 
+  async function loadPageShortUrl(): Promise<void> {
+    if (!pageId.value) {
+      pageShortUrl.value = '';
+      pageShortUrlError.value = 'page id not found';
+      pageShortUrlLoading.value = false;
+      return;
+    }
+
+    pageShortUrlLoading.value = true;
+    pageShortUrlError.value = '';
+    try {
+      const resp = await fetchPageShortPath(pageId.value);
+      pageShortUrl.value = buildShortWikiUrl(resp.short_path);
+    } catch (err: unknown) {
+      pageShortUrl.value = '';
+      pageShortUrlError.value = toErrorMessage(err);
+    } finally {
+      pageShortUrlLoading.value = false;
+    }
+  }
+
   function openPageMeta(): void {
     if (!pageMeta.value) {
       return;
     }
+    pageShortUrl.value = '';
+    pageShortUrlError.value = '';
+    pageShortUrlLoading.value = false;
     pageMetaOpen.value = true;
+    void loadPageShortUrl();
   }
 
   function dismissPageMeta(): void {
     pageMetaOpen.value = false;
+    pageShortUrlLoading.value = false;
   }
 
   function dismissCopyToast(): void {
@@ -674,7 +711,7 @@ export function usePageView() {
     if (!name) {
       return;
     }
-    copyToClipboard(name);
+    void copyToClipboard(name);
   }
 
   function dismissAssetDetails(): void {
@@ -779,6 +816,9 @@ export function usePageView() {
     copyToastName,
     pageMeta,
     pageMetaOpen,
+    pageShortUrl,
+    pageShortUrlLoading,
+    pageShortUrlError,
     assetDetails,
     assetMetaDetails,
     assetDetailsLoading,

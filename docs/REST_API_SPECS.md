@@ -82,8 +82,10 @@ properties:
   |GET    | `/api/pages/{page_id}/source[?rev={revision}]`    | [ページソースの取得](#get-page-source)
   |PUT    | `/api/pages/{page_id}/source[?amend={boolean}]`   | [ページソースの更新](#update-page-source)
   |GET    | `/api/pages/{page_id}/meta[?rev={revision}]`      | [ページのメタ情報の取得](#get-page-metadata)
+  |GET    | `/api/pages/{page_id}/short`                      | [ページIDから短縮パスを取得](#get-page-short-path-by-id)
   |GET    | `/api/pages/{page_id}/parent[?recursive={boolean}]` | [親ページの取得](#get-page-parent)
   |GET    | `/api/pages/{page_id}/path`                       | [ページパスの取得](#get-page-path)
+  |GET    | `/api/pages/short?path={page_path}`               | [ページパスから短縮パスを取得](#get-page-short-path-by-path)
   |POST   | `/api/pages/{page_id}/path?rename_to={page_path}[&recursive={boolean}]` | [ページパスの変更(リネーム)](#rename-page-path)
   |POST   | `/api/pages/{page_id}/path?restore_to={page_path}[&recursive={boolean}]` | [ページの復帰](#restore-page-path)
   |GET    | `/api/pages/{page_id}/assets`                     | [ページに付随するアセットのメタ情報一覧取得](#get-page-assets)
@@ -283,6 +285,57 @@ properties:
   - `limit`が指定されなかった場合は、`limit`に50を指定した物として動作する
   - `with_deleted`が指定されなかった場合は、`with_deleted`に`false`を指定した物として動作する
   - 対象が存在しない場合は空配列を返す
+
+<a id="get-page-short-path-by-path"></a>
+### `GET /api/pages/short?path={page_path}`
+#### 概要
+ページパスから短縮パスの取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
+
+#### クエリーパラメータ
+  |名称|型|説明|必須|
+  |:--|:--|:--|:--|
+  | `path` | string | 操作対象のページパス | 必須 |
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+  | `Cache-Control` | "no-store" (固定)
+
+また、ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "object"
+required:
+  - short_path
+properties:
+  short_path:
+    description: >-
+      指定された正規化済みページパスに対応する短縮用パス断片 `{short_id}` が格納される。
+      実際の短縮URLを構成する場合はクライアント側で `/w/` を前置する
+    type: "string"
+```
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 401 Unauthorized | 認証に失敗した
+  | 400 Bad Request | `path`で指定されたパスのフォーマットが不正
+  | 404 Not Found | `path`で指定されたページが存在しない
+  | 410 Gone | `path`で指定されたページが削除済みである
+
+#### 注記
+  - `path` には正規化済みの絶対ページパスを指定する
+  - `path` には `/wiki/...` のような閲覧URL形式を指定しない
+  - サーバは `path` を追加変換せず、そのままページパスとして解決する
 
 <a id="get-deleted-pages"></a>
 ### `GET /api/pages/deleted?path={page_path}`
@@ -614,6 +667,24 @@ properties:
               ページパスが格納される
             type: "string"
 
+      short_path:
+        description: >-
+          このページの短縮用パス断片の状態が格納される
+        type: "object"
+        required:
+          - kind
+        properties:
+          kind:
+            description: >-
+              短縮用パス断片の種別("available"または"unavailable")
+            type: "string"
+          value:
+            description: >-
+              短縮用パス断片 `{short_id}` が格納される。
+              `kind="available"` の場合に格納される。
+              実際の短縮URLを構成する場合はクライアント側で `/w/` を前置する
+            type: "string"
+
       revision_scope:
         description: >-
           このページのリビジョン範囲が格納される
@@ -705,6 +776,9 @@ properties:
   - `rename_info` は object のまま `kind` を追加するため、通常リネームのみを扱う既存クライアントは
     `from` / `to` の参照を継続できる
   - `kind="removed_by_migrate"` は `from` / `to` を持たないため、この状態を表示するクライアント側対応が別途必要
+  - 本APIはページのメタ情報取得を主用途とする
+  - 短縮用パス断片の取得は `GET /api/pages/{page_id}/short` または `GET /api/pages/short?path={page_path}` を正とし、本APIでの返却は補助的用途として扱う
+  - `page_info.short_path.kind="unavailable"` は、削除済みページなど短縮用パス断片を返さない状態を表す
 
 リクエストに失敗したときは以下のステータスが返される。
 
@@ -713,6 +787,53 @@ properties:
   | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `rev`で指定されたリビジョン番号のフォーマットが不正
   | 404 Not Found | 指定されたページIDに対応するページが存在しない<br>`rev`で指定されたリビジョンのソースが存在しない
+
+<a id="get-page-short-path-by-id"></a>
+### `GET /api/pages/{page_id}/short`
+#### 概要
+ページIDから短縮パスの取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
+
+#### パスエレメント
+  - `page_id` : 操作対象のページID
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+  | `Cache-Control` | "no-store" (固定)
+
+また、ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "object"
+required:
+  - short_path
+properties:
+  short_path:
+    description: >-
+      指定されたページIDに対応する短縮用パス断片 `{short_id}` が格納される。
+      実際の短縮URLを構成する場合はクライアント側で `/w/` を前置する
+    type: "string"
+```
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 401 Unauthorized | 認証に失敗した
+  | 404 Not Found | `page_id`で指定されたページが存在しない
+  | 410 Gone | 削除済みのページが指定された
+
+#### 注記
+  - 短縮URLを構成する場合は、返却された `short_path` に `/w/` を前置する
+  - 本APIは短縮用パス断片の取得を主用途とする
 
 
 <a id="get-page-path"></a>
@@ -756,6 +877,10 @@ properties:
   | 401 Unauthorized | 認証に失敗した
   | 404 Not Found | `page_id`で指定されたページが存在しない
   | 410 Gone | 削除済みのページが指定された
+
+#### 注記
+  - 本APIは `page_id` から current path を解決する用途に留める
+  - 短縮用パス断片の取得は `GET /api/pages/{page_id}/short` または `GET /api/pages/short?path={page_path}` を使用する
 
 <a id="get-page-parent"></a>
 ### `GET /api/pages/{page_id}/parent[?recursive={boolean}]`

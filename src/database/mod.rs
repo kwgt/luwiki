@@ -15,6 +15,7 @@ mod init;
 mod link_refs;
 mod manager;
 mod schema;
+pub(crate) mod short_id;
 mod txn_helpers;
 
 #[allow(unused_imports)]
@@ -27,6 +28,7 @@ pub(crate) use entries::{
 pub(crate) use manager::DatabaseManager;
 pub(crate) use manager::bearer_tokens::VerifyBearerTokenFailureReason;
 pub(crate) use manager::pages_read::AppendConflictState;
+pub(crate) use manager::pages_read::PagePathResolveState;
 pub(crate) use manager::pages_write::{AppendPageRequest, AppendPageResult};
 pub(crate) use schema::DbError;
 
@@ -101,6 +103,30 @@ where
     let page_id = PageId::from_string(page_id)
         .map_err(|_| anyhow!(DbError::PageNotFound))?;
     manager.has_page_source_for_test(&page_id, revision)
+}
+
+///
+/// テスト用に指定ユーザを削除する
+///
+/// # 引数
+/// * `db_path` - データベースファイルパス
+/// * `asset_path` - アセットディレクトリパス
+/// * `user_name` - 削除対象ユーザ名
+///
+/// # 戻り値
+/// ユーザ削除に成功した場合は`Ok(())`を返す。
+///
+#[allow(dead_code)]
+pub fn delete_user_for_test<P>(
+    db_path: P,
+    asset_path: P,
+    user_name: &str,
+) -> Result<()>
+where
+    P: AsRef<Path>,
+{
+    let manager = DatabaseManager::open(db_path, asset_path)?;
+    manager.delete_user(user_name)
 }
 
 ///
