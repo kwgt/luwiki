@@ -26,6 +26,7 @@ use crate::mcp::errors::{McpError, McpErrorResponse};
 use crate::mcp::handler::McpHandler;
 use crate::mcp::service::McpService;
 use crate::mcp::tools::{
+    EditPageToolArgs,
     GetPageSectionToolArgs,
     GetPageTocToolArgs,
     GetPageToolArgs,
@@ -35,6 +36,7 @@ use crate::mcp::tools::{
     WritePageToolArgs,
     append_page,
     create_page,
+    edit_page,
     get_page,
     get_page_section,
     get_page_toc,
@@ -259,6 +261,21 @@ impl LuwikiMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpProtocolError> {
         create_page::execute(self, params, context).await
+    }
+
+    ///
+    /// `edit_page` の tool 入口
+    ///
+    #[tool(
+        name = "edit_page",
+        description = "指定した path の Markdown 本文を単一操作で部分編集する。"
+    )]
+    async fn edit_page_tool(
+        &self,
+        params: Parameters<EditPageToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        edit_page::execute(self, params, context).await
     }
 
     ///

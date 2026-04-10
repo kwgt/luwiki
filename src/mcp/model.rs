@@ -12,6 +12,11 @@ use serde::Serialize;
 
 use super::service::{
     AppendServiceResult,
+    EditPageRequest as ServiceEditPageRequest,
+    EditPageResult,
+    EditPageInsertSectionPlacement as ServiceEditPageInsertSectionPlacement,
+    EditPageOperation as ServiceEditPageOperation,
+    EditPageReplaceTextOccurrence as ServiceEditPageReplaceTextOccurrence,
     GetPageResult,
     GetPageSectionResult,
     GetPageTocResult,
@@ -21,7 +26,15 @@ use super::service::{
     TocSection,
     WritePageResult,
 };
-use super::tools::McpToolName;
+use super::tools::{
+    EditPageInsertSectionPlacement,
+    EditPageReplaceTextOccurrence,
+    EditPageSectionSelector,
+    EditPageSectionSelectorBy,
+    EditPageSectionSelectorObject,
+    EditPageToolOperation,
+    McpToolName,
+};
 
 ///
 /// MCP要求の共通エンベロープ
@@ -70,6 +83,9 @@ pub(crate) enum McpToolRequest {
     /// `update_page` 入力
     UpdatePage(WritePageRequest),
 
+    /// `edit_page` 入力
+    EditPage(EditPageRequest),
+
     /// `append_page` 入力
     AppendPage(WritePageRequest),
 
@@ -102,6 +118,9 @@ pub(crate) enum McpToolResponse {
 
     /// `update_page` 出力
     UpdatePage(WritePageResponse),
+
+    /// `edit_page` 出力
+    EditPage(EditPageResponse),
 
     /// `append_page` 出力
     AppendPage(AppendPageResponse),
@@ -192,6 +211,108 @@ pub(crate) struct RenamePageRequest {
 }
 
 ///
+/// `edit_page` の公開 selector
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum McpEditPageSectionSelector {
+    /// 見出し文字列そのものを指定する省略形
+    Text(String),
+
+    /// section ID 指定
+    ById(String),
+
+    /// 見出し文字列指定
+    ByTitle(String),
+}
+
+///
+/// `insert_section` の挿入位置
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum McpEditPageInsertSectionPlacement {
+    /// anchor の直前
+    Before,
+
+    /// anchor の直後
+    After,
+}
+
+///
+/// `replace_text` の一致対象
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum McpEditPageReplaceTextOccurrence {
+    /// 先頭一致のみ
+    First,
+
+    /// 全一致
+    All,
+}
+
+///
+/// `edit_page` の公開 operation
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum McpEditPageOperation {
+    /// セクション本文の置換
+    ReplaceSection {
+        /// 対象セクション
+        section: McpEditPageSectionSelector,
+
+        /// 置換後本文
+        content: String,
+    },
+
+    /// セクション挿入
+    InsertSection {
+        /// 挿入位置基準セクション
+        anchor: McpEditPageSectionSelector,
+
+        /// 挿入位置
+        placement: McpEditPageInsertSectionPlacement,
+
+        /// 挿入する完全なセクション本文
+        content: String,
+    },
+
+    /// セクション削除
+    DeleteSection {
+        /// 削除対象セクション
+        section: McpEditPageSectionSelector,
+    },
+
+    /// テキスト置換
+    ReplaceText {
+        /// 置換前文字列
+        old_text: String,
+
+        /// 置換後文字列
+        new_text: String,
+
+        /// 複数一致時の対象指定
+        occurrence: Option<McpEditPageReplaceTextOccurrence>,
+    },
+}
+
+///
+/// `edit_page` 入力
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EditPageRequest {
+    /// 対象ページの絶対 path
+    path: String,
+
+    /// 対象 revision
+    revision: u64,
+
+    /// ページ内容の一意性を表すインスタンスID
+    instance_id: String,
+
+    /// 単一の編集操作
+    operation: McpEditPageOperation,
+}
+
+///
 /// `get_page_section` 入力
 ///
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -228,6 +349,9 @@ pub(crate) struct GetPageResponse {
 
     /// 対応 revision
     revision: u64,
+
+    /// 対応 instance_id
+    instance_id: String,
 
     /// Markdown 本文全体
     content: String,
@@ -267,6 +391,9 @@ pub(crate) struct GetPageTocResponse {
 
     /// 対応 revision
     revision: u64,
+
+    /// 対応 instance_id
+    instance_id: String,
 
     /// 見出し一覧
     sections: Vec<McpSectionInfo>,
@@ -343,6 +470,27 @@ pub(crate) struct WritePageResponse {
     /// 更新後 revision
     revision: u64,
 
+    /// 更新後 instance_id
+    instance_id: String,
+
+    /// 実行結果要約
+    summary: String,
+}
+
+///
+/// `edit_page` 出力
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct EditPageResponse {
+    /// current path
+    path: String,
+
+    /// 更新後 revision
+    revision: u64,
+
+    /// 更新後 instance_id
+    instance_id: String,
+
     /// 実行結果要約
     summary: String,
 }
@@ -357,6 +505,9 @@ pub(crate) struct AppendPageResponse {
 
     /// 更新後 revision
     revision: u64,
+
+    /// 更新後 instance_id
+    instance_id: String,
 
     /// 実行結果要約
     summary: String,
@@ -712,6 +863,74 @@ impl RenamePageRequest {
     }
 }
 
+impl EditPageRequest {
+    ///
+    /// `edit_page` 入力を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページ path
+    /// * `revision` - 対象 revision
+    /// * `instance_id` - 内容整合性確認用 instance_id
+    /// * `operation` - 単一の編集操作
+    ///
+    /// # 戻り値
+    /// 生成した入力モデルを返す。
+    ///
+    pub(crate) fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        operation: McpEditPageOperation,
+    ) -> Self {
+        Self {
+            path,
+            revision,
+            instance_id,
+            operation,
+        }
+    }
+
+    ///
+    /// 対象ページ path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの絶対 path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// 対象 revision を返す
+    ///
+    /// # 戻り値
+    /// 対象 revision を返す。
+    ///
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    ///
+    /// 入力 instance_id を返す
+    ///
+    /// # 戻り値
+    /// 内容整合性確認用 instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    ///
+    /// 編集操作を返す
+    ///
+    /// # 戻り値
+    /// 単一の編集操作を返す。
+    ///
+    pub(crate) fn operation(&self) -> &McpEditPageOperation {
+        &self.operation
+    }
+}
+
 impl GetPageSectionRequest {
     ///
     /// `get_page_section` 入力を生成する
@@ -774,6 +993,7 @@ impl GetPageResponse {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 対応 revision
+    /// * `instance_id` - 対応 instance_id
     /// * `content` - Markdown 本文
     ///
     /// # 戻り値
@@ -782,11 +1002,13 @@ impl GetPageResponse {
     pub(crate) fn new(
         path: String,
         revision: u64,
+        instance_id: String,
         content: String,
     ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             content,
         }
     }
@@ -833,6 +1055,7 @@ impl GetPageTocResponse {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 対応 revision
+    /// * `instance_id` - 対応 instance_id
     /// * `sections` - 見出し一覧
     ///
     /// # 戻り値
@@ -841,11 +1064,13 @@ impl GetPageTocResponse {
     pub(crate) fn new(
         path: String,
         revision: u64,
+        instance_id: String,
         sections: Vec<McpSectionInfo>,
     ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             sections,
         }
     }
@@ -898,6 +1123,7 @@ impl WritePageResponse {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 更新後 revision
+    /// * `instance_id` - 更新後 instance_id
     /// * `summary` - 実行結果要約
     ///
     /// # 戻り値
@@ -906,11 +1132,41 @@ impl WritePageResponse {
     pub(crate) fn new(
         path: String,
         revision: u64,
+        instance_id: String,
         summary: String,
     ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
+            summary,
+        }
+    }
+}
+
+impl EditPageResponse {
+    ///
+    /// `edit_page` 出力を生成する
+    ///
+    /// # 引数
+    /// * `path` - current path
+    /// * `revision` - 更新後 revision
+    /// * `instance_id` - 更新後 instance_id
+    /// * `summary` - 実行結果要約
+    ///
+    /// # 戻り値
+    /// 生成した出力モデルを返す。
+    ///
+    pub(crate) fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        summary: String,
+    ) -> Self {
+        Self {
+            path,
+            revision,
+            instance_id,
             summary,
         }
     }
@@ -923,6 +1179,7 @@ impl AppendPageResponse {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 更新後 revision
+    /// * `instance_id` - 更新後 instance_id
     /// * `summary` - 実行結果要約
     /// * `amended` - amend 相当保存有無
     ///
@@ -932,12 +1189,14 @@ impl AppendPageResponse {
     pub(crate) fn new(
         path: String,
         revision: u64,
+        instance_id: String,
         summary: String,
         amended: bool,
     ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             summary,
             amended,
         }
@@ -990,6 +1249,161 @@ impl From<McpSectionSelector> for SectionSelector {
     }
 }
 
+impl From<EditPageSectionSelectorObject> for McpEditPageSectionSelector {
+    fn from(selector: EditPageSectionSelectorObject) -> Self {
+        match selector.by {
+            EditPageSectionSelectorBy::Id => Self::ById(selector.value),
+            EditPageSectionSelectorBy::Title => Self::ByTitle(selector.value),
+        }
+    }
+}
+
+impl From<EditPageSectionSelector> for McpEditPageSectionSelector {
+    fn from(selector: EditPageSectionSelector) -> Self {
+        match selector {
+            EditPageSectionSelector::Text(value) => Self::Text(value),
+            EditPageSectionSelector::Structured(value) => Self::from(value),
+        }
+    }
+}
+
+impl From<EditPageInsertSectionPlacement>
+    for McpEditPageInsertSectionPlacement
+{
+    fn from(placement: EditPageInsertSectionPlacement) -> Self {
+        match placement {
+            EditPageInsertSectionPlacement::Before => Self::Before,
+            EditPageInsertSectionPlacement::After => Self::After,
+        }
+    }
+}
+
+impl From<EditPageReplaceTextOccurrence> for McpEditPageReplaceTextOccurrence {
+    fn from(occurrence: EditPageReplaceTextOccurrence) -> Self {
+        match occurrence {
+            EditPageReplaceTextOccurrence::First => Self::First,
+            EditPageReplaceTextOccurrence::All => Self::All,
+        }
+    }
+}
+
+impl From<EditPageToolOperation> for McpEditPageOperation {
+    fn from(operation: EditPageToolOperation) -> Self {
+        match operation {
+            EditPageToolOperation::ReplaceSection { section, content } => {
+                Self::ReplaceSection {
+                    section: section.into(),
+                    content,
+                }
+            }
+            EditPageToolOperation::InsertSection {
+                anchor,
+                placement,
+                content,
+            } => Self::InsertSection {
+                anchor: anchor.into(),
+                placement: placement.into(),
+                content,
+            },
+            EditPageToolOperation::DeleteSection { section } => {
+                Self::DeleteSection {
+                    section: section.into(),
+                }
+            }
+            EditPageToolOperation::ReplaceText {
+                old_text,
+                new_text,
+                occurrence,
+            } => Self::ReplaceText {
+                old_text,
+                new_text,
+                occurrence: occurrence.map(Into::into),
+            },
+        }
+    }
+}
+
+impl From<McpEditPageSectionSelector> for SectionSelector {
+    fn from(selector: McpEditPageSectionSelector) -> Self {
+        match selector {
+            McpEditPageSectionSelector::Text(value) => Self::ByTitle(value),
+            McpEditPageSectionSelector::ById(value) => Self::ById(value),
+            McpEditPageSectionSelector::ByTitle(value) => {
+                Self::ByTitle(value)
+            }
+        }
+    }
+}
+
+impl From<McpEditPageInsertSectionPlacement>
+    for ServiceEditPageInsertSectionPlacement
+{
+    fn from(placement: McpEditPageInsertSectionPlacement) -> Self {
+        match placement {
+            McpEditPageInsertSectionPlacement::Before => Self::Before,
+            McpEditPageInsertSectionPlacement::After => Self::After,
+        }
+    }
+}
+
+impl From<McpEditPageReplaceTextOccurrence>
+    for ServiceEditPageReplaceTextOccurrence
+{
+    fn from(occurrence: McpEditPageReplaceTextOccurrence) -> Self {
+        match occurrence {
+            McpEditPageReplaceTextOccurrence::First => Self::First,
+            McpEditPageReplaceTextOccurrence::All => Self::All,
+        }
+    }
+}
+
+impl From<McpEditPageOperation> for ServiceEditPageOperation {
+    fn from(operation: McpEditPageOperation) -> Self {
+        match operation {
+            McpEditPageOperation::ReplaceSection { section, content } => {
+                Self::ReplaceSection {
+                    section: section.into(),
+                    content,
+                }
+            }
+            McpEditPageOperation::InsertSection {
+                anchor,
+                placement,
+                content,
+            } => Self::InsertSection {
+                anchor: anchor.into(),
+                placement: placement.into(),
+                content,
+            },
+            McpEditPageOperation::DeleteSection { section } => {
+                Self::DeleteSection {
+                    section: section.into(),
+                }
+            }
+            McpEditPageOperation::ReplaceText {
+                old_text,
+                new_text,
+                occurrence,
+            } => Self::ReplaceText {
+                old_text,
+                new_text,
+                occurrence: occurrence.map(Into::into),
+            },
+        }
+    }
+}
+
+impl From<EditPageRequest> for ServiceEditPageRequest {
+    fn from(request: EditPageRequest) -> Self {
+        Self::new(
+            request.path,
+            request.revision,
+            request.instance_id,
+            request.operation.into(),
+        )
+    }
+}
+
 impl From<&TocSection> for McpSectionInfo {
     fn from(section: &TocSection) -> Self {
         Self {
@@ -1008,6 +1422,7 @@ impl From<GetPageResult> for GetPageResponse {
         Self {
             path: result.path().to_string(),
             revision: result.revision(),
+            instance_id: result.instance_id().to_string(),
             content: result.content().to_string(),
         }
     }
@@ -1019,6 +1434,7 @@ impl From<GetPageTocResult> for GetPageTocResponse {
         Self {
             path: result.path().to_string(),
             revision: result.revision(),
+            instance_id: result.instance_id().to_string(),
             sections,
         }
     }
@@ -1077,6 +1493,18 @@ impl From<WritePageResult> for WritePageResponse {
         Self {
             path: result.path().to_string(),
             revision: result.revision(),
+            instance_id: result.instance_id().to_string(),
+            summary: result.summary().to_string(),
+        }
+    }
+}
+
+impl From<EditPageResult> for EditPageResponse {
+    fn from(result: EditPageResult) -> Self {
+        Self {
+            path: result.path().to_string(),
+            revision: result.revision(),
+            instance_id: result.instance_id().to_string(),
             summary: result.summary().to_string(),
         }
     }
@@ -1087,6 +1515,7 @@ impl From<AppendServiceResult> for AppendPageResponse {
         Self {
             path: result.path().to_string(),
             revision: result.revision(),
+            instance_id: result.instance_id().to_string(),
             summary: result.summary().to_string(),
             amended: result.amended(),
         }

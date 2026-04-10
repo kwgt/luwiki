@@ -28,6 +28,8 @@ MCP機能の責務配置、公開面、認証・認可、監査ログ、path ベ
   - 認証・認可のテスト観点を確認する場合に参照する
 - `docs/MCP_APPEND_TEST_VIEWPOINTS.md`
   - `append` の競合制御および amend 挙動のテスト観点を確認する場合に参照する
+- `docs/MCP_EDIT_TEST_VIEWPOINTS.md`
+  - `edit_page` の部分編集、内容整合性確認、失敗分類のテスト観点を確認する場合に参照する
 - `docs/MCP_AUDIT_LOG_TEST_VIEWPOINTS.md`
   - 監査ログ基盤のテスト観点を確認する場合に参照する
 - `docs/MCP_CLI_TEST_VIEWPOINTS.md`
@@ -58,6 +60,7 @@ MCP 実装設計の文書配置は、
 - 補助資料
   - `docs/MCP_AUTHORIZATION_TEST_VIEWPOINTS.md`
   - `docs/MCP_APPEND_TEST_VIEWPOINTS.md`
+  - `docs/MCP_EDIT_TEST_VIEWPOINTS.md`
   - `docs/MCP_AUDIT_LOG_TEST_VIEWPOINTS.md`
   - `docs/MCP_CLI_TEST_VIEWPOINTS.md`
   - `docs/MCP_REGRESSION_TEST_SCOPE.md`
@@ -74,7 +77,7 @@ MCP 実装設計の文書配置は、
 | 4.6 path ベースサービス層とデータモデル設計 | `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`、`docs/MCP_INTERFACE_AND_ERROR_DESIGN.md` | 2. path ベースサービス層の橋渡し設計 / 2.6 サービス層の入出力モデル / 2.7 追加が必要な DB API / 3. MCP の入出力データモデル |
 | 4.7 永続化・DBアクセス・運用値設計 | `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`、`docs/MCP_AUDIT_LOG_DESIGN.md`、`docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md` | 2.4 Bearerトークン管理情報の拡張設計 / 2.5 ユーザ属性モデルの拡張設計 / 2.7 追加が必要な DB API / 5. JSONL 保存形式とファイル分割ルール / 6. 保持期間超過ログの自動削除 / 2.3 CLI と設定ファイルの優先順位 |
 | 4.8 CLI / 設定 / 起動経路設計 | `docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md` | 2. MCP の公開条件と起動条件 / 3. MCP の transport / endpoint 構成 |
-| 4.9 テスト設計 | テスト観点書群 | 認可、`append`、監査ログ、CLI、回帰確認の各別紙 |
+| 4.9 テスト設計 | テスト観点書群 | 認可、`append`、`edit_page`、監査ログ、CLI、回帰確認の各別紙 |
 | 4.10 文書化とトレーサビリティ | `docs/MCP_INTERNAL_DESIGN.md`、本タスクリスト、必要に応じた別紙 | 共通部の参照入口、完了記録、後続タスクへの引き渡し整理 |
 
 以後、本書は「共通前提と参照入口」を保持するハブとして扱い、
@@ -89,6 +92,7 @@ MCP 実装設計の文書配置は、
 - ページ検索
 - ページ作成
 - ページ更新
+- ページ編集
 - ページ追記
 - ページリネーム
 - セクション取得
@@ -889,7 +893,7 @@ Streamable HTTP 前提の transport adapter 責務は、
 ## 15. MCP のツール一覧と各ツールの責務
 
 初期版で公開する `get_page`、`list_pages`、`search_pages`、
-`create_page`、`update_page`、`append_page`、`rename_page`、
+`create_page`、`update_page`、`edit_page`、`append_page`、`rename_page`、
 `get_page_section` の責務整理は、
 [MCP_INTERFACE_AND_ERROR_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_INTERFACE_AND_ERROR_DESIGN.md)
 を参照する。

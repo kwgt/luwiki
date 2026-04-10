@@ -238,7 +238,7 @@ mod tests {
     use actix_web::http::header;
     use actix_web::{App, HttpServer, web};
     use reqwest::Client;
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use tempfile::tempdir;
 
     use super::{create_endpoint, create_scope};
@@ -279,6 +279,9 @@ mod tests {
 
         /// HTTPクライアント
         client: Client,
+
+        /// 共有状態
+        state: web::Data<Arc<RwLock<AppState>>>,
 
         /// Bearerトークン文字列
         bearer_token: String,
@@ -386,6 +389,89 @@ mod tests {
             std::mem::drop(self.handle.stop(true));
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+
+        ///
+        /// 指定 path の latest revision と instance_id を取得する
+        ///
+        /// # 戻り値
+        /// `(latest_revision, instance_id)` を返す。
+        ///
+        fn latest_revision_and_instance_id(&self, path: &str) -> (u64, String) {
+            let state = self.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path(path)
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            let resolved = state
+                .db()
+                .get_current_page_state_by_path(path)
+                .expect("resolve current page failed")
+                .expect("current page missing");
+            let latest_revision = resolved
+                .latest_revision()
+                .expect("latest revision missing");
+            let latest_source = state
+                .db()
+                .get_page_source(&page_id, latest_revision)
+                .expect("get latest source failed")
+                .expect("latest source missing");
+
+            (
+                latest_revision,
+                latest_source
+                    .instance_id()
+                    .expect("instance_id missing")
+                    .to_string(),
+            )
+        }
+
+        ///
+        /// 指定 path の本文を直接更新する
+        ///
+        /// # 引数
+        /// * `path` - 対象 path
+        /// * `user` - 更新ユーザ
+        /// * `content` - 更新本文
+        ///
+        /// # 戻り値
+        /// なし
+        ///
+        fn put_page(&self, path: &str, user: &str, content: &str) {
+            let state = self.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path(path)
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            state
+                .db()
+                .put_page(&page_id, user, content.to_string(), false)
+                .expect("put page failed");
+        }
+
+        ///
+        /// 指定 path にページロックを設定する
+        ///
+        /// # 引数
+        /// * `path` - 対象 path
+        /// * `user` - ロック所有者
+        ///
+        /// # 戻り値
+        /// なし
+        ///
+        fn acquire_page_lock(&self, path: &str, user: &str) {
+            let state = self.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path(path)
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            state
+                .db()
+                .acquire_page_lock(&page_id, user)
+                .expect("acquire page lock failed");
+        }
     }
 
     ///
@@ -395,8 +481,12 @@ mod tests {
     /// 起動済みサーバ情報を返す。
     ///
     async fn spawn_test_server() -> TestServerContext {
-        spawn_test_server_with_session_config(SessionManagerConfig::default())
-            .await
+        spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await
     }
 
     ///
@@ -410,6 +500,30 @@ mod tests {
     ///
     async fn spawn_test_server_with_session_config(
         session_config: SessionManagerConfig,
+    ) -> TestServerContext {
+        spawn_test_server_with_auth(
+            session_config,
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await
+    }
+
+    ///
+    /// 指定認可条件で transport 統合テスト用サーバを起動する
+    ///
+    /// # 引数
+    /// * `session_config` - session 管理設定
+    /// * `scopes` - Bearer scope 集合
+    /// * `path_prefixes` - path prefix 制約
+    ///
+    /// # 戻り値
+    /// 起動済みサーバ情報を返す。
+    ///
+    async fn spawn_test_server_with_auth(
+        session_config: SessionManagerConfig,
+        scopes: BearerScopeSet,
+        path_prefixes: PathPrefixSet,
     ) -> TestServerContext {
         /*
          * テスト用 AppState を構築する
@@ -432,8 +546,8 @@ mod tests {
         let (token, _) = manager
             .create_bearer_token(
                 "alice",
-                BearerScopeSet::from_iter([BearerScope::Read]),
-                PathPrefixSet::from_iter(["/"]),
+                scopes,
+                path_prefixes,
                 chrono::Duration::minutes(30),
                 Some("transport test".to_string()),
             )
@@ -456,10 +570,11 @@ mod tests {
         let session_manager =
             ManagedSessionManager::new_with_config(session_config);
         session_manager.start_background_sweep();
+        let server_state = state.clone();
         let server = HttpServer::new(move || {
             App::new().service(create_scope(
                 create_endpoint(),
-                state.clone(),
+                server_state.clone(),
                 session_manager.clone(),
             ))
         })
@@ -476,9 +591,41 @@ mod tests {
         TestServerContext {
             base_url: format!("http://{}/mcp", address),
             client,
+            state,
             bearer_token: format!("Bearer {}", token.expose()),
             handle,
         }
+    }
+
+    fn build_tool_call_body(name: &str, arguments: Value) -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments,
+            }
+        })
+        .to_string()
+    }
+
+    fn parse_sse_payload(body_text: &str) -> Value {
+        let payload = body_text
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("tool response data line missing");
+        serde_json::from_str(payload).expect("tool response must contain JSON")
+    }
+
+    fn parse_tool_result_payload(body_text: &str) -> (Value, Value) {
+        let body_json = parse_sse_payload(body_text);
+        let content_text = body_json["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool result text missing");
+        let payload_json: Value = serde_json::from_str(content_text)
+            .expect("tool result payload must contain JSON");
+        (body_json, payload_json)
     }
 
     ///
@@ -828,6 +975,7 @@ mod tests {
             .expect("tool result payload must contain JSON");
         assert_eq!(payload_json["path"], "/mcp/page");
         assert_eq!(payload_json["revision"], 1);
+        assert!(payload_json["instance_id"].is_string());
         assert_eq!(payload_json["content"], "# page\nbody");
 
         let delete_response = context
@@ -838,6 +986,767 @@ mod tests {
             .expect("send session delete request failed");
         assert_eq!(delete_response.status(), 204);
         context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(get_page_toc)` が `instance_id` を含む既存応答形を返すことを確認する。
+    ///
+    #[actix_web::test]
+    async fn get_page_toc_tool_call_returns_instance_id() {
+        let context = spawn_test_server().await;
+        context.put_page(
+            "/mcp/page",
+            "alice",
+            "# page\nintro\n\n## Child\n\nchild body\n",
+        );
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "get_page_toc",
+            json!({
+                "path": "/mcp/page"
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send get_page_toc tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read get_page_toc tool call response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/page");
+        assert_eq!(payload_json["revision"], 2);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["sections"][0]["title"], "page");
+        assert_eq!(payload_json["sections"][1]["title"], "Child");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(create_page)` が `instance_id` を含む既存応答形を返すことを確認する。
+    ///
+    #[actix_web::test]
+    async fn create_page_tool_call_returns_instance_id() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Create]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "create_page",
+            json!({
+                "path": "/mcp/created",
+                "content": "# created\nbody"
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send create_page tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read create_page tool call response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/created");
+        assert_eq!(payload_json["revision"], 1);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["summary"], "page created");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(update_page)` が全文置換として動作し続けることを確認する。
+    ///
+    #[actix_web::test]
+    async fn update_page_tool_call_preserves_full_replace_behavior() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "update_page",
+            json!({
+                "path": "/mcp/page",
+                "content": "# replaced\nnew body"
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send update_page tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read update_page tool call response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/page");
+        assert_eq!(payload_json["revision"], 2);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["summary"], "page updated");
+
+        let source = {
+            let state = context.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path("/mcp/page")
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            state
+                .db()
+                .get_page_source(&page_id, 2)
+                .expect("get updated source failed")
+                .expect("updated source missing")
+        };
+        assert_eq!(source.source(), "# replaced\nnew body");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(edit_page)` 成功時の公開応答形を確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_returns_edit_response() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        let request_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send edit_page tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read edit_page tool call response failed");
+        let (body_json, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(body_json["jsonrpc"], "2.0");
+        assert_eq!(body_json["id"], 2);
+        assert_eq!(body_json["result"]["content"][0]["type"], "text");
+        assert_eq!(payload_json["path"], "/mcp/page");
+        assert_eq!(payload_json["revision"], 2);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["summary"], "page edited");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(append_page)` 成功時に `instance_id` を返すことを確認する。
+    ///
+    #[actix_web::test]
+    async fn append_page_tool_call_returns_instance_id() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "append_page",
+            json!({
+                "path": "/mcp/page",
+                "content": "\nnext"
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send append_page tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read append_page tool call response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/page");
+        assert_eq!(payload_json["revision"], 1);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["summary"], "page appended (amended)");
+        assert_eq!(payload_json["amended"], true);
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(append_page)` が末尾追記責務を維持することを確認する。
+    ///
+    #[actix_web::test]
+    async fn append_page_tool_call_preserves_append_behavior() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        context.put_page("/mcp/page", "alice", "# page\nbody v2");
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "append_page",
+            json!({
+                "path": "/mcp/page",
+                "content": "\nnext"
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send append_page regression tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read append_page regression response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/page");
+        assert_eq!(payload_json["revision"], 2);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["summary"], "page appended (amended)");
+        assert_eq!(payload_json["amended"], true);
+
+        let source = {
+            let state = context.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path("/mcp/page")
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            state
+                .db()
+                .get_page_source(&page_id, 2)
+                .expect("get appended source failed")
+                .expect("appended source missing")
+        };
+        assert_eq!(source.source(), "# page\nbody v2\nnext");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(rename_page)` 成功時に `instance_id` を返すことを確認する。
+    ///
+    #[actix_web::test]
+    async fn rename_page_tool_call_returns_instance_id() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "rename_page",
+            json!({
+                "path": "/mcp/page",
+                "rename_to": "/mcp/page-renamed"
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send rename_page tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read rename_page tool call response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/page-renamed");
+        assert_eq!(payload_json["revision"], 2);
+        assert!(payload_json["instance_id"].is_string());
+        assert_eq!(payload_json["summary"], "page renamed from /mcp/page");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(get_page_section)` が既存 selector 解決と section 抽出を維持することを確認する。
+    ///
+    #[actix_web::test]
+    async fn get_page_section_tool_call_preserves_section_resolution() {
+        let context = spawn_test_server().await;
+        context.put_page(
+            "/mcp/page",
+            "alice",
+            "# page\nintro\n\n## Child\n\nchild body\n\n# next\nother",
+        );
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = build_tool_call_body(
+            "get_page_section",
+            json!({
+                "path": "/mcp/page",
+                "section": { "by": "title", "value": "Child" }
+            }),
+        );
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send get_page_section tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read get_page_section tool call response failed");
+        let (_, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(payload_json["path"], "/mcp/page");
+        assert_eq!(payload_json["revision"], 2);
+        assert_eq!(payload_json["section"]["title"], "Child");
+        assert_eq!(payload_json["section"]["level"], 2);
+        assert_eq!(payload_json["content"], "child body\n\n");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `edit_page` の内容整合性エラーが公開コードへ写像されることを確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_maps_consistency_errors() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        context.put_page("/mcp/page", "alice", "# page\nbody v2");
+
+        let stale_revision_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let stale_revision_response = context
+            .post_json(&stale_revision_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send stale revision request failed");
+        let stale_revision_text = stale_revision_response
+            .text()
+            .await
+            .expect("read stale revision response failed");
+        let (_, stale_revision_payload) =
+            parse_tool_result_payload(&stale_revision_text);
+        assert_eq!(stale_revision_payload["code"], "not_latest_revision");
+        assert_eq!(
+            stale_revision_payload["message"],
+            "revision is not latest"
+        );
+
+        let (latest_revision, _) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        let mismatched_instance_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": latest_revision,
+                "instance_id": "instance-mismatch",
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let mismatched_instance_response = context
+            .post_json(&mismatched_instance_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send mismatched instance request failed");
+        let mismatched_instance_text = mismatched_instance_response
+            .text()
+            .await
+            .expect("read mismatched instance response failed");
+        let (_, mismatched_instance_payload) =
+            parse_tool_result_payload(&mismatched_instance_text);
+        assert_eq!(
+            mismatched_instance_payload["code"],
+            "instance_id_not_match"
+        );
+        assert_eq!(
+            mismatched_instance_payload["message"],
+            "instance_id does not match latest content"
+        );
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `edit_page` の `invalid_input` / `conflict` / `not_found` 写像を確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_maps_common_error_categories() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+
+        let invalid_input_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id.clone(),
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let invalid_input_response = context
+            .post_json(&invalid_input_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send invalid input request failed");
+        let invalid_input_text = invalid_input_response
+            .text()
+            .await
+            .expect("read invalid input response failed");
+        let (_, invalid_input_payload) =
+            parse_tool_result_payload(&invalid_input_text);
+        assert_eq!(invalid_input_payload["code"], "invalid_input");
+
+        context.acquire_page_lock("/mcp/page", "alice");
+        let conflict_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id.clone(),
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let conflict_response = context
+            .post_json(&conflict_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send conflict request failed");
+        let conflict_text = conflict_response
+            .text()
+            .await
+            .expect("read conflict response failed");
+        let (_, conflict_payload) = parse_tool_result_payload(&conflict_text);
+        assert_eq!(conflict_payload["code"], "conflict");
+        assert_eq!(conflict_payload["message"], "page is locked");
+
+        let missing_page_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let missing_page_session = missing_page_context.initialize_session().await;
+        missing_page_context
+            .send_initialized_notification(&missing_page_session)
+            .await;
+        let (missing_page_revision, missing_page_instance_id) =
+            missing_page_context.latest_revision_and_instance_id("/mcp/page");
+        let not_found_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": missing_page_revision,
+                "instance_id": missing_page_instance_id,
+                "operation": {
+                    "type": "delete_section",
+                    "section": { "by": "id", "value": "s-999" }
+                }
+            }),
+        );
+        let not_found_response = missing_page_context
+            .post_json(&not_found_body)
+            .header("mcp-session-id", &missing_page_session)
+            .send()
+            .await
+            .expect("send not found request failed");
+        let not_found_text = not_found_response
+            .text()
+            .await
+            .expect("read not found response failed");
+        let (_, not_found_payload) = parse_tool_result_payload(&not_found_text);
+        assert_eq!(not_found_payload["code"], "not_found");
+
+        context.shutdown().await;
+        missing_page_context.shutdown().await;
+    }
+
+    ///
+    /// `edit_page` の認可と path prefix 制約を確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_honors_authorization_rules() {
+        let update_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let update_session = update_context.initialize_session().await;
+        update_context
+            .send_initialized_notification(&update_session)
+            .await;
+        let (update_revision, update_instance_id) =
+            update_context.latest_revision_and_instance_id("/mcp/page");
+        let update_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": update_revision,
+                "instance_id": update_instance_id,
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let update_response = update_context
+            .post_json(&update_body)
+            .header("mcp-session-id", &update_session)
+            .send()
+            .await
+            .expect("send update scope request failed");
+        let update_text = update_response
+            .text()
+            .await
+            .expect("read update scope response failed");
+        let (_, update_payload) = parse_tool_result_payload(&update_text);
+        assert_eq!(update_payload["summary"], "page edited");
+
+        let write_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let write_session = write_context.initialize_session().await;
+        write_context
+            .send_initialized_notification(&write_session)
+            .await;
+        let (write_revision, write_instance_id) =
+            write_context.latest_revision_and_instance_id("/mcp/page");
+        let write_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": write_revision,
+                "instance_id": write_instance_id,
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let write_response = write_context
+            .post_json(&write_body)
+            .header("mcp-session-id", &write_session)
+            .send()
+            .await
+            .expect("send write scope request failed");
+        let write_text = write_response
+            .text()
+            .await
+            .expect("read write scope response failed");
+        let (_, write_payload) = parse_tool_result_payload(&write_text);
+        assert_eq!(write_payload["summary"], "page edited");
+
+        let append_only_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let append_only_session = append_only_context.initialize_session().await;
+        append_only_context
+            .send_initialized_notification(&append_only_session)
+            .await;
+        let (append_revision, append_instance_id) =
+            append_only_context.latest_revision_and_instance_id("/mcp/page");
+        let append_only_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": append_revision,
+                "instance_id": append_instance_id,
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let append_only_response = append_only_context
+            .post_json(&append_only_body)
+            .header("mcp-session-id", &append_only_session)
+            .send()
+            .await
+            .expect("send append only request failed");
+        let append_only_text = append_only_response
+            .text()
+            .await
+            .expect("read append only response failed");
+        let (_, append_only_payload) =
+            parse_tool_result_payload(&append_only_text);
+        assert_eq!(append_only_payload["code"], "forbidden");
+        assert_eq!(
+            append_only_payload["message"],
+            "required scope denied: update"
+        );
+
+        let prefix_denied_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/private"]),
+        )
+        .await;
+        let prefix_denied_session = prefix_denied_context.initialize_session().await;
+        prefix_denied_context
+            .send_initialized_notification(&prefix_denied_session)
+            .await;
+        let (prefix_revision, prefix_instance_id) =
+            prefix_denied_context.latest_revision_and_instance_id("/mcp/page");
+        let prefix_denied_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": prefix_revision,
+                "instance_id": prefix_instance_id,
+                "operation": {
+                    "type": "replace_text",
+                    "old_text": "body",
+                    "new_text": "updated"
+                }
+            }),
+        );
+        let prefix_denied_response = prefix_denied_context
+            .post_json(&prefix_denied_body)
+            .header("mcp-session-id", &prefix_denied_session)
+            .send()
+            .await
+            .expect("send prefix denied request failed");
+        let prefix_denied_text = prefix_denied_response
+            .text()
+            .await
+            .expect("read prefix denied response failed");
+        let (_, prefix_denied_payload) =
+            parse_tool_result_payload(&prefix_denied_text);
+        assert_eq!(prefix_denied_payload["code"], "forbidden");
+        assert_eq!(
+            prefix_denied_payload["message"],
+            "path prefix denied: /mcp/page"
+        );
+
+        update_context.shutdown().await;
+        write_context.shutdown().await;
+        append_only_context.shutdown().await;
+        prefix_denied_context.shutdown().await;
     }
 
     ///

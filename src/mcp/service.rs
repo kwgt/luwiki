@@ -80,6 +80,9 @@ pub(crate) enum McpOperation {
     /// ページ更新
     UpdatePage,
 
+    /// ページ編集
+    EditPage,
+
     /// ページ追記
     AppendPage,
 
@@ -143,6 +146,9 @@ pub(crate) struct GetPageResult {
     /// 取得した revision
     revision: u64,
 
+    /// 取得した instance_id
+    instance_id: String,
+
     /// Markdown 本文全体
     content: String,
 }
@@ -181,6 +187,9 @@ pub(crate) struct GetPageTocResult {
 
     /// 取得した revision
     revision: u64,
+
+    /// 取得した instance_id
+    instance_id: String,
 
     /// 見出し一覧
     sections: Vec<TocSection>,
@@ -259,6 +268,93 @@ pub(crate) enum SectionSelector {
 }
 
 ///
+/// `insert_section` の挿入位置
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EditPageInsertSectionPlacement {
+    /// anchor の直前
+    Before,
+
+    /// anchor の直後
+    After,
+}
+
+///
+/// `replace_text` の一致対象
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EditPageReplaceTextOccurrence {
+    /// 先頭一致のみ
+    First,
+
+    /// 全一致
+    All,
+}
+
+///
+/// `edit_page` の service 層 operation
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EditPageOperation {
+    /// セクション本文の置換
+    ReplaceSection {
+        /// 対象セクション
+        section: SectionSelector,
+
+        /// 置換後本文
+        content: String,
+    },
+
+    /// セクション挿入
+    InsertSection {
+        /// 挿入位置基準セクション
+        anchor: SectionSelector,
+
+        /// 挿入位置
+        placement: EditPageInsertSectionPlacement,
+
+        /// 挿入する完全なセクション本文
+        content: String,
+    },
+
+    /// セクション削除
+    DeleteSection {
+        /// 削除対象セクション
+        section: SectionSelector,
+    },
+
+    /// テキスト置換
+    ReplaceText {
+        /// 置換前文字列
+        old_text: String,
+
+        /// 置換後文字列
+        new_text: String,
+
+        /// 複数一致時の対象指定
+        occurrence: Option<EditPageReplaceTextOccurrence>,
+    },
+}
+
+///
+/// `edit_page` の service 層入力
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EditPageRequest {
+    /// 対象ページの絶対 path
+    path: String,
+
+    /// 対象 revision
+    revision: u64,
+
+    /// 内容整合性確認用 instance_id
+    instance_id: String,
+
+    /// 単一の編集操作
+    operation: EditPageOperation,
+}
+
+///
 /// `get_page_section` の戻り値
 ///
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -287,6 +383,27 @@ pub(crate) struct WritePageResult {
     /// 更新後 revision
     revision: u64,
 
+    /// 更新後 instance_id
+    instance_id: String,
+
+    /// 実行結果要約
+    summary: String,
+}
+
+///
+/// `edit_page` の戻り値
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EditPageResult {
+    /// current path
+    path: String,
+
+    /// 更新後 revision
+    revision: u64,
+
+    /// 更新後 instance_id
+    instance_id: String,
+
     /// 実行結果要約
     summary: String,
 }
@@ -301,6 +418,9 @@ pub(crate) struct AppendServiceResult {
 
     /// 更新後 revision
     revision: u64,
+
+    /// 更新後 instance_id
+    instance_id: String,
 
     /// 実行結果要約
     summary: String,
@@ -328,6 +448,9 @@ struct ParsedHeading {
 
     /// 親 section ID
     parent_id: Option<String>,
+
+    /// 見出し開始位置
+    heading_start: usize,
 
     /// セクション本文開始位置
     content_start: usize,
@@ -357,7 +480,9 @@ impl McpOperation {
             | Self::SearchPages
             | Self::GetPageSection => BearerScope::Read,
             Self::CreatePage => BearerScope::Create,
-            Self::UpdatePage | Self::RenamePage => BearerScope::Update,
+            Self::UpdatePage | Self::EditPage | Self::RenamePage => {
+                BearerScope::Update
+            }
             Self::AppendPage => BearerScope::Append,
             Self::DeletePage => BearerScope::Delete,
         }
@@ -498,15 +623,22 @@ impl GetPageResult {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 取得 revision
+    /// * `instance_id` - 取得した instance_id
     /// * `content` - Markdown 本文
     ///
     /// # 戻り値
     /// 生成した結果を返す。
     ///
-    fn new(path: String, revision: u64, content: String) -> Self {
+    fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        content: String,
+    ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             content,
         }
     }
@@ -529,6 +661,16 @@ impl GetPageResult {
     ///
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    ///
+    /// instance_id を返す
+    ///
+    /// # 戻り値
+    /// 取得した instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     ///
@@ -643,15 +785,22 @@ impl GetPageTocResult {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 取得 revision
+    /// * `instance_id` - 取得した instance_id
     /// * `sections` - 見出し一覧
     ///
     /// # 戻り値
     /// 生成した結果を返す。
     ///
-    fn new(path: String, revision: u64, sections: Vec<TocSection>) -> Self {
+    fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        sections: Vec<TocSection>,
+    ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             sections,
         }
     }
@@ -674,6 +823,16 @@ impl GetPageTocResult {
     ///
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    ///
+    /// instance_id を返す
+    ///
+    /// # 戻り値
+    /// 取得した instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     ///
@@ -903,6 +1062,74 @@ impl SearchPagesResult {
     }
 }
 
+impl EditPageRequest {
+    ///
+    /// `edit_page` service 入力を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページ path
+    /// * `revision` - 対象 revision
+    /// * `instance_id` - 内容整合性確認用 instance_id
+    /// * `operation` - 単一の編集操作
+    ///
+    /// # 戻り値
+    /// 生成した service 入力を返す。
+    ///
+    pub(crate) fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        operation: EditPageOperation,
+    ) -> Self {
+        Self {
+            path,
+            revision,
+            instance_id,
+            operation,
+        }
+    }
+
+    ///
+    /// 対象ページ path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの絶対 path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// 対象 revision を返す
+    ///
+    /// # 戻り値
+    /// 対象 revision を返す。
+    ///
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    ///
+    /// 内容整合性確認用 instance_id を返す
+    ///
+    /// # 戻り値
+    /// 入力 instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    ///
+    /// 編集操作を返す
+    ///
+    /// # 戻り値
+    /// 単一の編集操作を返す。
+    ///
+    pub(crate) fn operation(&self) -> &EditPageOperation {
+        &self.operation
+    }
+}
+
 impl GetPageSectionResult {
     ///
     /// `get_page_section` 結果を生成する
@@ -978,15 +1205,22 @@ impl WritePageResult {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 更新後 revision
+    /// * `instance_id` - 更新後 instance_id
     /// * `summary` - 実行結果要約
     ///
     /// # 戻り値
     /// 生成した結果を返す。
     ///
-    fn new(path: String, revision: u64, summary: String) -> Self {
+    fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        summary: String,
+    ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             summary,
         }
     }
@@ -1012,6 +1246,84 @@ impl WritePageResult {
     }
 
     ///
+    /// 更新後 instance_id を返す
+    ///
+    /// # 戻り値
+    /// 更新後 instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    ///
+    /// 実行結果要約を返す
+    ///
+    /// # 戻り値
+    /// 実行結果要約を返す。
+    ///
+    pub(crate) fn summary(&self) -> &str {
+        &self.summary
+    }
+}
+
+impl EditPageResult {
+    ///
+    /// `edit_page` 結果を生成する
+    ///
+    /// # 引数
+    /// * `path` - current path
+    /// * `revision` - 更新後 revision
+    /// * `instance_id` - 更新後 instance_id
+    /// * `summary` - 実行結果要約
+    ///
+    /// # 戻り値
+    /// 生成した結果を返す。
+    ///
+    fn new(
+        path: String,
+        revision: u64,
+        instance_id: String,
+        summary: String,
+    ) -> Self {
+        Self {
+            path,
+            revision,
+            instance_id,
+            summary,
+        }
+    }
+
+    ///
+    /// current path を返す
+    ///
+    /// # 戻り値
+    /// current path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// 更新後 revision を返す
+    ///
+    /// # 戻り値
+    /// 更新後 revision を返す。
+    ///
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    ///
+    /// 更新後 instance_id を返す
+    ///
+    /// # 戻り値
+    /// 更新後 instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    ///
     /// 実行結果要約を返す
     ///
     /// # 戻り値
@@ -1029,6 +1341,7 @@ impl AppendServiceResult {
     /// # 引数
     /// * `path` - current path
     /// * `revision` - 更新後 revision
+    /// * `instance_id` - 更新後 instance_id
     /// * `summary` - 実行結果要約
     /// * `amended` - amend 相当保存有無
     ///
@@ -1038,12 +1351,14 @@ impl AppendServiceResult {
     fn new(
         path: String,
         revision: u64,
+        instance_id: String,
         summary: String,
         amended: bool,
     ) -> Self {
         Self {
             path,
             revision,
+            instance_id,
             summary,
             amended,
         }
@@ -1067,6 +1382,16 @@ impl AppendServiceResult {
     ///
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    ///
+    /// 更新後 instance_id を返す
+    ///
+    /// # 戻り値
+    /// 更新後 instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     ///
@@ -1361,12 +1686,13 @@ impl McpService {
         /*
          * revision と source の解決
          */
-        let (revision, source) =
+        let (revision, instance_id, source) =
             self.resolve_revision_source(db, &resolved, revision)?;
 
         Ok(GetPageResult::new(
             resolved.normalized_path().to_string(),
             revision,
+            instance_id,
             source,
         ))
     }
@@ -1403,7 +1729,7 @@ impl McpService {
         /*
          * revision と本文の解決
          */
-        let (revision, source) =
+        let (revision, instance_id, source) =
             self.resolve_revision_source(db, &resolved, revision)?;
         let parsed_sections = self.parse_markdown_toc_sections(&source)?;
         let sections = parsed_sections
@@ -1424,6 +1750,7 @@ impl McpService {
         Ok(GetPageTocResult::new(
             resolved.normalized_path().to_string(),
             revision,
+            instance_id,
             sections,
         ))
     }
@@ -1658,7 +1985,7 @@ impl McpService {
         /*
          * revision と本文の解決
          */
-        let (revision, source) =
+        let (revision, _, source) =
             self.resolve_revision_source(db, &resolved, revision)?;
         let parsed_sections = self.parse_markdown_toc_sections(&source)?;
         let target = self.resolve_section_selector(
@@ -1727,9 +2054,27 @@ impl McpService {
         )
         .map_err(map_create_db_error)?;
 
+        let page_id = db
+            .get_page_id_by_path(&normalized_path)
+            .map_err(|err| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    format!("page id lookup failed: {}", err),
+                )
+            })?
+            .ok_or_else(|| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "created page id not found",
+                )
+            })?;
+        let instance_id =
+            self.lookup_saved_instance_id(db, &page_id, 1, "created")?;
+
         Ok(WritePageResult::new(
             normalized_path,
             1,
+            instance_id,
             "page created".to_string(),
         ))
     }
@@ -1766,19 +2111,100 @@ impl McpService {
         /*
          * ロック状態を確認してから保存する
          */
-        self.ensure_page_not_locked(db, &resolved.page_id())?;
-        db.put_page(
-            &resolved.page_id(),
+        let (revision, instance_id) = self.save_updated_page(
+            db,
+            &resolved,
             auth.user().user_id(),
             content.to_string(),
-            false,
-        )
-        .map_err(map_update_db_error)?;
+        )?;
 
         Ok(WritePageResult::new(
             resolved.normalized_path().to_string(),
-            resolved.latest_revision().unwrap_or(0) + 1,
+            revision,
+            instance_id,
             "page updated".to_string(),
+        ))
+    }
+
+    ///
+    /// `edit_page` を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `request` - `edit_page` service 入力
+    ///
+    /// # 戻り値
+    /// ページ編集結果を返す。
+    ///
+    pub(crate) fn edit_page(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        request: &EditPageRequest,
+    ) -> Result<EditPageResult, McpError> {
+        /*
+         * path 認可とページ解決を先に行い、
+         * 後続タスクで整合確認と operation 適用を接続する。
+         */
+        let normalized_path = self.ensure_authorized_path(
+            auth,
+            McpOperation::EditPage,
+            request.path(),
+        )?;
+        let resolved = self.resolve_page_by_path(db, &normalized_path)?;
+        let (latest_revision, _, latest_source) =
+            self.resolve_revision_source(db, &resolved, None)?;
+        if request.revision() != latest_revision {
+            return Err(McpError::new(
+                McpErrorCode::NotLatestRevision,
+                "revision is not latest",
+            ));
+        }
+        let latest_page_source = db
+            .get_page_source(&resolved.page_id(), latest_revision)
+            .map_err(|err| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    format!("latest page source lookup failed: {}", err),
+                )
+            })?
+            .ok_or_else(|| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "latest page source not found",
+                )
+            })?;
+        let latest_instance_id = latest_page_source.instance_id().ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "latest page source instance_id is missing",
+            )
+        })?;
+        if request.instance_id() != latest_instance_id.to_string() {
+            return Err(McpError::new(
+                McpErrorCode::InstanceIdNotMatch,
+                "instance_id does not match latest content",
+            ));
+        }
+
+        /*
+         * 整合確認を通過した後にだけ本文変換と update 系保存へ進める。
+         */
+        let updated_source =
+            self.apply_edit_page_operation(&latest_source, request.operation())?;
+        let (revision, instance_id) = self.save_updated_page(
+            db,
+            &resolved,
+            auth.user().user_id(),
+            updated_source,
+        )?;
+
+        Ok(EditPageResult::new(
+            resolved.normalized_path().to_string(),
+            revision,
+            instance_id,
+            "page edited".to_string(),
         ))
     }
 
@@ -1824,9 +2250,16 @@ impl McpService {
             ));
         }
         if resolved.normalized_path() == normalized_rename_to {
+            let instance_id = self.lookup_saved_instance_id(
+                db,
+                &resolved.page_id(),
+                resolved.latest_revision().unwrap_or(0),
+                "renamed",
+            )?;
             return Ok(WritePageResult::new(
                 normalized_rename_to,
                 resolved.latest_revision().unwrap_or(0),
+                instance_id,
                 "page rename skipped".to_string(),
             ));
         }
@@ -1843,15 +2276,23 @@ impl McpService {
         /*
          * 再帰 rename を実行する
          */
+        let renamed_revision = resolved.latest_revision().unwrap_or(0) + 1;
         db.rename_pages_recursive_by_id(
             &resolved.page_id(),
             &normalized_rename_to,
         )
         .map_err(map_rename_db_error)?;
+        let instance_id = self.lookup_saved_instance_id(
+            db,
+            &resolved.page_id(),
+            renamed_revision,
+            "renamed",
+        )?;
 
         Ok(WritePageResult::new(
             normalized_rename_to,
-            resolved.latest_revision().unwrap_or(0) + 1,
+            renamed_revision,
+            instance_id,
             format!("page renamed from {}", resolved.normalized_path()),
         ))
     }
@@ -1944,9 +2385,11 @@ impl McpService {
             match db.append_page_by_id(&request) {
                 Ok(result) => {
                     return Ok(self.build_append_result(
+                        db,
+                        &resolved.page_id(),
                         resolved.normalized_path(),
                         result,
-                    ));
+                    )?);
                 }
                 Err(err) => {
                     if self.is_retryable_append_conflict(&err) {
@@ -2266,14 +2709,14 @@ impl McpService {
     /// * `revision` - 要求 revision
     ///
     /// # 戻り値
-    /// `(revision, source)` を返す。
+    /// `(revision, instance_id, source)` を返す。
     ///
     fn resolve_revision_source(
         &self,
         db: &DatabaseManager,
         resolved: &ResolvedPage,
         revision: Option<u64>,
-    ) -> Result<(u64, String), McpError> {
+    ) -> Result<(u64, String, String), McpError> {
         let revision = match revision {
             Some(0) => {
                 return Err(McpError::new(
@@ -2308,7 +2751,14 @@ impl McpService {
                 )
             })?;
 
-        Ok((revision, source.source()))
+        let instance_id = source.instance_id().ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "page source instance_id is missing",
+            )
+        })?;
+
+        Ok((revision, instance_id.to_string(), source.source()))
     }
 
     ///
@@ -2343,6 +2793,58 @@ impl McpService {
         }
 
         Ok(())
+    }
+
+    ///
+    /// update 系保存経路で本文全体を保存する
+    ///
+    /// # 引数
+    /// * `db` - データベースマネージャ
+    /// * `resolved` - 解決済みページ情報
+    /// * `user_id` - 保存主体ユーザID
+    /// * `content` - 保存する Markdown 本文全体
+    ///
+    /// # 戻り値
+    /// `(revision, instance_id)` を返す。
+    ///
+    /// # 注記
+    /// `update_page` と `edit_page` はともに本 helper を通し、
+    /// DB の `put_page(..., amend = false)` を使う update 系保存経路を再利用する。
+    ///
+    fn save_updated_page(
+        &self,
+        db: &DatabaseManager,
+        resolved: &ResolvedPage,
+        user_name: &str,
+        content: String,
+    ) -> Result<(u64, String), McpError> {
+        self.ensure_page_not_locked(db, &resolved.page_id())?;
+        db.put_page(&resolved.page_id(), user_name, content, false)
+            .map_err(map_update_db_error)?;
+
+        let revision = resolved.latest_revision().unwrap_or(0) + 1;
+        let page_source = db
+            .get_page_source(&resolved.page_id(), revision)
+            .map_err(|err| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    format!("saved page source lookup failed: {}", err),
+                )
+            })?
+            .ok_or_else(|| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "saved page source not found",
+                )
+            })?;
+        let instance_id = page_source.instance_id().ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "saved page source instance_id is missing",
+            )
+        })?;
+
+        Ok((revision, instance_id.to_string()))
     }
 
     ///
@@ -2461,21 +2963,72 @@ impl McpService {
     ///
     fn build_append_result(
         &self,
+        db: &DatabaseManager,
+        page_id: &PageId,
         path: &str,
         result: AppendPageResult,
-    ) -> AppendServiceResult {
+    ) -> Result<AppendServiceResult, McpError> {
         let summary = if result.amended() {
             "page appended (amended)"
         } else {
             "page appended"
         };
+        let instance_id = self.lookup_saved_instance_id(
+            db,
+            page_id,
+            result.revision(),
+            "appended",
+        )?;
 
-        AppendServiceResult::new(
+        Ok(AppendServiceResult::new(
             path.to_string(),
             result.revision(),
+            instance_id,
             summary.to_string(),
             result.amended(),
-        )
+        ))
+    }
+
+    ///
+    /// 保存済み revision の instance_id を取得する
+    ///
+    /// # 引数
+    /// * `db` - データベースマネージャ
+    /// * `page_id` - 対象ページID
+    /// * `revision` - 取得対象 revision
+    /// * `action` - 失敗文言用の操作名
+    ///
+    /// # 戻り値
+    /// 保存済み page source の instance_id を返す。
+    ///
+    fn lookup_saved_instance_id(
+        &self,
+        db: &DatabaseManager,
+        page_id: &PageId,
+        revision: u64,
+        action: &str,
+    ) -> Result<String, McpError> {
+        let page_source = db
+            .get_page_source(page_id, revision)
+            .map_err(|err| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    format!("{action} page source lookup failed: {}", err),
+                )
+            })?
+            .ok_or_else(|| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    format!("{action} page source not found"),
+                )
+            })?;
+
+        page_source.instance_id().map(|id| id.to_string()).ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                format!("{action} page source instance_id is missing"),
+            )
+        })
     }
 
     ///
@@ -2590,7 +3143,7 @@ impl McpService {
     }
 
     ///
-    /// Markdown 本文から TOC 用 section 一覧を構築する
+    /// Markdown 本文から TOC / section編集用 section 一覧を構築する
     ///
     /// # 引数
     /// * `source` - Markdown 本文
@@ -2668,6 +3221,7 @@ impl McpService {
                 level: *level,
                 ordinal: (index + 1) as u32,
                 parent_id,
+                heading_start: raw_headings[index].1,
                 content_start: *heading_end,
                 content_end,
             });
@@ -2698,6 +3252,238 @@ impl McpService {
     }
 
     ///
+    /// section 本文を置き換える
+    ///
+    /// # 引数
+    /// * `source` - Markdown 本文
+    /// * `section` - 置き換え対象 section
+    /// * `new_content` - 置き換え後本文
+    ///
+    /// # 戻り値
+    /// 対象見出し行を保持し、本文部分だけを差し替えた Markdown 本文を返す。
+    ///
+    /// # 注記
+    /// 対象 section の本文範囲は `content_start..content_end` で扱うため、
+    /// 子見出し配下も含めて置き換える。
+    ///
+    fn replace_section_content(
+        &self,
+        source: &str,
+        section: &ParsedHeading,
+        new_content: &str,
+    ) -> String {
+        let before = &source[..section.content_start];
+        let target_body = &source[section.content_start..section.content_end];
+        let after = &source[section.content_end..];
+
+        let leading_end = target_body
+            .char_indices()
+            .find(|(_, ch)| !matches!(*ch, '\r' | '\n'))
+            .map(|(index, _)| index)
+            .unwrap_or(target_body.len());
+        let trailing_start = target_body
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !matches!(*ch, '\r' | '\n'))
+            .map(|(index, ch)| index + ch.len_utf8())
+            .unwrap_or(0);
+        let leading_breaks = &target_body[..leading_end];
+        let trailing_breaks = if trailing_start < leading_end {
+            ""
+        } else {
+            &target_body[trailing_start..]
+        };
+
+        let mut replaced = String::with_capacity(
+            before.len()
+                + leading_breaks.len()
+                + new_content.len()
+                + trailing_breaks.len()
+                + after.len(),
+        );
+        replaced.push_str(before);
+        replaced.push_str(leading_breaks);
+        replaced.push_str(new_content);
+        replaced.push_str(trailing_breaks);
+        replaced.push_str(after);
+        replaced
+    }
+
+    ///
+    /// section を挿入する
+    ///
+    /// # 引数
+    /// * `source` - Markdown 本文
+    /// * `anchor` - 挿入位置の基準 section
+    /// * `placement` - anchor に対する前後指定
+    /// * `new_section` - 挿入する完全なセクション本文
+    ///
+    /// # 戻り値
+    /// 指定位置へ section を挿入した Markdown 本文を返す。
+    ///
+    fn insert_section_content(
+        &self,
+        source: &str,
+        anchor: &ParsedHeading,
+        placement: EditPageInsertSectionPlacement,
+        new_section: &str,
+    ) -> String {
+        let insert_at = match placement {
+            EditPageInsertSectionPlacement::Before => anchor.heading_start,
+            EditPageInsertSectionPlacement::After => anchor.content_end,
+        };
+        let before = &source[..insert_at];
+        let after = &source[insert_at..];
+
+        let mut inserted = String::with_capacity(
+            before.len() + new_section.len() + after.len() + 2,
+        );
+        inserted.push_str(before);
+        inserted.push_str(new_section);
+        if !new_section.ends_with('\n') && !after.starts_with('\n') {
+            inserted.push('\n');
+        }
+        inserted.push_str(after);
+        inserted
+    }
+
+    ///
+    /// section を削除する
+    ///
+    /// # 引数
+    /// * `source` - Markdown 本文
+    /// * `section` - 削除対象 section
+    ///
+    /// # 戻り値
+    /// 対象 section を削除した Markdown 本文を返す。
+    ///
+    /// # 注記
+    /// 削除範囲は見出し行を含む section 全体とし、子見出し配下もまとめて削除する。
+    ///
+    fn delete_section_content(
+        &self,
+        source: &str,
+        section: &ParsedHeading,
+    ) -> String {
+        let before = &source[..section.heading_start];
+        let after = &source[section.content_end..];
+        let mut deleted = String::with_capacity(before.len() + after.len());
+        deleted.push_str(before);
+        deleted.push_str(after);
+        deleted
+    }
+
+    ///
+    /// テキスト置換を適用する
+    ///
+    /// # 引数
+    /// * `source` - Markdown 本文
+    /// * `old_text` - 置換対象文字列
+    /// * `new_text` - 置換後文字列
+    /// * `occurrence` - 複数一致時の対象指定
+    ///
+    /// # 戻り値
+    /// 置換後の Markdown 本文を返す。
+    ///
+    /// # 注記
+    /// `occurrence = None` は `First` と同じ意味で扱う。
+    ///
+    fn replace_text_content(
+        &self,
+        source: &str,
+        old_text: &str,
+        new_text: &str,
+        occurrence: Option<EditPageReplaceTextOccurrence>,
+    ) -> String {
+        match occurrence.unwrap_or(EditPageReplaceTextOccurrence::First) {
+            EditPageReplaceTextOccurrence::First => {
+                source.replacen(old_text, new_text, 1)
+            }
+            EditPageReplaceTextOccurrence::All => {
+                source.replace(old_text, new_text)
+            }
+        }
+    }
+
+    ///
+    /// `edit_page` の単一 operation を本文へ適用する
+    ///
+    /// # 引数
+    /// * `source` - 変換対象の Markdown 本文
+    /// * `operation` - 適用する編集操作
+    ///
+    /// # 戻り値
+    /// 変換後の Markdown 本文を返す。
+    ///
+    /// # 注記
+    /// operation 共通の失敗分類は本 helper で固定する。
+    /// - selector 解決失敗は `resolve_section_selector()` の分類をそのまま使う
+    /// - `replace_text.old_text` が空文字なら `invalid_input`
+    /// - `replace_text` で一致箇所が 0 件なら `not_found`
+    ///
+    fn apply_edit_page_operation(
+        &self,
+        source: &str,
+        operation: &EditPageOperation,
+    ) -> Result<String, McpError> {
+        match operation {
+            EditPageOperation::ReplaceSection { section, content } => {
+                let sections = self.parse_markdown_toc_sections(source)?;
+                let target =
+                    self.resolve_section_selector(&sections, section.clone().into())?;
+                Ok(self.replace_section_content(source, &target, content))
+            }
+            EditPageOperation::InsertSection {
+                anchor,
+                placement,
+                content,
+            } => {
+                let sections = self.parse_markdown_toc_sections(source)?;
+                let target =
+                    self.resolve_section_selector(&sections, anchor.clone().into())?;
+                Ok(self.insert_section_content(
+                    source,
+                    &target,
+                    *placement,
+                    content,
+                ))
+            }
+            EditPageOperation::DeleteSection { section } => {
+                let sections = self.parse_markdown_toc_sections(source)?;
+                let target =
+                    self.resolve_section_selector(&sections, section.clone().into())?;
+                Ok(self.delete_section_content(source, &target))
+            }
+            EditPageOperation::ReplaceText {
+                old_text,
+                new_text,
+                occurrence,
+            } => {
+                if old_text.is_empty() {
+                    return Err(McpError::new(
+                        McpErrorCode::InvalidInput,
+                        "old_text must not be empty",
+                    ));
+                }
+
+                if !source.contains(old_text) {
+                    return Err(McpError::new(
+                        McpErrorCode::NotFound,
+                        format!("text not found: {}", old_text),
+                    ));
+                }
+
+                Ok(self.replace_text_content(
+                    source,
+                    old_text,
+                    new_text,
+                    *occurrence,
+                ))
+            }
+        }
+    }
+
+    ///
     /// section selector を解決する
     ///
     /// # 引数
@@ -2706,6 +3492,19 @@ impl McpService {
     ///
     /// # 戻り値
     /// 解決した section を返す。
+    ///
+    /// # 注記
+    /// 本 helper は `get_page_section` だけでなく、`edit_page` における
+    /// `replace_section` / `insert_section` / `delete_section` の selector 解決でも
+    /// 共通利用する前提とする。
+    /// `ById` と `ByTitle` の両方をここで扱い、`ByTitle` の空文字拒否、
+    /// 見出し未存在時の `not_found`、同名複数時の `invalid_input` も
+    /// `edit_page` 側で再利用する。
+    /// したがって selector 解決失敗の分類は以下で固定する。
+    /// - `ById` 未存在: `not_found`
+    /// - `ByTitle` 未存在: `not_found`
+    /// - `ByTitle` 空文字: `invalid_input`
+    /// - `ByTitle` 複数一致: `invalid_input`
     ///
     fn resolve_section_selector(
         &self,
@@ -2743,6 +3542,10 @@ impl McpService {
                         format!("section not found: {}", title),
                     )),
                     1 => Ok(matches[0].clone()),
+                    /*
+                     * 同名見出しが複数ある場合は selector として一意に解決できないため、
+                     * `get_page_section` / `edit_page` の双方で `invalid_input` とする。
+                     */
                     _ => Err(McpError::new(
                         McpErrorCode::InvalidInput,
                         format!("section title is ambiguous: {}", title),
@@ -3371,6 +4174,490 @@ mod tests {
     }
 
     #[test]
+    fn read_only_user_rejects_edit_page_as_forbidden() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/mcp/edit-readonly",
+                "user",
+                "# Title\n\nbody\n".to_string(),
+            )
+            .expect("create page failed");
+
+        let latest_source = manager
+            .get_page_source(
+                &manager
+                    .get_page_id_by_path("/mcp/edit-readonly")
+                    .expect("resolve page id failed")
+                    .expect("page id not found"),
+                1,
+            )
+            .expect("get page source failed")
+            .expect("page source missing");
+        let auth = AuthContext::new_with_attributes(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-readonly".to_string(),
+            1,
+            latest_source
+                .instance_id()
+                .expect("instance_id missing")
+                .to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "body".to_string(),
+                new_text: "updated".to_string(),
+                occurrence: None,
+            },
+        );
+
+        let error = service
+            .edit_page(&auth, &manager, &request)
+            .expect_err("read only user must not edit page");
+
+        assert_eq!(error.code(), McpErrorCode::Forbidden);
+        assert_eq!(
+            error.message(),
+            "read only denied: write operation is not allowed"
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_succeeds_when_revision_and_instance_id_match_latest() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-success",
+                "user",
+                "# Title\n\nbefore body\n".to_string(),
+            )
+            .expect("create page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-success".to_string(),
+            1,
+            latest_source
+                .instance_id()
+                .expect("instance_id missing")
+                .to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "before".to_string(),
+                new_text: "after".to_string(),
+                occurrence: None,
+            },
+        );
+
+        let result = service
+            .edit_page(&auth, &manager, &request)
+            .expect("edit page should succeed");
+        let saved_source = manager
+            .get_page_source(&page_id, result.revision())
+            .expect("lookup saved source failed")
+            .expect("saved source missing");
+
+        assert_eq!(result.path(), "/mcp/edit-success");
+        assert_eq!(result.revision(), 2);
+        assert_eq!(result.summary(), "page edited");
+        assert_eq!(
+            result.instance_id(),
+            saved_source
+                .instance_id()
+                .expect("saved instance_id missing")
+                .to_string()
+        );
+        assert!(saved_source.source().contains("after body"));
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_rejects_non_latest_revision() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-revision",
+                "user",
+                "# Title\n\nbody\n".to_string(),
+            )
+            .expect("create page failed");
+        manager
+            .put_page(&page_id, "user", "# Title\n\nnew body\n".to_string(), false)
+            .expect("put page failed");
+        let stale_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get stale source failed")
+            .expect("stale source missing");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-revision".to_string(),
+            1,
+            stale_source
+                .instance_id()
+                .expect("instance_id missing")
+                .to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "body".to_string(),
+                new_text: "updated".to_string(),
+                occurrence: None,
+            },
+        );
+
+        let error = service
+            .edit_page(&auth, &manager, &request)
+            .expect_err("stale revision must fail");
+
+        assert_eq!(error.code(), McpErrorCode::NotLatestRevision);
+        assert_eq!(error.message(), "revision is not latest");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_rejects_mismatched_instance_id() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/mcp/edit-instance",
+                "user",
+                "# Title\n\nbody\n".to_string(),
+            )
+            .expect("create page failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-instance".to_string(),
+            1,
+            "instance-mismatch".to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "body".to_string(),
+                new_text: "updated".to_string(),
+                occurrence: None,
+            },
+        );
+
+        let error = service
+            .edit_page(&auth, &manager, &request)
+            .expect_err("mismatched instance_id must fail");
+
+        assert_eq!(error.code(), McpErrorCode::InstanceIdNotMatch);
+        assert_eq!(
+            error.message(),
+            "instance_id does not match latest content"
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_resolves_current_path_and_saves_updated_page() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-flow",
+                "user",
+                "# Title\n\nbefore body\n".to_string(),
+            )
+            .expect("create page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-flow/".to_string(),
+            1,
+            latest_source
+                .instance_id()
+                .expect("instance_id missing")
+                .to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "before".to_string(),
+                new_text: "after".to_string(),
+                occurrence: None,
+            },
+        );
+
+        let result = service
+            .edit_page(&auth, &manager, &request)
+            .expect("edit page failed");
+        let saved_source = manager
+            .get_page_source(&page_id, result.revision())
+            .expect("lookup saved source failed")
+            .expect("saved source missing");
+
+        assert_eq!(result.path(), "/mcp/edit-flow");
+        assert_eq!(result.revision(), 2);
+        assert_eq!(result.summary(), "page edited");
+        assert_eq!(saved_source.source(), "# Title\n\nafter body\n");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_returns_conflict_when_page_is_locked() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-locked",
+                "user",
+                "# Title\n\nbody\n".to_string(),
+            )
+            .expect("create page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let _lock_info = manager
+            .acquire_page_lock(&page_id, "user")
+            .expect("acquire lock failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-locked".to_string(),
+            1,
+            latest_source
+                .instance_id()
+                .expect("instance_id missing")
+                .to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "body".to_string(),
+                new_text: "updated".to_string(),
+                occurrence: None,
+            },
+        );
+
+        let error = service
+            .edit_page(&auth, &manager, &request)
+            .expect_err("locked page must fail");
+
+        assert_eq!(error.code(), McpErrorCode::Conflict);
+        assert_eq!(error.message(), "page is locked");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_classifies_selector_and_operation_failures() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-failure",
+                "user",
+                "# Root\n\nintro\n\n## Child\n\nfirst\n\n## Child\n\nsecond\n".to_string(),
+            )
+            .expect("create page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let instance_id = latest_source
+            .instance_id()
+            .expect("instance_id missing")
+            .to_string();
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        let missing_section = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-failure".to_string(),
+                    1,
+                    instance_id.clone(),
+                    EditPageOperation::DeleteSection {
+                        section: SectionSelector::ById("s-999".to_string()),
+                    },
+                ),
+            )
+            .expect_err("missing section must fail");
+        assert_eq!(missing_section.code(), McpErrorCode::NotFound);
+
+        let ambiguous_title = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-failure".to_string(),
+                    1,
+                    instance_id.clone(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ByTitle("Child".to_string()),
+                        content: "updated".to_string(),
+                    },
+                ),
+            )
+            .expect_err("ambiguous title must fail");
+        assert_eq!(ambiguous_title.code(), McpErrorCode::InvalidInput);
+
+        let missing_text = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-failure".to_string(),
+                    1,
+                    instance_id.clone(),
+                    EditPageOperation::ReplaceText {
+                        old_text: "missing".to_string(),
+                        new_text: "updated".to_string(),
+                        occurrence: None,
+                    },
+                ),
+            )
+            .expect_err("missing text must fail");
+        assert_eq!(missing_text.code(), McpErrorCode::NotFound);
+
+        let invalid_text = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-failure".to_string(),
+                    1,
+                    instance_id,
+                    EditPageOperation::ReplaceText {
+                        old_text: "".to_string(),
+                        new_text: "updated".to_string(),
+                        occurrence: None,
+                    },
+                ),
+            )
+            .expect_err("empty old_text must fail");
+        assert_eq!(invalid_text.code(), McpErrorCode::InvalidInput);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_preserves_saved_content_latest_revision_and_instance_id_consistency() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-consistency",
+                "user",
+                "# Title\n\nalpha beta alpha\n".to_string(),
+            )
+            .expect("create page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+        let request = EditPageRequest::new(
+            "/mcp/edit-consistency".to_string(),
+            1,
+            latest_source
+                .instance_id()
+                .expect("instance_id missing")
+                .to_string(),
+            EditPageOperation::ReplaceText {
+                old_text: "alpha".to_string(),
+                new_text: "gamma".to_string(),
+                occurrence: Some(EditPageReplaceTextOccurrence::All),
+            },
+        );
+
+        let result = service
+            .edit_page(&auth, &manager, &request)
+            .expect("edit page failed");
+        let resolved = service
+            .resolve_page_by_path(&manager, "/mcp/edit-consistency")
+            .expect("resolve updated page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, result.revision())
+            .expect("get latest source failed")
+            .expect("latest source missing");
+
+        assert_eq!(resolved.latest_revision(), Some(result.revision()));
+        assert_eq!(result.revision(), 2);
+        assert_eq!(latest_source.source(), "# Title\n\ngamma beta gamma\n");
+        assert_eq!(
+            latest_source
+                .instance_id()
+                .expect("latest instance_id missing")
+                .to_string(),
+            result.instance_id()
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
     fn path_prefix_matches_boundary_only() {
         assert!(path_matches_prefix("/docs", "/docs"));
         assert!(path_matches_prefix("/docs/a", "/docs"));
@@ -3931,6 +5218,240 @@ mod tests {
     }
 
     #[test]
+    fn resolve_section_selector_rejects_ambiguous_title_as_invalid_input() {
+        let service = McpService::new();
+        let source = "# Root\n\nbody\n\n## Child\n\nfirst\n\n## Child\n\nsecond\n";
+        let sections = service
+            .parse_markdown_toc_sections(source)
+            .expect("parse toc sections failed");
+
+        let error = service
+            .resolve_section_selector(
+                &sections,
+                SectionSelector::ByTitle("Child".to_string()),
+            )
+            .expect_err("ambiguous title must fail");
+
+        assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        assert!(
+            error.message().contains("section title is ambiguous"),
+            "unexpected error: {}",
+            error.message(),
+        );
+    }
+
+    #[test]
+    fn replace_section_content_keeps_heading_and_replaces_body_range() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n";
+        let sections = service
+            .parse_markdown_toc_sections(source)
+            .expect("parse toc sections failed");
+        let target = service
+            .resolve_section_selector(
+                &sections,
+                SectionSelector::ById("s-001".to_string()),
+            )
+            .expect("resolve section by id failed");
+
+        let replaced = service.replace_section_content(
+            source,
+            &target,
+            "replaced root body",
+        );
+
+        assert!(replaced.starts_with("# Root\n"));
+        assert!(replaced.contains("replaced root body"));
+        assert!(!replaced.contains("intro"));
+        assert!(!replaced.contains("## Child"));
+        assert!(replaced.contains("# Next"));
+    }
+
+    #[test]
+    fn insert_section_content_supports_before_and_after_anchor() {
+        let service = McpService::new();
+        let source = "# Root\n\nroot body\n\n# Next\n\nnext body\n";
+        let sections = service
+            .parse_markdown_toc_sections(source)
+            .expect("parse toc sections failed");
+        let root = service
+            .resolve_section_selector(
+                &sections,
+                SectionSelector::ById("s-001".to_string()),
+            )
+            .expect("resolve root failed");
+
+        let inserted_before = service.insert_section_content(
+            source,
+            &root,
+            EditPageInsertSectionPlacement::Before,
+            "# Inserted Before\n\nbefore body\n\n",
+        );
+        assert!(inserted_before.starts_with("# Inserted Before\n\nbefore body\n\n# Root"));
+
+        let inserted_after = service.insert_section_content(
+            source,
+            &root,
+            EditPageInsertSectionPlacement::After,
+            "# Inserted After\n\nafter body\n\n",
+        );
+        assert!(inserted_after.contains(
+            "# Root\n\nroot body\n\n# Inserted After\n\nafter body\n\n# Next"
+        ));
+    }
+
+    #[test]
+    fn delete_section_content_removes_only_target_section_range() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nroot body\n\n## Child\n\nchild body\n\n# Next\n\nnext body\n";
+        let sections = service
+            .parse_markdown_toc_sections(source)
+            .expect("parse toc sections failed");
+        let target = service
+            .resolve_section_selector(
+                &sections,
+                SectionSelector::ById("s-001".to_string()),
+            )
+            .expect("resolve section failed");
+
+        let deleted = service.delete_section_content(source, &target);
+
+        assert!(!deleted.contains("# Root"));
+        assert!(!deleted.contains("root body"));
+        assert!(!deleted.contains("## Child"));
+        assert!(!deleted.contains("child body"));
+        assert!(deleted.contains("# Next"));
+        assert!(deleted.contains("next body"));
+    }
+
+    #[test]
+    fn replace_text_content_supports_default_first_and_all() {
+        let service = McpService::new();
+        let source = "alpha beta alpha beta";
+
+        let replaced_default = service.replace_text_content(
+            source,
+            "alpha",
+            "gamma",
+            None,
+        );
+        assert_eq!(replaced_default, "gamma beta alpha beta");
+
+        let replaced_first = service.replace_text_content(
+            source,
+            "alpha",
+            "gamma",
+            Some(EditPageReplaceTextOccurrence::First),
+        );
+        assert_eq!(replaced_first, "gamma beta alpha beta");
+
+        let replaced_all = service.replace_text_content(
+            source,
+            "alpha",
+            "gamma",
+            Some(EditPageReplaceTextOccurrence::All),
+        );
+        assert_eq!(replaced_all, "gamma beta gamma beta");
+    }
+
+    #[test]
+    fn insert_section_content_keeps_inserted_section_heading() {
+        let service = McpService::new();
+        let source = "# Root\n\nroot body\n\n# Next\n\nnext body\n";
+        let sections = service
+            .parse_markdown_toc_sections(source)
+            .expect("parse toc sections failed");
+        let anchor = service
+            .resolve_section_selector(
+                &sections,
+                SectionSelector::ById("s-001".to_string()),
+            )
+            .expect("resolve anchor failed");
+
+        let inserted = service.insert_section_content(
+            source,
+            &anchor,
+            EditPageInsertSectionPlacement::After,
+            "## Inserted\n\ninserted body\n",
+        );
+
+        assert!(inserted.contains("## Inserted\n\ninserted body\n"));
+        assert!(inserted.contains("# Root\n\nroot body\n\n## Inserted"));
+        assert!(inserted.contains("inserted body\n# Next"));
+    }
+
+    #[test]
+    fn apply_edit_page_operation_classifies_section_operation_failures() {
+        let service = McpService::new();
+        let source = "# Root\n\nbody\n";
+
+        let missing_replace_section = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-999".to_string()),
+                    content: "updated".to_string(),
+                },
+            )
+            .expect_err("missing replace target should fail");
+        assert_eq!(missing_replace_section.code(), McpErrorCode::NotFound);
+
+        let missing_insert_anchor = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::InsertSection {
+                    anchor: SectionSelector::ById("s-999".to_string()),
+                    placement: EditPageInsertSectionPlacement::After,
+                    content: "# Inserted\n\nbody\n".to_string(),
+                },
+            )
+            .expect_err("missing insert anchor should fail");
+        assert_eq!(missing_insert_anchor.code(), McpErrorCode::NotFound);
+
+        let missing_delete_section = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::DeleteSection {
+                    section: SectionSelector::ById("s-999".to_string()),
+                },
+            )
+            .expect_err("missing delete target should fail");
+        assert_eq!(missing_delete_section.code(), McpErrorCode::NotFound);
+    }
+
+    #[test]
+    fn apply_edit_page_operation_classifies_replace_text_failures() {
+        let service = McpService::new();
+        let source = "# Root\n\nbody\n";
+
+        let empty_old_text = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceText {
+                    old_text: "".to_string(),
+                    new_text: "x".to_string(),
+                    occurrence: None,
+                },
+            )
+            .expect_err("empty old_text should fail");
+        assert_eq!(empty_old_text.code(), McpErrorCode::InvalidInput);
+
+        let missing_text = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceText {
+                    old_text: "missing".to_string(),
+                    new_text: "x".to_string(),
+                    occurrence: None,
+                },
+            )
+            .expect_err("missing text should fail");
+        assert_eq!(missing_text.code(), McpErrorCode::NotFound);
+    }
+
+    #[test]
     fn create_page_creates_page_with_create_scope() {
         /*
          * テスト用データベースを準備する
@@ -3964,6 +5485,13 @@ mod tests {
 
         assert_eq!(result.path(), "/mcp/create");
         assert_eq!(result.revision(), 1);
+        assert_eq!(
+            result.instance_id(),
+            &source
+                .instance_id()
+                .expect("created instance_id missing")
+                .to_string()
+        );
         assert_eq!(result.summary(), "page created");
         assert_eq!(source.source(), "# created");
 
@@ -4032,6 +5560,13 @@ mod tests {
 
         assert_eq!(result.path(), "/mcp/update");
         assert_eq!(result.revision(), 2);
+        assert_eq!(
+            result.instance_id(),
+            &source
+                .instance_id()
+                .expect("updated instance_id missing")
+                .to_string()
+        );
         assert_eq!(result.summary(), "page updated");
         assert_eq!(source.source(), "# after");
 
@@ -4071,6 +5606,16 @@ mod tests {
 
         assert_eq!(result.path(), "/mcp/renamed");
         assert_eq!(result.revision(), 2);
+        assert_eq!(
+            result.instance_id(),
+            &manager
+                .get_page_source(&new_page_id, 2)
+                .expect("lookup renamed source failed")
+                .expect("renamed source missing")
+                .instance_id()
+                .expect("renamed instance_id missing")
+                .to_string()
+        );
         assert_eq!(result.summary(), "page renamed from /mcp/rename");
         assert_eq!(new_page_id, page_id);
         assert!(manager
@@ -4149,6 +5694,13 @@ mod tests {
 
         assert_eq!(result.path(), "/mcp/append");
         assert_eq!(result.revision(), 2);
+        assert_eq!(
+            result.instance_id(),
+            &source
+                .instance_id()
+                .expect("appended instance_id missing")
+                .to_string()
+        );
         assert_eq!(result.summary(), "page appended");
         assert!(!result.amended());
         assert_eq!(source.source(), "# base\nnext");
@@ -4189,6 +5741,13 @@ mod tests {
 
         assert_eq!(result.path(), "/mcp/amend");
         assert_eq!(result.revision(), 1);
+        assert_eq!(
+            result.instance_id(),
+            &source
+                .instance_id()
+                .expect("amended instance_id missing")
+                .to_string()
+        );
         assert_eq!(result.summary(), "page appended (amended)");
         assert!(result.amended());
         assert_eq!(source.source(), "# base\namended");

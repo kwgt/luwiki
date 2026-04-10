@@ -29,6 +29,12 @@ pub(crate) enum McpErrorCode {
     /// 入力不正
     InvalidInput,
 
+    /// 更新要求の revision が最新ではない
+    NotLatestRevision,
+
+    /// 更新要求の instance_id が最新内容と一致しない
+    InstanceIdNotMatch,
+
     /// 未対応
     Unsupported,
 
@@ -116,6 +122,8 @@ impl McpErrorCode {
             Self::Forbidden => "forbidden",
             Self::Conflict => "conflict",
             Self::InvalidInput => "invalid_input",
+            Self::NotLatestRevision => "not_latest_revision",
+            Self::InstanceIdNotMatch => "instance_id_not_match",
             Self::Unsupported => "unsupported",
             Self::InternalError => "internal_error",
         }

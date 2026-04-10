@@ -455,3 +455,83 @@ async fn lock_cleanup_task(state: web::Data<Arc<RwLock<AppState>>>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+    use std::sync::{Arc, RwLock};
+    use std::time::Duration;
+
+    use actix_web::{http::StatusCode, web};
+    use reqwest::Client;
+    use tempfile::tempdir;
+
+    use super::create_server;
+    use crate::cmd_args::FrontendConfig;
+    use crate::database::DatabaseManager;
+    use crate::fts::FtsIndexConfig;
+    use crate::http_server::app_state::AppState;
+
+    ///
+    /// MCP 無効時は `/mcp` が公開されないことを確認する。
+    ///
+    #[actix_web::test]
+    async fn server_without_mcp_does_not_expose_mcp_endpoint() {
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("database.redb");
+        let asset_dir = dir.path().join("assets");
+        let index_dir = dir.path().join("fts");
+        std::fs::create_dir_all(&asset_dir).expect("create assets dir failed");
+        std::fs::create_dir_all(&index_dir).expect("create fts dir failed");
+
+        let manager = DatabaseManager::open(&db_path, &asset_dir)
+            .expect("open database failed");
+        let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
+            manager,
+            FrontendConfig::default(),
+            FtsIndexConfig::new(index_dir),
+            None,
+            "LUWIKI".to_string(),
+            1024 * 1024,
+            None,
+        ))));
+
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .expect("bind test listener failed");
+        let address = listener
+            .local_addr()
+            .expect("resolve listener address failed");
+        drop(listener);
+
+        let server = create_server(
+            "127.0.0.1".to_string(),
+            address.port(),
+            state,
+            1024 * 1024,
+            false,
+            std::path::PathBuf::new(),
+            false,
+            None,
+            None,
+        )
+        .expect("create server failed");
+        let handle = server.handle();
+        actix_web::rt::spawn(server);
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("build reqwest client failed");
+        let response = client
+            .get(format!("http://{}/mcp", address))
+            .send()
+            .await
+            .expect("send mcp request failed");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        std::mem::drop(client);
+        std::mem::drop(handle.stop(true));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

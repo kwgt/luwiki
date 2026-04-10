@@ -67,14 +67,14 @@ http_headers = { "Authorization" = "Bearer ${アクセストークン}" }
 
 #### Claude Codeの場合
 ##### claudeコマンドを使用する場合
-以下の様に`mcp add`サブコマンドを用いて登録を行います(※動作確認は行っていません)。
+以下の様に`mcp add`サブコマンドを用いて登録を行います。
 
 ```sh
-claude mcp add local_wiki --transport http --header "Authorization: Bearer ${アクセストークン}" "https://${サーバのアドレス}:8080/mcp"
+claude mcp add --transport http local_wiki  "https://${サーバのアドレス}:8080/mcp" --header "Authorization: Bearer ${アクセストークン}"
 ```
 
 ##### settings.jsonを編集する場合
-`~/.claude.json`を編集し、"mcpServers"に以下のようなエントリを追加します
+`~/.claude.json`を編集し、"mcpServers"に以下のようなエントリを追加します。
 
 ```json
 "mcpServers": {

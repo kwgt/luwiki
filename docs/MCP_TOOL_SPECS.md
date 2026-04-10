@@ -21,6 +21,7 @@
   | `search_pages` | [ページ検索の実行](#tool-search-pages)
   | `create_page` | [ページ作成](#tool-create-page)
   | `update_page` | [ページ更新](#tool-update-page)
+  | `edit_page` | [ページ編集](#tool-edit-page)
   | `append_page` | [ページ追記](#tool-append-page)
   | `rename_page` | [ページリネーム](#tool-rename-page)
   | `get_page_section` | [特定セクション本文の取得](#tool-get-page-section)
@@ -37,7 +38,7 @@
 - 認可は Bearer スコープと path prefix 制約の両方で判定する
 - 監査ログは MCP 操作および関連する認可失敗を対象として記録する
 
-### 1.2 初期版で公開するツール
+### 1.2 公開するツール
 
 初期版では、少なくとも以下のツールを公開する。
 
@@ -47,6 +48,7 @@
 - `search_pages`
 - `create_page`
 - `update_page`
+- `edit_page`
 - `append_page`
 - `rename_page`
 - `get_page_section`
@@ -85,7 +87,7 @@
 
 #### 概要
 
-指定した page path の Markdown 本文全体を取得する。
+指定した current path の Markdown 本文全体を取得する。
 
 初期版では current path を基準とした通常ページ参照のみを扱い、
 削除済みページ参照や restore 前提の取得は行わない。
@@ -120,6 +122,7 @@ type: object
 required:
   - path
   - revision
+  - instance_id
   - content
 properties:
   path:
@@ -130,6 +133,12 @@ properties:
     description: >-
       実際に参照した revision 。
     type: integer
+
+  instance_id:
+    description: >-
+      ページ内容の一意性を表すインスタンスID。
+    type: "string"
+
   content:
     description: >-
       対象 revision の Markdown 本文全体。
@@ -163,7 +172,7 @@ properties:
 
 #### 概要
 
-指定した page path の Markdown 本文から、
+指定した current path の Markdown 本文から、
 見出し構造および各セクションの概算規模を返す。
 
 #### 認可
@@ -196,6 +205,7 @@ type: object
 required:
   - path
   - revision
+  - instance_id
   - sections
 properties:
   path:
@@ -206,6 +216,12 @@ properties:
     description: >-
       実際に参照した revision 。
     type: integer
+
+  instance_id:
+    description: >-
+      ページ内容の一意性を表すインスタンスID。
+    type: "string"
+
   sections:
     description: >-
       セクション一覧。文書順の平坦配列として返し、`parent_id` により
@@ -538,6 +554,7 @@ type: object
 required:
   - path
   - revision
+  - instance_id
   - summary
 properties:
   path:
@@ -548,6 +565,10 @@ properties:
     description: >-
       作成後の revision 。初期作成では 1 を返す。
     type: integer
+  instance_id:
+    description: >-
+      ページ内容の一意性を表すインスタンスID。
+    type: "string"
   summary:
     description: >-
       実行結果の要約。
@@ -585,7 +606,7 @@ properties:
 与えられた `content` で置き換える。
 
 本ツールは全文上書き更新を行い、
-末尾追記専用の `append_page` とは別ツールとして扱う。
+末尾追記専用の `append_page` や部分編集を行う `edit_page` とは別ツールとして扱う。
 
 #### 認可
 
@@ -618,6 +639,7 @@ type: object
 required:
   - path
   - revision
+  - instance_id
   - summary
 properties:
   path:
@@ -628,6 +650,10 @@ properties:
     description: >-
       更新後の revision 。
     type: integer
+  instance_id:
+    description: >-
+      ページ内容の一意性を表すインスタンスID。
+    type: "string"
   summary:
     description: >-
       実行結果の要約。
@@ -657,8 +683,275 @@ properties:
 - 初期版では amend 指定引数は公開せず、通常更新として扱う
 - path 自体は変更せず、結果 `path` は解決後の current path を返す
 
+<a id="tool-edit-page"></a>
+### 2.7 `edit_page`
+
+#### 概要
+
+指定した current path のページ本文を、与えられた `operation` で編集する。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `update`
+- 認可判定対象 path は対象ページの current path とする
+
+#### 入力
+```yaml
+type: "object"
+required:
+  - "path"
+  - "revision"
+  - "instance_id"
+  - "operation"
+properties:
+  path:
+    description: >-
+      編集対象のページパスを指定する
+    type: "string"
+
+  revision:
+    description: >-
+      編集対象のリビジョン番号を指定する。pathで指定したページの最新リビジョンが
+      revisionで指定したリビジョン番号と一致する場合のみoperationで指定した編集
+      が有効となる(一致しない場合はエラー)
+    type: "integer"
+
+  instance_id:
+    description: >-
+      ページの固有のインスタンスIDを指定する。サーバ側で編集対象ページ内容が一致
+      しているか否かをチェックするために用いる (本Wikiシステムはユーザ編集におい
+      て一定の条件のもとにリビジョンを変更させない amendアップデートをサポートし
+      ているため)。 サーバ側で管理しているpathで指定したページのインスタンスIDが
+      instance_idで指定したインスタンスIDと一致する場合のみoperationで指定した編
+      集が有効となる（一致しない場合はエラー）。
+    type: "string"
+
+  operation:
+    description: >-
+      編集操作を単一指定する。初期版では `replace_section`、`insert_section`、
+      `delete_section`、`replace_text` を公開対象とする。
+    oneOf:
+      - $ref: "#/definitions/replace_section"
+      - $ref: "#/definitions/insert_section"
+      - $ref: "#/definitions/delete_section"
+      # - $ref: "#/definitions/replace_lines"
+      # - $ref: "#/definitions/insert_lines"
+      # - $ref: "#/definitions/delete_lines"
+      # - $ref: "#/definitions/unified_diff"
+      - $ref: "#/definitions/replace_text"
+
+definitions:
+  replace_section:
+    description: >-
+      章の置き換え
+    type: "object"
+    required:
+      - "type"
+      - "section"
+      - "content"
+    properties:
+      type:
+        description: >-
+          操作種別を表す文字列を格納する
+        type: "string"
+        const: "replace_section"
+
+      section:
+        description: >-
+          置き換え対象セクションの識別子。文字列指定または selector オブジェクト
+          指定を受け付け、文字列指定は見出し文字列指定として扱う。
+        $ref : "#/definitions/section_selector"
+
+      content:
+        description: >-
+          置き換え後のセクション本文。
+          対象見出し行は保持される。本文部分のみ置き換える。
+        type: "string"
+
+  insert_section:
+    description: >-
+      章の挿入
+    type: "object"
+    required:
+      - "type"
+      - "anchor"
+      - "placement"
+      - "content"
+    properties:
+      type:
+        description: >-
+          操作種別を表す文字列を格納する
+        type: "string"
+        const: "insert_section"
+
+      anchor:
+        description: >-
+          挿入位置の基準となるセクションの識別子。文字列指定または selector
+          オブジェクト指定を受け付け、文字列指定は見出し文字列指定として扱う。
+        $ref : "#/definitions/section_selector"
+
+      placement:
+        description: >-
+          anchor に対する挿入位置。before / after を指定する。
+        type: "string"
+        enum:
+          - "before"
+          - "after"
+      content:
+        description: >-
+          挿入するセクション本文。見出し行を含む完全なセクションを指定する。
+        type: "string"
+
+  delete_section:
+    description: >-
+      章の削除
+    type: "object"
+    required:
+      - "type"
+      - "section"
+    properties:
+      type:
+        description: >-
+          操作種別を表す文字列を格納する
+        type: "string"
+        const: "delete_section"
+
+      section:
+        description: >-
+          削除対象セクションの識別子。文字列指定または selector オブジェクト指定
+          を受け付け、文字列指定は見出し文字列指定として扱う。
+        $ref : "#/definitions/section_selector"
+
+  # replace_lines:
+  #   description: >-
+  #     行の置き換え
+  #   type: "object"
+  #
+  # insert_lines:
+  #   description: >-
+  #     行の挿入
+  #   type: "object"
+  #
+  # delete_lines:
+  #   description: >-
+  #     行の削除
+  #   type: "object"
+  #
+  # unified_diff:
+  #   description: >-
+  #     unified diff形式での編集指示
+  #   type: "string"
+
+  replace_text:
+    description: >-
+      テキストの置き換え
+    type: "object"
+    required:
+      - "type"
+      - "old_text"
+      - "new_text"
+    properties:
+      type:
+        description: >-
+          操作種別を表す文字列を格納する
+        type: "string"
+        const: "replace_text"
+
+      old_text:
+        description: >-
+          置き換え対象の文字列。本文中に一意に存在する必要がある。
+        type: "string"
+
+      new_text:
+        description: >-
+          置き換え後の文字列。
+        type: "string"
+
+      occurrence:
+        description: >-
+          複数一致時の対象指定。"first" / "all"。
+          未指定時は "first" と同じ。
+        type: "string"
+        enum:
+          - "first"
+          - "all"
+
+  section_selector:
+    oneOf:
+      - type: "string"
+        description: >-
+          見出し文字列そのものを指定する。
+      - type: "object"
+        required:
+          - "by"
+          - "value"
+        properties:
+          by:
+            description: >-
+              セクション識別方式。
+            type: "string"
+            enum:
+              - "title"
+              - "id"
+          value:
+            description: >-
+              `by` で指定した方式に対応する値。
+            type: "string"
+```
+
+#### 出力
+```yaml
+type: object
+required:
+  - path
+  - revision
+  - instance_id
+  - summary
+properties:
+  path:
+    description: >-
+      更新後ページの current path 。
+    type: string
+  revision:
+    description: >-
+      編集後の revision 。
+    type: integer
+  instance_id:
+    description: >-
+      編集後のインスタンスID。
+    type: "string"
+  summary:
+    description: >-
+      実行結果の要約。
+    type: string
+```
+
+#### エラー
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が通常ページとして解決できない
+- `conflict`
+  - 対象ページがロック中
+- `forbidden`
+  - `update` スコープ不足
+  - path prefix 制約違反
+- `invalid_input`
+  - `path` が不正
+  - `operation` の指定形式が不正
+- `not_latest_revision`
+  - `revision`が最新リビジョンを指していない
+- `instance_id_not_match`
+  - `instance_id`がサーバが指しているものと異なる
+- `internal_error`
+  - 更新処理や内部処理で想定外の失敗が発生した
+
+#### 注記
+
 <a id="tool-append-page"></a>
-### 2.7 `append_page`
+### 2.8 `append_page`
 
 #### 概要
 
@@ -699,6 +992,7 @@ type: object
 required:
   - path
   - revision
+  - instance_id
   - summary
 properties:
   path:
@@ -709,6 +1003,12 @@ properties:
     description: >-
       保存後の revision 。amend 相当で処理された場合は既存 revision を返す。
     type: integer
+
+  instance_id:
+    description: >-
+      ページ内容の一意性を表すインスタンスID。
+    type: "string"
+
   summary:
     description: >-
       実行結果の要約。必要に応じて amend 相当で処理されたかを含む。
@@ -744,7 +1044,7 @@ properties:
 - amend 相当保存の可否は内部判定で決め、公開入力として amend 指定は受け付けない
 
 <a id="tool-rename-page"></a>
-### 2.8 `rename_page`
+### 2.9 `rename_page`
 
 #### 概要
 
@@ -784,6 +1084,7 @@ type: object
 required:
   - path
   - revision
+  - instance_id
   - summary
 properties:
   path:
@@ -794,6 +1095,10 @@ properties:
     description: >-
       実行結果に対応する revision 。
     type: integer
+  instance_id:
+    description: >-
+      ページ内容の一意性を表すインスタンスID。
+    type: "string"
   summary:
     description: >-
       実行結果の要約。必要に応じて変更前 path を含む。
@@ -828,11 +1133,11 @@ properties:
 - restore を意図した要求は初期版では `rename_page` に持ち込まない
 
 <a id="tool-get-page-section"></a>
-### 2.9 `get_page_section`
+### 2.10 `get_page_section`
 
 #### 概要
 
-指定した page path の Markdown 本文から、
+指定した current path の Markdown 本文から、
 特定セクションに対応する部分本文を取得する。
 
 このツールはページ全体取得とは別に、
@@ -991,6 +1296,6 @@ properties:
 
 ## 3. 改訂方針
 
-- 7.1 `get_page_section` の仕様確定は、本書 2.2 および 2.9 を正式化する形で反映する
+- 7.1 `get_page_section` の仕様確定は、本書 2.2 および 2.10 を正式化する形で反映する
 - 7.2 `list_pages` / `search_pages` のページング仕様確定は、本書 2.3 と 2.4 を正式化する形で反映する
 - 参照系・更新系の各ツール節は本書へ集約済みであり、今後の改訂は設計差し戻しまたは互換性を崩さない補足に限定する

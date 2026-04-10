@@ -1223,7 +1223,7 @@ DB 層ではなく MCP サービス層に置く。
 DB 層は「current page として解決できたか」と
 「解決先の現在状態はどうか」を返す役割に留める。
 
-#### 2.7.4 read / update / append / rename に対する適用範囲
+#### 2.7.4 read / update / edit / append / rename に対する適用範囲
 
 `get_current_page_state_by_path(path)` は、少なくとも以下の操作で共通利用する。
 
@@ -1236,6 +1236,10 @@ DB 層は「current page として解決できたか」と
 - `update_page`
   - current path 解決
   - latest revision と最新本文取得
+- `edit_page`
+  - current path 解決
+  - latest revision と最新本文取得
+  - revision / instance_id 整合確認の前提取得
 - `append_page`
   - current path 解決
   - latest revision と最新本文取得
@@ -1854,7 +1858,16 @@ create と update / append / rename のように
 - 本文は必須
 - amend 指定は初期 MCP 設計では不要とし、通常更新として扱う
 
-#### 3.4.3 append
+#### 3.4.3 edit
+
+- 対象は「既存の現在 path」
+- `page_id` 解決が必要
+- `revision` と `instance_id` を受け取る
+- 単一の編集操作を受け取り、最新本文へ部分編集を適用する
+- サービス層で最新 revision および最新 instance_id との一致確認を行う
+- 本文編集後の保存自体は update 系と同じ保存経路へ橋渡しできるようにする
+
+#### 3.4.4 append
 
 - 対象は「既存の現在 path」
 - `page_id` 解決が必要
@@ -1863,7 +1876,7 @@ create と update / append / rename のように
 - 公開面としては update と別操作だが、
   保存結果は revision 更新または既存 revision amend のいずれかになる
 
-#### 3.4.4 rename
+#### 3.4.5 rename
 
 - 対象は「既存の現在 path」
 - `page_id` 解決が必要
@@ -1882,6 +1895,7 @@ create と update / append / rename のように
 - `target_path`
 - `result_path`
 - `revision`
+- `instance_id`
 - `summary`
 - `audit_summary`
 
@@ -1897,6 +1911,7 @@ append では `summary` に amend 相当か新規 revision かを含める余地
 
 - `create_page`
 - `update_page`
+- `edit_page`
 - `append_page`
 - `rename_page`
 
@@ -1907,6 +1922,10 @@ append では `summary` に amend 相当か新規 revision かを含める余地
 - 共通出力モデルの生成
 
 を共有し、操作別差分のみを分岐させる。
+
+`edit_page` は、
+current page 解決と保存後応答生成は update 系共通処理を再利用しつつ、
+編集操作の適用と revision / instance_id 整合確認を追加責務として持つ。
 
 ### 3.7 更新系操作の共通化に関する設計判断
 

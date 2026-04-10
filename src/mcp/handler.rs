@@ -22,6 +22,7 @@ use crate::database::types::UserId;
 use crate::fts::FtsIndexConfig;
 use crate::mcp::service::{
     AppendServiceResult,
+    EditPageResult,
     GetPageResult,
     GetPageSectionResult,
     GetPageTocResult,
@@ -34,6 +35,8 @@ use super::auth::McpAuthGateway;
 use super::errors::McpError;
 use super::model::{
     AppendPageResponse,
+    EditPageRequest,
+    EditPageResponse,
     GetPageRequest,
     GetPageResponse,
     GetPageSectionRequest,
@@ -52,7 +55,7 @@ use super::model::{
     WritePageRequest,
     WritePageResponse,
 };
-use super::service::McpService;
+use super::service::{EditPageRequest as ServiceEditPageRequest, McpService};
 
 ///
 /// MCPハンドラの骨格
@@ -233,6 +236,22 @@ impl McpHandler {
                     .into(),
                 )
             }
+            McpToolRequest::EditPage(input) => McpToolResponse::EditPage(
+                self.audit_success(
+                    db,
+                    auth,
+                    address,
+                    build_edit_page_audit_record,
+                    &request,
+                    self.service
+                    .edit_page(
+                        auth,
+                        db,
+                        &ServiceEditPageRequest::from(input.clone()),
+                    )?
+                )?
+                .into(),
+            ),
             McpToolRequest::AppendPage(input) => {
                 McpToolResponse::AppendPage(
                     self.audit_success(
@@ -678,6 +697,57 @@ impl McpHandler {
     }
 
     ///
+    /// `edit_page` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `request` - 編集要求
+    ///
+    /// # 戻り値
+    /// `edit_page` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_edit_page(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        request: EditPageRequest,
+    ) -> Result<EditPageResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::EditPage,
+            McpToolRequest::EditPage(request),
+        );
+        let service_request = match request.request() {
+            McpToolRequest::EditPage(input) => {
+                ServiceEditPageRequest::from(input.clone())
+            }
+            _ => unreachable!("edit_page request envelope mismatch"),
+        };
+
+        /*
+         * `edit_page` を既存 service と監査記録へ橋渡しする
+         */
+        let result = match self.service.edit_page(auth, db, &service_request) {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_edit_page_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
     /// `append_page` を tool 単位入口として処理する
     ///
     /// # 引数
@@ -997,6 +1067,24 @@ fn build_write_page_audit_record(
     )
 }
 
+fn build_edit_page_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &EditPageResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::Update,
+        user_id,
+        auth,
+        address,
+        Some(result.path().to_string()),
+        Some(result.revision()),
+        Some(result.summary().to_string()),
+    )
+}
+
 fn build_append_page_audit_record(
     auth: &AuthContext,
     address: Option<IpAddr>,
@@ -1115,6 +1203,7 @@ fn audit_operation(request: &McpRequestEnvelope) -> AuditOperation {
         McpToolRequest::SearchPages(_) => AuditOperation::Search,
         McpToolRequest::CreatePage(_) => AuditOperation::Create,
         McpToolRequest::UpdatePage(_) => AuditOperation::Update,
+        McpToolRequest::EditPage(_) => AuditOperation::Update,
         McpToolRequest::AppendPage(_) => AuditOperation::Append,
         McpToolRequest::RenamePage(_) => AuditOperation::Rename,
         McpToolRequest::GetPageSection(_) => AuditOperation::GetSection,
@@ -1131,6 +1220,7 @@ fn primary_target_path(request: &McpRequestEnvelope) -> Option<String> {
         }
         McpToolRequest::CreatePage(input) => Some(input.path().to_string()),
         McpToolRequest::UpdatePage(input) => Some(input.path().to_string()),
+        McpToolRequest::EditPage(input) => Some(input.path().to_string()),
         McpToolRequest::AppendPage(input) => Some(input.path().to_string()),
         McpToolRequest::RenamePage(input) => Some(input.path().to_string()),
         McpToolRequest::GetPageSection(input) => Some(input.path().to_string()),
@@ -1151,6 +1241,8 @@ fn audit_result_from_error(error: &McpError) -> AuditResult {
         McpErrorCode::NotFound => AuditResult::NotFound,
         McpErrorCode::Conflict => AuditResult::Conflict,
         McpErrorCode::InvalidInput => AuditResult::InvalidInput,
+        McpErrorCode::NotLatestRevision => AuditResult::Conflict,
+        McpErrorCode::InstanceIdNotMatch => AuditResult::Conflict,
         McpErrorCode::Unsupported => AuditResult::Unsupported,
         McpErrorCode::InternalError => AuditResult::InternalError,
         McpErrorCode::Forbidden => {
@@ -1195,7 +1287,7 @@ mod tests {
         TokenId,
     };
     use crate::fts::FtsIndexConfig;
-    use crate::mcp::errors::McpErrorCode;
+    use crate::mcp::errors::{McpErrorCode, McpErrorResponse};
     use crate::mcp::model::{GetPageRequest, WritePageRequest};
     use crate::mcp::service::McpService;
     use crate::mcp::tools::McpToolName;
@@ -1241,6 +1333,51 @@ mod tests {
         assert_eq!(
             audit_result_from_error(&root_denied),
             AuditResult::Unsupported
+        );
+    }
+
+    ///
+    /// `edit_page` 固有の内容整合性エラーが監査分類で他種別と混同されないことを確認する。
+    ///
+    #[test]
+    fn audit_result_from_error_maps_edit_page_consistency_failures() {
+        let not_latest_revision = McpError::new(
+            McpErrorCode::NotLatestRevision,
+            "revision is not latest",
+        );
+        let instance_id_not_match = McpError::new(
+            McpErrorCode::InstanceIdNotMatch,
+            "instance_id does not match latest content",
+        );
+
+        assert_eq!(
+            audit_result_from_error(&not_latest_revision),
+            AuditResult::Conflict
+        );
+        assert_eq!(
+            audit_result_from_error(&instance_id_not_match),
+            AuditResult::Conflict
+        );
+    }
+
+    ///
+    /// `McpErrorResponse` が `edit_page` 固有コードを外部文字列へ変換できることを確認する。
+    ///
+    #[test]
+    fn mcp_error_response_preserves_edit_page_error_codes() {
+        let not_latest_revision = McpErrorResponse::from(McpError::new(
+            McpErrorCode::NotLatestRevision,
+            "revision is not latest",
+        ));
+        let instance_id_not_match = McpErrorResponse::from(McpError::new(
+            McpErrorCode::InstanceIdNotMatch,
+            "instance_id does not match latest content",
+        ));
+
+        assert_eq!(not_latest_revision.code(), "not_latest_revision");
+        assert_eq!(
+            instance_id_not_match.code(),
+            "instance_id_not_match"
         );
     }
 
