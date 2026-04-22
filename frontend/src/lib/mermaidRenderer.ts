@@ -397,32 +397,34 @@ async function openViewer(source: string, mode: 'expanded' | 'fullscreen'): Prom
   const renderId = `luwiki-mermaid-viewer-${mermaidRenderCount}`;
   mermaidRenderCount += 1;
 
-  try {
-    const { svg } = await mermaid.render(renderId, source);
-    modal.canvas.innerHTML = svg;
-    const svgElement = modal.canvas.querySelector<SVGSVGElement>('svg');
-    if (svgElement) {
-      normalizeSvgElement(svgElement);
-      fitViewBoxToContent(svgElement);
-      svgElement.style.height = '100%';
-      await initializeViewerPanZoom(svgElement);
-      activeViewerSvg = svgElement;
-      requestAnimationFrame(() => {
-        refitPanZoom(svgElement);
-      });
+  if (await mermaid.parse(source, {suppressErrors: true})) {
+    try {
+      const { svg } = await mermaid.render(renderId, source);
+      modal.canvas.innerHTML = svg;
+      const svgElement = modal.canvas.querySelector<SVGSVGElement>('svg');
+      if (svgElement) {
+        normalizeSvgElement(svgElement);
+        fitViewBoxToContent(svgElement);
+        svgElement.style.height = '100%';
+        await initializeViewerPanZoom(svgElement);
+        activeViewerSvg = svgElement;
+        requestAnimationFrame(() => {
+          refitPanZoom(svgElement);
+        });
+      }
+      if (mode === 'fullscreen' && modal.panel.requestFullscreen) {
+        await modal.panel.requestFullscreen();
+        requestAnimationFrame(() => {
+          refitPanZoom(svgElement ?? null);
+        });
+        window.setTimeout(() => {
+          refitPanZoom(svgElement ?? null);
+        }, 180);
+      }
+    } catch {
+      const escaped = escapeHtml(source);
+      modal.canvas.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
     }
-    if (mode === 'fullscreen' && modal.panel.requestFullscreen) {
-      await modal.panel.requestFullscreen();
-      requestAnimationFrame(() => {
-        refitPanZoom(svgElement ?? null);
-      });
-      window.setTimeout(() => {
-        refitPanZoom(svgElement ?? null);
-      }, 180);
-    }
-  } catch {
-    const escaped = escapeHtml(source);
-    modal.canvas.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
   }
 }
 
@@ -466,7 +468,6 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
-      suppressErrorRendering: true,
     });
     mermaidInitialized = true;
   }
@@ -485,23 +486,25 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
     const renderId = `luwiki-mermaid-${mermaidRenderCount}`;
     mermaidRenderCount += 1;
 
-    try {
-      const { svg } = await mermaid.render(renderId, source);
-      block.innerHTML = svg;
-      decorateBlock(block, source);
-      const svgElement = block.querySelector<SVGSVGElement>('svg');
-      if (svgElement) {
-        normalizeSvgElement(svgElement);
-        fitViewBoxToContent(svgElement);
-        applyInlineSvgSizing(svgElement);
-        requestAnimationFrame(() => {
+    if (await mermaid.parse(source, {suppressErrors: true})) {
+      try {
+        const { svg } = await mermaid.render(renderId, source);
+        block.innerHTML = svg;
+        decorateBlock(block, source);
+        const svgElement = block.querySelector<SVGSVGElement>('svg');
+        if (svgElement) {
+          normalizeSvgElement(svgElement);
           fitViewBoxToContent(svgElement);
           applyInlineSvgSizing(svgElement);
-        });
+          requestAnimationFrame(() => {
+            fitViewBoxToContent(svgElement);
+            applyInlineSvgSizing(svgElement);
+          });
+        }
+      } catch {
+        const escaped = escapeHtml(source);
+        block.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
       }
-    } catch {
-      const escaped = escapeHtml(source);
-      block.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
     }
   }
 }
