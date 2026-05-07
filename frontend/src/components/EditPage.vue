@@ -7,10 +7,12 @@ import EditorPane from './EditorPane.vue';
 import {
   createMarkdownRenderer,
   extractTitle,
+  getWikiIconUrl,
   getWikiTitle,
   extractToc,
   normalizeWikiPath,
 } from '../lib/pageCommon';
+import { stripLeadingTitleHeading } from '../lib/pageContent';
 import { expandRenderMacros } from '../lib/macroEngine';
 import { renderMermaidBlocks } from '../lib/mermaidRenderer';
 import {
@@ -18,6 +20,9 @@ import {
   canWriteAction,
   isWriteActionDisabled,
 } from '../lib/readOnlyUi';
+
+const EDIT_SIDE_PANEL_COLLAPSED_KEY = 'luwiki-edit-side-collapsed';
+const EDIT_PREVIEW_PANEL_VISIBLE_KEY = 'luwiki-edit-preview-visible';
 
 const {
   pageId,
@@ -109,6 +114,7 @@ const editorTitle = ref('');
 const tocItems = ref<{ level: number; text: string; anchor: string }[]>([]);
 let derivedTimer: number | null = null;
 let derivedRenderSeq = 0;
+const previewPanelVisible = ref(true);
 const previewMode = ref(false);
 const previewArticleRef = ref<HTMLElement | null>(null);
 let mermaidRenderSeq = 0;
@@ -172,9 +178,70 @@ function updateScreenState(): void {
   isLargeScreen.value = window.innerWidth >= 1024;
 }
 
-const showEditorPanel = computed(() => isLargeScreen.value || !previewMode.value);
-const showPreviewPanel = computed(() => isLargeScreen.value || previewMode.value);
+const previewSwitchMode = computed(
+  () => !isLargeScreen.value || !previewPanelVisible.value,
+);
+const showEditorPanel = computed(
+  () => !previewSwitchMode.value || !previewMode.value,
+);
+const showPreviewPanel = computed(
+  () => !previewSwitchMode.value || previewMode.value,
+);
+const showPreviewModeToggleButton = computed(
+  () => previewSwitchMode.value,
+);
+const showPreviewPanelVisibilityToggleButton = computed(
+  () => isLargeScreen.value,
+);
+const previewPanelVisibilityToggleLabel = computed(
+  () => previewPanelVisible.value ? 'プレビューパネルを隠す' : 'プレビューパネルを表示',
+);
+const hasWidePreviewLayout = computed(
+  () => isLargeScreen.value && previewPanelVisible.value,
+);
+const mainGridClass = computed(() => {
+  if (sidePanelCollapsed.value) {
+    return hasWidePreviewLayout.value
+      ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
+      : 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)]';
+  }
+  return hasWidePreviewLayout.value
+    ? 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]'
+    : 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]';
+});
+const previewPanelClass = computed(() => {
+  if (!showPreviewPanel.value) {
+    return '';
+  }
+  if (hasWidePreviewLayout.value) {
+    return 'md:col-span-1 lg:col-span-1';
+  }
+  return sidePanelCollapsed.value
+    ? 'md:col-span-1 lg:col-span-1'
+    : 'md:col-span-1 lg:col-span-1';
+});
+const footerGridClass = computed(() => {
+  if (sidePanelCollapsed.value) {
+    return hasWidePreviewLayout.value
+      ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
+      : 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)]';
+  }
+  return hasWidePreviewLayout.value
+    ? 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]'
+    : 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]';
+});
+const footerSectionClass = computed(() => {
+  if (sidePanelCollapsed.value) {
+    return hasWidePreviewLayout.value
+      ? 'lg:col-start-1 lg:col-span-2'
+      : 'lg:col-start-1';
+  }
+  return hasWidePreviewLayout.value
+    ? 'md:col-start-2 lg:col-start-2 lg:col-span-2'
+    : 'md:col-start-2 lg:col-start-2';
+});
 const wikiTitle = getWikiTitle();
+const wikiIconUrl = getWikiIconUrl();
 const readOnlyAssetUploadDisabled = computed(
   () => isWriteActionDisabled(isReadOnlyUser.value, assetUploadDisabled.value),
 );
@@ -184,6 +251,14 @@ const canApplyTemplateForUser = computed(
 const canSaveForUser = computed(
   () => canSaveFromEdit(isReadOnlyUser.value, canSave.value, isSaving.value),
 );
+
+function applySidePanelCollapsed(value: boolean): void {
+  localStorage.setItem(EDIT_SIDE_PANEL_COLLAPSED_KEY, value ? '1' : '0');
+}
+
+function applyPreviewPanelVisible(value: boolean): void {
+  localStorage.setItem(EDIT_PREVIEW_PANEL_VISIBLE_KEY, value ? '1' : '0');
+}
 
 async function renderPreviewMermaid(): Promise<void> {
   if (!renderedHtml.value) {
@@ -210,6 +285,14 @@ function ensureMarkdownRenderer(): ReturnType<typeof createMarkdownRenderer> {
 }
 
 onMounted(async () => {
+  const savedSidePanelCollapsed = localStorage.getItem(EDIT_SIDE_PANEL_COLLAPSED_KEY);
+  if (savedSidePanelCollapsed === '1') {
+    sidePanelCollapsed.value = true;
+  }
+  const savedPreviewPanelVisible = localStorage.getItem(EDIT_PREVIEW_PANEL_VISIBLE_KEY);
+  if (savedPreviewPanelVisible === '0') {
+    previewPanelVisible.value = false;
+  }
   if (autoLoadSource) {
     await loadPage();
   }
@@ -277,7 +360,7 @@ async function updateDerivedFromText(text: string): Promise<void> {
   if (seq !== derivedRenderSeq) {
     return;
   }
-  renderedHtml.value = renderer.render(expanded);
+  renderedHtml.value = renderer.render(stripLeadingTitleHeading(expanded));
 }
 
 function scheduleDerivedUpdate(text: string): void {
@@ -310,6 +393,21 @@ watch(showPreviewPanel, async (visible) => {
     return;
   }
   await renderPreviewMermaid();
+});
+
+watch([previewPanelVisible, isLargeScreen], async () => {
+  if (!showPreviewPanel.value) {
+    return;
+  }
+  await renderPreviewMermaid();
+});
+
+watch(sidePanelCollapsed, (value) => {
+  applySidePanelCollapsed(value);
+});
+
+watch(previewPanelVisible, (value) => {
+  applyPreviewPanelVisible(value);
 });
 
 watch(isLoading, (loading) => {
@@ -491,15 +589,29 @@ function buildAssetDownloadUrl(fileName: string): string {
     </div>
     <div class="mx-auto flex min-h-screen max-w-none flex-col gap-1 px-4 pt-8 pb-[0.25rem] lg:px-8">
       <header class="flex flex-col gap-1">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            {{ wikiTitle }} EDIT
-          </p>
-          <h1 class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate">
-            {{ editorTitle || '編集画面' }}
-          </h1>
+        <div class="flex flex-col gap-3">
+          <div class="flex min-w-0 items-stretch gap-3">
+            <div
+              v-if="wikiIconUrl"
+              class="aspect-square w-14 shrink-0 self-stretch overflow-hidden rounded border border-base-300 bg-base-100"
+            >
+              <img
+                :src="wikiIconUrl"
+                alt="Wikiアイコン"
+                class="h-full w-full object-cover object-center"
+              />
+            </div>
+            <div class="flex min-w-0 flex-1 flex-col justify-center">
+              <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
+                {{ wikiTitle }} EDIT
+              </p>
+              <h1 class="mt-1 mb-1 text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-3xl truncate">
+                {{ editorTitle || '編集画面' }}
+              </h1>
+            </div>
+          </div>
           <nav
-            class="flex flex-nowrap items-center gap-1 text-sm text-info mx-4 mt-3"
+            class="mx-4 flex flex-nowrap items-center gap-1 text-sm text-info"
             aria-label="breadcrumb"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="`${item.label}-${index}`">
@@ -573,7 +685,7 @@ function buildAssetDownloadUrl(fileName: string): string {
         />
       </header>
 
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
         <button
           class="btn btn-ghost btn-xs hidden md:inline-flex"
           type="button"
@@ -582,16 +694,25 @@ function buildAssetDownloadUrl(fileName: string): string {
           {{ sidePanelCollapsed ? 'サイドパネルを開く' : 'サイドパネルを閉じる' }}
         </button>
         <button
-          class="btn btn-ghost btn-xs lg:hidden"
+          v-if="showPreviewModeToggleButton"
+          class="btn btn-ghost btn-xs"
           type="button"
           @click="previewMode = !previewMode"
         >
           {{ previewMode ? '編集' : 'プレビュー' }}
         </button>
+        <button
+          v-if="showPreviewPanelVisibilityToggleButton"
+          class="btn btn-ghost btn-xs"
+          type="button"
+          @click="previewPanelVisible = !previewPanelVisible"
+        >
+          {{ previewPanelVisibilityToggleLabel }}
+        </button>
 
           <label
             v-if="!isNewPage && !isDraftPage && !amendLocked"
-            class="flex items-center gap-1 text-xs ml-auto text-base-content/70"
+            class="flex items-center gap-1 text-xs text-base-content/70 md:ml-auto"
           >
             <input
               class="checkbox checkbox-ghost checkbox-xs"
@@ -605,12 +726,8 @@ function buildAssetDownloadUrl(fileName: string): string {
 
 
       <main
-        class="grid min-h-0 flex-1 items-stretch gap-1 md:flex-none md:h-[calc(100vh-12.8em)] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden"
-        :class="
-          sidePanelCollapsed
-            ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-            : 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]'
-        "
+        class="grid min-h-0 flex-1 items-stretch gap-1 md:flex-none md:h-[calc(100vh-12.3em)] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden"
+        :class="mainGridClass"
       >
         <aside
           v-if="!sidePanelCollapsed"
@@ -647,7 +764,7 @@ function buildAssetDownloadUrl(fileName: string): string {
           class="order-1 flex min-h-0 flex-col gap-1 md:order-2"
         >
           <section
-            class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
+            class="flex min-h-[calc(100vh-12.3em)] flex-1 min-h-0 border border-base-300 bg-base-100 shadow-sm md:min-h-0"
           >
             <EditorPane
               ref="editorPaneRef"
@@ -669,10 +786,10 @@ function buildAssetDownloadUrl(fileName: string): string {
         <div
           v-if="showPreviewPanel"
           class="order-3 flex min-h-0 flex-col gap-1 md:order-3"
-          :class="{ 'md:col-span-1 lg:col-span-1': !sidePanelCollapsed }"
+          :class="previewPanelClass"
         >
           <section
-            class="flex min-h-[calc(100vh-12.8em)] flex-1 min-h-0 overflow-hidden border border-base-300 bg-transparent shadow-sm md:min-h-0"
+            class="flex min-h-[calc(100vh-12.3em)] flex-1 min-h-0 overflow-hidden border border-base-300 bg-transparent shadow-sm md:min-h-0"
           >
             <article
               ref="previewArticleRef"
@@ -688,16 +805,12 @@ function buildAssetDownloadUrl(fileName: string): string {
       <footer>
         <div
           class="grid items-stretch gap-1"
-          :class="
-            sidePanelCollapsed
-              ? 'md:grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
-              : 'md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]'
-          "
+          :class="footerGridClass"
         >
           <section
             class="border p-4 shadow-sm transition-colors"
             :class="[
-              sidePanelCollapsed ? 'lg:col-start-1' : 'md:col-start-2 lg:col-start-2',
+              footerSectionClass,
               assetInteractionDisabled ? 'pointer-events-none opacity-50' : '',
               isAssetDragging
                 ? 'border-info/70 bg-info/10'

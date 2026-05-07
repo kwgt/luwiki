@@ -414,17 +414,22 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
 ```html
 <meta name="wiki-page-id" content="{page_id}" />
 <meta name="wiki-page-revision" content="{revision}" />
+<meta name="wiki-title" content="{wiki_title}" />
+<meta name="wiki-icon-url" content="{wiki_icon_url}" />
 <div id="wiki-root"></div>
 <script src="/static/app.js"></script>
 ```
 
+`wiki_icon` が設定されている場合、`wiki-icon-url` には `/wiki-icon` を設定する。未設定時は空文字とする。
+
 クライアント側（JavaScript）は以下の手順でページ内容を表示する：
 
   1. meta タグから `page_id`と`revision` を取得する
-  2. REST API `GET /api/page?id={page_id}&rev={revision}` により Markdown ソースを取得する
-  3. markdown-it を用いて Markdown → HTML に変換する
-  4. asset 記法 asset:... に対して独自プラグインにより /api/asset?... へ変換する
-  5. 変換結果をフレーム HTML 上に描画する
+  2. meta タグから `wiki_title` および `wiki-icon-url` を取得し、ヘッダ表示に利用する
+  3. REST API `GET /api/page?id={page_id}&rev={revision}` により Markdown ソースを取得する
+  4. markdown-it を用いて Markdown → HTML に変換する
+  5. asset 記法 asset:... に対して独自プラグインにより /api/asset?... へ変換する
+  6. 変換結果をフレーム HTML 上に描画する
 
 この構成により、以下の利点を得る：
 
@@ -435,6 +440,17 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
   - ローカル運用においても SPA 型 UI に近い軽量実装を維持できる
 
 また、将来的にページ編集機能（Markdown エディタ／ライブプレビュー）を実装する際も、同様の API 構成・フロントレンダリング方式を流用できる。
+
+### 16.0.1 Wikiアイコン配信
+
+ブラウザUI向けの補助エンドポイントとして、固定パス `GET /wiki-icon` を提供する。
+
+- 配信対象は `config.toml` の `[global].wiki_icon` で設定された単一の画像ファイルのみとする
+- リクエスト引数からファイルパスを受け取らない
+- `wiki_icon` 未設定時は `404 Not Found` を返す
+- 設定済み時は画像データ本体を返し、`Content-Type` は拡張子ベースの MIME 推定結果を用いる
+- 初期実装では `Cache-Control: no-store, no-cache` を返す
+- `wiki_icon` の存在確認および画像種別確認は起動時に行い、不正設定は起動時エラーとする
 
 ### 16.1 短縮URLルーティング
 

@@ -363,6 +363,10 @@ pub struct Options {
     #[arg(short = 'T', long = "wiki-title", value_name = "TITLE")]
     wiki_title: Option<String>,
 
+    /// Wikiアイコン画像ファイルのパス
+    #[arg(skip = None)]
+    wiki_icon: Option<PathBuf>,
+
     /// アセットサイズ上限
     #[arg(short = 'S', long = "asset-limit-size", value_name = "SIZE")]
     asset_limit_size: Option<String>,
@@ -550,6 +554,16 @@ impl Options {
     }
 
     ///
+    /// Wikiアイコン画像ファイルパスへのアクセサ
+    ///
+    /// # 戻り値
+    /// Wikiアイコン画像ファイルのパスが設定されている場合はその値を返す。
+    ///
+    pub(crate) fn wiki_icon(&self) -> Option<PathBuf> {
+        self.wiki_icon.clone()
+    }
+
+    ///
     /// アセットサイズ上限へのアクセサ
     ///
     /// # 戻り値
@@ -691,6 +705,12 @@ impl Options {
                 if self.wiki_title.is_none() {
                     if let Some(title) = config.wiki_title() {
                         self.wiki_title = Some(title);
+                    }
+                }
+
+                if self.wiki_icon.is_none() {
+                    if let Some(path) = config.wiki_icon() {
+                        self.wiki_icon = Some(path);
                     }
                 }
 

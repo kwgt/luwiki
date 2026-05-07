@@ -558,6 +558,7 @@ mod tests {
             FtsIndexConfig::new(index_dir),
             None,
             "LUWIKI".to_string(),
+            None,
             1024 * 1024,
             None,
         ))));
@@ -695,7 +696,7 @@ mod tests {
         assert!(body_json["result"]["capabilities"].is_object());
         assert!(body_json["result"]["serverInfo"].is_object());
         assert_eq!(body_json["result"]["serverInfo"]["name"], "luwiki");
-        assert_eq!(body_json["result"]["serverInfo"]["version"], "0.9.15");
+        assert_eq!(body_json["result"]["serverInfo"]["version"], "0.9.21");
 
         /*
          * セッションを明示的に閉じて background task を終了させる

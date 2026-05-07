@@ -533,6 +533,14 @@ fn render_page_html(
         &escape_html_attribute(state.wiki_title()),
     );
     html = html.replace(
+        "{{WIKI_ICON_URL}}",
+        if state.wiki_icon().is_some() {
+            "/wiki-icon"
+        } else {
+            ""
+        },
+    );
+    html = html.replace(
         "{{FRONTEND_UI_FONT}}",
         &escape_html_attribute(state.frontend_config().ui_font()),
     );

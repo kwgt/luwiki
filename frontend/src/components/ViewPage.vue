@@ -6,7 +6,7 @@ import { useCurrentUser } from '../composables/useCurrentUser';
 import { useUiSettings } from '../composables/useUiSettings';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
 import { renderMermaidBlocks } from '../lib/mermaidRenderer';
-import { getWikiTitle } from '../lib/pageCommon';
+import { getWikiIconUrl, getWikiTitle } from '../lib/pageCommon';
 import {
   canCreatePageFromView,
   canDeletePageFromView,
@@ -207,6 +207,7 @@ const pageMetaRenameState = computed(() => {
     : '有効な rename';
 });
 const wikiTitle = getWikiTitle();
+const wikiIconUrl = getWikiIconUrl();
 
 function applySidePanelCollapsed(value: boolean): void {
   localStorage.setItem('luwiki-side-collapsed', value ? '1' : '0');
@@ -550,18 +551,32 @@ watch(pageTitle, (value) => {
     </div>
     <div class="mx-auto flex max-w-6xl flex-col gap-1 px-4 pt-8 pb-[0.25rem] lg:px-10">
       <header class="flex flex-col gap-1">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            {{ wikiTitle }} VIEW
-          </p>
-          <h1
-            class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"
-            :title="pageTitle"
-          >
-            {{ pageTitle }}
-          </h1>
+        <div class="flex flex-col gap-3">
+          <div class="flex min-w-0 items-stretch gap-3">
+            <div
+              v-if="wikiIconUrl"
+              class="aspect-square w-14 shrink-0 self-stretch overflow-hidden rounded border border-base-300 bg-base-100"
+            >
+              <img
+                :src="wikiIconUrl"
+                alt="Wikiアイコン"
+                class="h-full w-full object-cover object-center"
+              />
+            </div>
+            <div class="flex min-w-0 flex-1 flex-col justify-center">
+              <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
+                {{ wikiTitle }} VIEW
+              </p>
+              <h1
+                class="mt-1 mb-1 text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-3xl truncate"
+                :title="pageTitle"
+              >
+                {{ pageTitle }}
+              </h1>
+            </div>
+          </div>
           <nav
-            class="flex flex-nowrap items-center gap-1 text-sm text-info mx-4 mt-3"
+            class="mx-4 flex flex-nowrap items-center gap-1 text-sm text-info"
             aria-label="breadcrumb"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="item.href">
@@ -653,7 +668,7 @@ watch(pageTitle, (value) => {
       </div>
 
       <main
-        class="grid min-h-[calc(100vh-11.2em)] lg:min-h-[calc(100vh-12.8em)] items-stretch gap-1"
+        class="grid min-h-[calc(100vh-10.6em)] lg:min-h-[calc(100vh-12.3em)] items-stretch gap-1"
         :class="
           sidePanelCollapsed
             ? 'grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)]'

@@ -1241,10 +1241,16 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
 | `fts_index` | 全文検索インデックス格納ディレクトリのパス | `--fts-index` | `$XDG_DATA_HOME/luwiki/index/`
 | `template_root` | テンプレートページの格納パス(Wiki上のパス) | `--template-root` |
 | `wiki_title` | Wiki名 | `--wiki-title` |
+| `wiki_icon` | Wikiアイコン画像ファイルのパス | `--wiki-icon` |
 | `asset_limit_size` | アップロード可能なアセットサイズの上限 | `--asset-limit-size` |
 | `audit_path` | 監査ログ出力ディレクトリのパス | `--audit-log-dir` | `$XDG_DATA_HOME/luwiki/audit`
 | `audit_retention` | 監査ログ保持期間 | `--audit-log-retention` | "90d"
 | `audit_rotate_size` | 監査ログローテーション閾値サイズ | `--audit-log-rotate-size` | "2M"
+
+#### `wiki_icon` の注記
+- 画像ファイルのパスを指定する
+- 相対パス指定時は `config.toml` の親ディレクトリ基準で解決する
+- 存在しないファイルまたは非画像ファイルを指定した場合は起動時エラーとする
 
 <a id="config-run"></a>
 ### runテーブル

@@ -30,6 +30,7 @@ import {
   resolvePagePath,
   toErrorMessage,
 } from '../lib/pageCommon';
+import { stripLeadingTitleHeading } from '../lib/pageContent';
 import { tryBuildLockTokenKey } from '../lib/lockToken';
 import { buildAmendRefreshKey } from '../lib/amendRefresh';
 import { expandRenderMacros } from '../lib/macroEngine';
@@ -260,7 +261,7 @@ export function usePageView() {
     if (seq !== renderMacroSeq) {
       return;
     }
-    renderedHtml.value = md.render(expanded);
+    renderedHtml.value = md.render(stripLeadingTitleHeading(expanded));
   }
 
   const assetItems = computed(() =>

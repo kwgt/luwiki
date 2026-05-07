@@ -8,6 +8,7 @@
 //! HTTPサーバが共有する状態をまとめたモジュール
 //!
 
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use crate::audit::AuditSink;
@@ -34,6 +35,9 @@ pub(crate) struct AppState {
     /// Wikiタイトル
     wiki_title: String,
 
+    /// Wikiアイコン画像ファイルのパス
+    wiki_icon: Option<PathBuf>,
+
     /// アセットサイズ上限
     asset_limit_size: u64,
 
@@ -51,6 +55,7 @@ impl AppState {
     /// * `fts_config` - FTS設定
     /// * `template_root` - テンプレートルート
     /// * `wiki_title` - Wikiタイトル
+    /// * `wiki_icon` - Wikiアイコン画像ファイルのパス
     /// * `asset_limit_size` - アセットサイズ上限(バイト単位)
     /// * `audit_sink` - 監査ログ投入入口
     ///
@@ -63,6 +68,7 @@ impl AppState {
         fts_config: FtsIndexConfig,
         template_root: Option<String>,
         wiki_title: String,
+        wiki_icon: Option<PathBuf>,
         asset_limit_size: u64,
         audit_sink: Option<Arc<RwLock<AuditSink>>>,
     ) -> Self {
@@ -72,6 +78,7 @@ impl AppState {
             fts_config,
             template_root,
             wiki_title,
+            wiki_icon,
             asset_limit_size,
             audit_sink,
         }
@@ -122,6 +129,16 @@ impl AppState {
     ///
     pub(crate) fn wiki_title<'a>(&'a self) -> &'a str {
         &self.wiki_title
+    }
+
+    ///
+    /// Wikiアイコン画像ファイルパスへのアクセサ
+    ///
+    /// # 戻り値
+    /// Wikiアイコン画像ファイルのパスが存在する場合は参照を返す。
+    ///
+    pub(crate) fn wiki_icon<'a>(&'a self) -> Option<&'a PathBuf> {
+        self.wiki_icon.as_ref()
     }
 
     ///

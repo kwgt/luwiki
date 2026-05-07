@@ -412,6 +412,16 @@ impl Config {
     }
 
     ///
+    /// Wikiアイコン画像パスへのアクセサ
+    ///
+    pub(super) fn wiki_icon(&self) -> Option<PathBuf> {
+        self.global
+            .as_ref()
+            .and_then(|global| global.wiki_icon.as_ref())
+            .map(|path| self.resolve_path(path))
+    }
+
+    ///
     /// アセットサイズ上限へのアクセサ
     ///
     pub(super) fn asset_limit_size(&self) -> Option<String> {
@@ -757,6 +767,7 @@ impl Config {
                 assets_path: None,
                 template_root: None,
                 wiki_title: None,
+                wiki_icon: None,
                 asset_limit_size: None,
                 audit_path: None,
                 audit_retention: None,
@@ -1073,6 +1084,7 @@ impl Default for Config {
                 assets_path: Some(default_assets_path()),
                 template_root: None,
                 wiki_title: None,
+                wiki_icon: None,
                 asset_limit_size: None,
                 audit_path: Some(default_audit_path()),
                 audit_retention: Some(
@@ -1173,6 +1185,9 @@ struct GlobalInfo {
 
     /// Wikiタイトル
     wiki_title: Option<String>,
+
+    /// Wikiアイコン画像ファイルのパス
+    wiki_icon: Option<PathBuf>,
 
     /// アセットサイズ上限
     asset_limit_size: Option<String>,
@@ -1551,6 +1566,7 @@ mod tests {
             log_output = "log"
             db_path = "./db/database.redb"
             assets_path = "../assets"
+            wiki_icon = "icons/wiki.png"
             use_tls = true
             server_cert = "certs/server.pem"
         "#;
@@ -1571,6 +1587,10 @@ mod tests {
             config.assets_path(),
             Some(PathBuf::from("/tmp/assets"))
         );
+        assert_eq!(
+            config.wiki_icon(),
+            Some(PathBuf::from("/tmp/config/icons/wiki.png"))
+        );
         assert_eq!(config.use_tls(), Some(true));
         assert_eq!(
             config.server_cert(),
@@ -1585,6 +1605,7 @@ mod tests {
             log_output = "/var/log/app.log"
             db_path = "/var/db/data.redb"
             assets_path = "/var/data/assets"
+            wiki_icon = "/var/data/wiki-icon.png"
         "#;
 
         let mut config: Config =
@@ -1603,6 +1624,10 @@ mod tests {
             config.assets_path(),
             Some(PathBuf::from("/var/data/assets"))
         );
+        assert_eq!(
+            config.wiki_icon(),
+            Some(PathBuf::from("/var/data/wiki-icon.png"))
+        );
     }
 
     #[test]
@@ -1612,6 +1637,7 @@ mod tests {
             log_output = "log"
             db_path = "db/database.redb"
             assets_path = "assets"
+            wiki_icon = "icons/wiki.png"
             use_tls = true
             server_cert = "certs/server.pem"
         "#;
@@ -1623,10 +1649,23 @@ mod tests {
             Some(PathBuf::from("db/database.redb"))
         );
         assert_eq!(config.assets_path(), Some(PathBuf::from("assets")));
+        assert_eq!(config.wiki_icon(), Some(PathBuf::from("icons/wiki.png")));
         assert_eq!(config.use_tls(), Some(true));
         assert_eq!(
             config.server_cert(),
             Some(PathBuf::from("certs/server.pem"))
         );
+    }
+
+    #[test]
+    fn serialize_keeps_global_wiki_icon_key() {
+        let toml_str = r#"
+            [global]
+            wiki_icon = "icons/wiki.png"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).expect("parse failed");
+        let output = toml::to_string(&config).expect("serialize failed");
+        assert!(output.contains("wiki_icon = \"icons/wiki.png\""));
     }
 }

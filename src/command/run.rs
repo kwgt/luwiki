@@ -8,9 +8,11 @@
 //! サブコマンドrunの実装
 //!
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
+use mime_guess::MimeGuess;
 
 use super::CommandContext;
 use crate::cmd_args::{FrontendConfig, Options, RunOpts};
@@ -64,6 +66,9 @@ struct RunCommandContext {
     /// Wikiタイトル
     wiki_title: String,
 
+    /// Wikiアイコン画像ファイルのパス
+    wiki_icon: Option<PathBuf>,
+
     /// アセットサイズ上限
     asset_limit_size: u64,
 
@@ -88,6 +93,10 @@ impl RunCommandContext {
             }
             None => None,
         };
+        let wiki_icon = opts.wiki_icon();
+        if let Some(path) = wiki_icon.as_ref() {
+            validate_wiki_icon(path)?;
+        }
 
         /*
          * オプションの集約
@@ -106,6 +115,7 @@ impl RunCommandContext {
             open_browser: sub_opts.is_browser_open(),
             template_root,
             wiki_title: opts.wiki_title(),
+            wiki_icon,
             asset_limit_size: opts.asset_limit_size()?,
             audit_log_config: http_server::AuditLogConfig::new(
                 opts.audit_log_dir(),
@@ -161,6 +171,7 @@ impl CommandContext for RunCommandContext {
             fts_config,
             self.template_root.clone(),
             self.wiki_title.clone(),
+            self.wiki_icon.clone(),
             self.asset_limit_size,
             self.use_tls,
             self.cert_path.clone(),
@@ -199,5 +210,83 @@ fn normalize_template_root(path: String) -> String {
         path.trim_end_matches('/').to_string()
     } else {
         path
+    }
+}
+
+///
+/// Wikiアイコン画像ファイル設定を検証する
+///
+/// # 引数
+/// * `path` - 検証対象の画像ファイルパス
+///
+/// # 戻り値
+/// 検証に成功した場合は`Ok(())`を返す。
+///
+fn validate_wiki_icon(path: &Path) -> Result<()> {
+    /*
+     * ファイル存在確認
+     */
+    let metadata = fs::metadata(path)
+        .map_err(|err| anyhow!("wiki icon metadata error: {}", err))?;
+    if !metadata.is_file() {
+        return Err(anyhow!("wiki icon path is not a file"));
+    }
+
+    /*
+     * MIME種別確認
+     */
+    let mime = MimeGuess::from_path(path).first_or_octet_stream();
+    if mime.type_() != mime_guess::mime::IMAGE {
+        return Err(anyhow!(
+            "wiki icon must be an image file: {}",
+            path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::validate_wiki_icon;
+
+    #[test]
+    fn validate_wiki_icon_accepts_existing_image_path() {
+        let dir = tempdir().expect("tempdir failed");
+        let path = dir.path().join("wiki-icon.png");
+        fs::write(&path, b"png").expect("write icon failed");
+
+        validate_wiki_icon(&path).expect("icon validation failed");
+    }
+
+    #[test]
+    fn validate_wiki_icon_rejects_missing_file() {
+        let dir = tempdir().expect("tempdir failed");
+        let path = dir.path().join("missing.png");
+
+        let err = validate_wiki_icon(&path).expect_err("must fail");
+        assert!(
+            err.to_string().contains("wiki icon metadata error"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_wiki_icon_rejects_non_image_file() {
+        let dir = tempdir().expect("tempdir failed");
+        let path = dir.path().join("wiki-icon.txt");
+        fs::write(&path, b"text").expect("write icon failed");
+
+        let err = validate_wiki_icon(&path).expect_err("must fail");
+        assert!(
+            err.to_string().contains("wiki icon must be an image file"),
+            "unexpected error: {}",
+            err
+        );
     }
 }

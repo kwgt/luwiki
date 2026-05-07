@@ -3,7 +3,7 @@ import { computed, onMounted, watch } from 'vue';
 import { useCurrentUser } from '../composables/useCurrentUser';
 import { usePageList } from '../composables/usePageList';
 import { useUiSettings } from '../composables/useUiSettings';
-import { getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
+import { getWikiIconUrl, getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
 import { isWriteActionDisabled } from '../lib/readOnlyUi';
 
 const { selectedTheme } = useUiSettings();
@@ -37,6 +37,7 @@ const { isReadOnlyUser, loadCurrentUser } = useCurrentUser();
 const pageTitle = computed(() => pagePath.value || '/');
 const pageIndexLabel = computed(() => `ページ ${currentIndex.value + 1}`);
 const wikiTitle = getWikiTitle();
+const wikiIconUrl = getWikiIconUrl();
 
 const breadcrumbItems = computed(() => {
   const currentPath = pagePath.value || '/';
@@ -93,18 +94,32 @@ watch(pageTitle, (value) => {
   <div class="min-h-screen bg-base-200 text-base-content" :data-theme="selectedTheme">
     <div class="mx-auto flex max-w-6xl flex-col gap-1 px-4 pt-8 pb-[0.25rem] lg:px-10">
       <header class="flex flex-col gap-1">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
-            {{ wikiTitle }} PAGES
-          </p>
-          <h1
-            class="text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl mt-3 mb-2 truncate"
-            :title="pageTitle"
-          >
-            {{ pageTitle }} 以下のページ一覧
-          </h1>
+        <div class="flex flex-col gap-3">
+          <div class="flex min-w-0 items-stretch gap-3">
+            <div
+              v-if="wikiIconUrl"
+              class="aspect-square w-14 shrink-0 self-stretch overflow-hidden rounded border border-base-300 bg-base-100"
+            >
+              <img
+                :src="wikiIconUrl"
+                alt="Wikiアイコン"
+                class="h-full w-full object-cover object-center"
+              />
+            </div>
+            <div class="flex min-w-0 flex-1 flex-col justify-center">
+              <p class="text-xs font-semibold uppercase tracking-[0.32em] text-base-content/60">
+                {{ wikiTitle }} PAGES
+              </p>
+              <h1
+                class="mt-1 mb-1 text-3xl font-bold leading-tight empty:min-h-[2.5rem] sm:text-4xl truncate"
+                :title="pageTitle"
+              >
+                {{ pageTitle }} 以下のページ一覧
+              </h1>
+            </div>
+          </div>
           <nav
-            class="flex flex-nowrap items-center gap-1 text-sm text-info mx-4 mt-3"
+            class="mx-4 flex flex-nowrap items-center gap-1 text-sm text-info"
             aria-label="breadcrumb"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="item.href">
@@ -152,7 +167,7 @@ watch(pageTitle, (value) => {
         </label>
       </div>
 
-      <main class="grid min-h-[calc(100vh-11.2em)] lg:min-h-[calc(100vh-12.8em)] gap-1">
+      <main class="grid min-h-[calc(100vh-10.6em)] lg:min-h-[calc(100vh-12.3em)] gap-1">
         <section class="border border-base-300 bg-base-100 p-3 shadow-sm">
           <div v-if="isLoading" class="text-sm text-base-content/60">読み込み中...</div>
           <div v-else-if="errorMessage" class="text-sm text-error">{{ errorMessage }}</div>

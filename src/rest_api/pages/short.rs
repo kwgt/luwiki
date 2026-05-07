@@ -517,6 +517,7 @@ mod tests {
             FtsIndexConfig::new(base_dir.join("fts-index")),
             None,
             "LuWiki Test".to_string(),
+            None,
             1024 * 1024,
             None,
         ))
