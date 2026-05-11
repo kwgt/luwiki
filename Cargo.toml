@@ -1,6 +1,6 @@
 [package]
 name = "luwiki"
-version = "0.9.21"
+version = "0.9.22"
 edition = "2024"
 
 [dependencies]
@@ -49,4 +49,5 @@ reqwest = { version = "0.11.27", features = ["blocking"] }
 tempfile = "3.20.0"
 
 [target.'cfg(windows)'.dependencies]
+windows-service = "0.8.0"
 windows-sys = { version = "0.52.0", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }

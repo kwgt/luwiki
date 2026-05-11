@@ -1640,6 +1640,35 @@ mod tests {
         assert!(run_opts.use_mcp());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn parse_run_win_service_option_on_windows() {
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "run",
+            "--win-service",
+        ])
+        .expect("parse failed");
+        let run_opts = match opts.command {
+            Some(Command::Run(run_opts)) => run_opts,
+            _ => panic!("run options missing"),
+        };
+
+        assert!(run_opts.is_win_service());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn reject_run_win_service_option_on_non_windows() {
+        let result = Options::try_parse_from([
+            "luwiki",
+            "run",
+            "--win-service",
+        ]);
+
+        assert!(result.is_err());
+    }
+
     #[test]
     fn apply_config_enables_run_mcp_when_cli_is_unspecified() {
         let dir = TempDir::new().expect("temp dir");

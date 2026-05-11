@@ -20,7 +20,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use actix_web::dev::Server;
-#[cfg(target_os = "windows")]
 use actix_web::dev::ServerHandle;
 use actix_web::dev::ServiceResponse;
 use actix_web::http::StatusCode;
@@ -30,6 +29,7 @@ use anyhow::{Result, anyhow};
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{info, warn};
 use tokio::runtime::Builder;
+use tokio::sync::oneshot;
 #[cfg(target_os = "windows")]
 use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
 use tokio::time;
@@ -67,6 +67,9 @@ pub(crate) struct AuditLogConfig {
     /// 監査ログローテーション閾値サイズ
     rotate_size: u64,
 }
+
+/// 外部停止通知
+pub(crate) type ShutdownSignal = oneshot::Receiver<()>;
 
 impl AuditLogConfig {
     ///
@@ -159,6 +162,8 @@ pub(crate) fn run(
     cert_is_explicit: bool,
     audit_config: Option<AuditLogConfig>,
     mcp_endpoint: Option<McpEndpoint>,
+    shutdown_signal: Option<ShutdownSignal>,
+    on_started: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
 ) -> Result<()> {
     info!(
         "{} {} start",
@@ -218,11 +223,27 @@ pub(crate) fn run(
         mcp_endpoint,
         mcp_session_manager,
     )?;
+    let has_external_shutdown = shutdown_signal.is_some();
 
     /*
      * ロック期限切れ監視タスクの起動
      */
     rt.spawn(lock_cleanup_task(state));
+
+    /*
+     * 外部停止通知待ちタスクの起動
+     */
+    if let Some(signal) = shutdown_signal {
+        let _guard = rt.enter();
+        shutdown_signal_hook(server.handle(), signal);
+    }
+
+    /*
+     * 起動完了通知
+     */
+    if let Some(callback) = on_started {
+        callback()?;
+    }
 
     /*
      * Tokioランタイムでのサーバの起動
@@ -231,7 +252,9 @@ pub(crate) fn run(
 
     match rt.block_on(async {
         #[cfg(target_os = "windows")]
-        windows_event_fook(server.handle());
+        if !has_external_shutdown {
+            windows_event_fook(server.handle());
+        }
 
         server.await
     }) {
@@ -413,6 +436,20 @@ fn windows_event_fook(handle: ServerHandle) {
             _ = shutdown.recv() => info!("caught SHUTDOWN event"),
         };
 
+        handle.stop(true).await;
+    });
+}
+
+///
+/// 外部停止通知を受け付けるフック
+///
+/// # 引数
+/// * `handle` - 停止対象サーバハンドル
+/// * `signal` - 外部停止通知受信口
+///
+fn shutdown_signal_hook(handle: ServerHandle, signal: ShutdownSignal) {
+    tokio::spawn(async move {
+        let _ = signal.await;
         handle.stop(true).await;
     });
 }

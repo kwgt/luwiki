@@ -43,6 +43,11 @@ pub(crate) struct RunOpts {
     #[arg(short = 'C', long = "cert", value_name = "FILE")]
     cert_path: Option<PathBuf>,
 
+    /// Windowsサービスとして起動する
+    #[cfg(windows)]
+    #[arg(long = "win-service")]
+    win_service: bool,
+
     /// サーバのバインド先
     #[arg()]
     bind_addr: Option<String>,
@@ -106,6 +111,17 @@ impl RunOpts {
     ///
     pub(crate) fn is_cert_path_explicit(&self) -> bool {
         self.cert_path.is_some()
+    }
+
+    ///
+    /// Windowsサービスモード有効フラグへのアクセサ
+    ///
+    /// # 戻り値
+    /// Windowsサービスモードが有効ならtrueを返す。
+    ///
+    #[cfg(windows)]
+    pub(crate) fn is_win_service(&self) -> bool {
+        self.win_service
     }
 
     ///
@@ -310,6 +326,8 @@ impl ShowOptions for RunOpts {
         println!("   mcp enabled:    {}", self.use_mcp());
         println!("   tls enabled:    {}", self.use_tls());
         println!("   cert path:      {}", self.cert_path().display());
+        #[cfg(windows)]
+        println!("   win service:    {}", self.is_win_service());
         println!("   bind:  {}:{}", self.bind_addr(), self.bind_port());
     }
 }

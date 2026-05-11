@@ -43,6 +43,8 @@ pub(crate) mod user_delete;
 pub(crate) mod user_edit;
 pub(crate) mod user_info;
 pub(crate) mod user_list;
+#[cfg(windows)]
+pub(crate) mod windows_service;
 
 use anyhow::Result;
 

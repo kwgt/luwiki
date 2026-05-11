@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use mime_guess::MimeGuess;
@@ -25,7 +26,8 @@ use crate::rest_api::validate_page_path;
 ///
 /// addサブコマンドのコンテキスト情報をパックした構造体
 ///
-struct RunCommandContext {
+#[derive(Clone)]
+pub(crate) struct RunCommandContext {
     /// バインド先のアドレス
     bind_addr: String,
 
@@ -59,6 +61,10 @@ struct RunCommandContext {
     /// 起動時にブラウザを開くか否かのフラグ
     #[allow(dead_code)]
     open_browser: bool,
+
+    /// Windowsサービス実行フラグ
+    #[cfg(windows)]
+    win_service: bool,
 
     /// テンプレートルート
     template_root: Option<String>,
@@ -113,6 +119,8 @@ impl RunCommandContext {
             cert_is_explicit: sub_opts.is_cert_path_explicit(),
             mcp_enabled: sub_opts.use_mcp(),
             open_browser: sub_opts.is_browser_open(),
+            #[cfg(windows)]
+            win_service: sub_opts.is_win_service(),
             template_root,
             wiki_title: opts.wiki_title(),
             wiki_icon,
@@ -134,6 +142,31 @@ impl CommandContext for RunCommandContext {
     /// サーバ起動処理に成功した場合は`Ok(())`を返す。
     ///
     fn exec(&self) -> Result<()> {
+        #[cfg(windows)]
+        if self.win_service {
+            return super::windows_service::run(self.clone());
+        }
+
+        self.run_server(None, None)
+    }
+}
+
+impl RunCommandContext {
+    ///
+    /// HTTPサーバを起動する
+    ///
+    /// # 引数
+    /// * `shutdown_signal` - 外部停止通知
+    /// * `on_started` - サーバ起動完了通知
+    ///
+    /// # 戻り値
+    /// サーバ起動処理に成功した場合は`Ok(())`を返す。
+    ///
+    pub(crate) fn run_server(
+        &self,
+        shutdown_signal: Option<http_server::ShutdownSignal>,
+        on_started: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
+    ) -> Result<()> {
         /*
          * データベースのオープン
          */
@@ -182,6 +215,8 @@ impl CommandContext for RunCommandContext {
                 None
             },
             mcp_endpoint,
+            shutdown_signal,
+            on_started,
         )
     }
 }

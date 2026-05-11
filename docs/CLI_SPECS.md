@@ -154,6 +154,7 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 |       `--mcp` | MCP機能を有効化して起動する |
 | `-T`, `--tls` | サーバをHTTPSで起動させる |
 | `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
+|       `--win-service` | Windowsサービス実行モードで起動する | Windows環境のみ
  
 #### 概要
 引数`BIND-ADDR:PORT`でアドレスにバインドしHTTP/HTTPSサーバを起動する(デフォルトは"0.0.0.0:8080")。
@@ -168,6 +169,8 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 `--mcp`オプションが指定された場合は、HTTP/HTTPSサーバに加えてMCP機能を有効化する。
 
 `--mcp`オプションが指定されていない場合は、設定ファイルの`run.use_mcp`を既定値として扱う。`run.use_mcp=true`であればMCP機能を有効化し、`run.use_mcp=false`または未設定であればMCP機能は無効とする。
+
+`--win-service`オプションは Windows 環境でのみ使用可能とし、非 Windows 環境ではオプション自体を提供しない。このオプションが指定された場合、`run` コマンドは Windows サービスとして起動されることを前提に SCM と連携して動作する。
 
 ユーザ未登録の状態で`run`コマンドを実行した場合はエラーとする。
 
