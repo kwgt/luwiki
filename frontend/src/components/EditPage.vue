@@ -712,7 +712,7 @@ function buildAssetDownloadUrl(fileName: string): string {
 
           <label
             v-if="!isNewPage && !isDraftPage && !amendLocked"
-            class="flex items-center gap-1 text-xs text-base-content/70 md:ml-auto"
+            class="flex items-center gap-1 text-xs text-base-content/70 ml-auto"
           >
             <input
               class="checkbox checkbox-ghost checkbox-xs"

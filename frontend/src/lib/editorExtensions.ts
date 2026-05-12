@@ -5,8 +5,10 @@ import {
   type CompletionSource,
   snippetCompletion,
 } from '@codemirror/autocomplete';
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell';
+import { ruby } from '@codemirror/legacy-modes/mode/ruby';
 import { python } from '@codemirror/lang-python';
 import { rust } from '@codemirror/lang-rust';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -113,6 +115,16 @@ const codeLanguages = [
     name: 'csharp',
     alias: ['cs', 'c#'],
     support: csharp(),
+  }),
+  LanguageDescription.of({
+    name: 'powershell',
+    alias: ['ps1', 'pwsh'],
+    support: new LanguageSupport(StreamLanguage.define(powerShell)),
+  }),
+  LanguageDescription.of({
+    name: 'ruby',
+    alias: ['rb'],
+    support: new LanguageSupport(StreamLanguage.define(ruby)),
   }),
 ];
 

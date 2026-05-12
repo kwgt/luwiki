@@ -223,6 +223,8 @@ pub(crate) fn run(
         mcp_endpoint,
         mcp_session_manager,
     )?;
+
+    #[allow(unused)]
     let has_external_shutdown = shutdown_signal.is_some();
 
     /*

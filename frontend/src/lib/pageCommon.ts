@@ -17,6 +17,8 @@ import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-rust';
 import 'prismjs/components/prism-go';
 import 'prismjs/components/prism-csharp';
+import 'prismjs/components/prism-powershell';
+import 'prismjs/components/prism-ruby';
 import 'prismjs/components/prism-toml';
 import 'prismjs/components/prism-diff';
 import 'prismjs/components/prism-css';
@@ -351,6 +353,9 @@ export function normalizeLanguage(lang?: string): string | null {
     ts: 'typescript',
     md: 'markdown',
     rs: 'rust',
+    ps1: 'powershell',
+    pwsh: 'powershell',
+    rb: 'ruby',
   };
   const resolved = aliasMap[normalized] ?? normalized;
   return Prism.languages[resolved] ? resolved : null;
