@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue';
+import { ensureHelloAuth } from '../api/hello';
 import { useCurrentUser } from '../composables/useCurrentUser';
 import { usePageList } from '../composables/usePageList';
 import { useUiSettings } from '../composables/useUiSettings';
-import { getWikiIconUrl, getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
+import {
+  getWikiIconUrl,
+  getWikiTitle,
+  normalizeWikiPath,
+  toErrorMessage,
+} from '../lib/pageCommon';
 import { isWriteActionDisabled } from '../lib/readOnlyUi';
 
 const { selectedTheme } = useUiSettings();
@@ -79,7 +85,14 @@ function formatListTimestamp(raw: string): string {
   return `${datePart} ${timePart}`;
 }
 
-onMounted(() => {
+onMounted(async () => {
+  try {
+    await ensureHelloAuth();
+  } catch (err: unknown) {
+    errorMessage.value = toErrorMessage(err);
+    return;
+  }
+
   void loadCurrentUser();
   void loadPageList(true);
 });

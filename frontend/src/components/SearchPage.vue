@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
+import { ensureHelloAuth } from '../api/hello';
 import { usePageSearch } from '../composables/usePageSearch';
 import { useUiSettings } from '../composables/useUiSettings';
-import { getWikiTitle, normalizeWikiPath } from '../lib/pageCommon';
+import { getWikiTitle, normalizeWikiPath, toErrorMessage } from '../lib/pageCommon';
 
 type SortOrder = 'page_id' | 'score' | 'path';
 
@@ -66,6 +67,12 @@ onMounted(async () => {
   await nextTick();
   searchInputRef.value?.focus();
   document.title = `検索 | ${wikiTitle}`;
+
+  try {
+    await ensureHelloAuth();
+  } catch (err: unknown) {
+    errorMessage.value = toErrorMessage(err);
+  }
 });
 </script>
 

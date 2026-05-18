@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ensureHelloAuth } from '../api/hello';
 import { usePageEdit } from '../composables/usePageEdit';
 import { useCurrentUser } from '../composables/useCurrentUser';
 import { useUiSettings } from '../composables/useUiSettings';
@@ -93,6 +94,7 @@ const {
   confirmAssetDelete,
   confirmAssetReplace,
   dismissAssetReplace,
+  reportError,
   dismissError,
 } = usePageEdit();
 const { currentUser, isReadOnlyUser, loadCurrentUser } = useCurrentUser();
@@ -293,6 +295,14 @@ onMounted(async () => {
   if (savedPreviewPanelVisible === '0') {
     previewPanelVisible.value = false;
   }
+
+  try {
+    await ensureHelloAuth();
+  } catch (err: unknown) {
+    reportError(err);
+    return;
+  }
+
   if (autoLoadSource) {
     await loadPage();
   }

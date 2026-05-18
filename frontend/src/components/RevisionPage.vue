@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ensureHelloAuth } from '../api/hello';
 import type { RevisionRenameInfo } from '../api/pages';
 import { useCurrentUser } from '../composables/useCurrentUser';
 import { usePageRevision } from '../composables/usePageRevision';
 import { useUiSettings } from '../composables/useUiSettings';
 import EditorPane from './EditorPane.vue';
-import { getWikiIconUrl, getWikiTitle } from '../lib/pageCommon';
+import { getWikiIconUrl, getWikiTitle, toErrorMessage } from '../lib/pageCommon';
 import {
   canExecuteRevisionWriteAction,
   isWriteActionDisabled,
@@ -288,7 +289,7 @@ onBeforeUnmount(() => {
   revisionObserver = null;
 });
 
-onMounted(() => {
+onMounted(async () => {
   const savedCollapsed = localStorage.getItem('luwiki-side-collapsed');
   if (savedCollapsed === '1') {
     sidePanelCollapsed.value = true;
@@ -296,6 +297,14 @@ onMounted(() => {
   if (!window.matchMedia('(min-width: 768px)').matches) {
     sidePanelCollapsed.value = true;
   }
+
+  try {
+    await ensureHelloAuth();
+  } catch (err: unknown) {
+    errorMessage.value = toErrorMessage(err);
+    return;
+  }
+
   void loadCurrentUser();
   setupRevisionObserver();
   void loadPage();

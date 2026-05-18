@@ -20,6 +20,7 @@
 - `create` 、 `update` 、 `append` 、 `delete` は `read` を暗黙包含しない
 - Bearer トークンに path prefix 制約が設定されている場合は、要求スコープに加えて操作対象 path が許可範囲に含まれることを要求する
 - `ReadOnly` 属性による write 系操作禁止は Bearer トークンのスコープより優先して適用する
+- ブラウザUIでは、画面初期表示時に Basic 認証を先に確立する目的で `GET /api/hello` を発行してから、個別の参照系API呼び出しへ進んでよい
 
 `Authorization`ヘッダの記述例は以下の通り。
 
@@ -86,6 +87,7 @@ properties:
 
   | メソッド | エンドポイント | 用途
   |:--|:--|:--
+  |GET    | `/api/hello`                                     | [認証確立および疎通確認](#get-hello)
   |POST   | `/api/pages?path={page_path}`                     | [ドラフトページの作成](#create-page)
   |GET    | `/api/pages?prefix={page_path}[&forward={page_path}][&rewind={page_path}][&limit={number}][&with_deleted={boolean}]` | [ページの一覧取得](#get-pages)
   |GET    | `/api/pages/deleted?path={page_path}`             | [削除済みページの一覧取得](#get-deleted-pages)
@@ -116,6 +118,40 @@ properties:
   |GET    | `/api/assets/{asset_id}/meta`                     | [アセットのメタ情報の取得](#get-asset-metadata)
   |DELETE | `/api/assets/{asset_id}`                          | [アセットの削除](#delete-asset)
   |GET    | `/api/users/me`                                   | [自分自身のユーザ情報の取得](#get-users-me)
+
+--- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
+<a id="get-hello"></a>
+### `GET /api/hello`
+#### 概要
+認証確立および疎通確認
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | text/plain
+  | `Cache-Control` | "no-store" (固定)
+
+また、ボディには文字列 `hello` が返される。
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 401 Unauthorized | 認証に失敗した
+  | 400 Bad Request | `Authorization` ヘッダ件数または形式が不正
+
+#### 注記
+  - 主用途はアプリケーション動作確認および認証確立である
+  - ブラウザUIでは、Basic 認証ダイアログを先に完了させる目的で、画面初期表示時の最初の API として利用してよい
+  - 追加の業務データは返さない
 
 --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 

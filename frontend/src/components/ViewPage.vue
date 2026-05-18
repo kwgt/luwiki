@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ensureHelloAuth } from '../api/hello';
 import type { RevisionRenameInfo } from '../api/pages';
 import { usePageView } from '../composables/usePageView';
 import { useCurrentUser } from '../composables/useCurrentUser';
@@ -452,11 +453,19 @@ async function initTabId(): Promise<void> {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   const savedCollapsed = localStorage.getItem('luwiki-side-collapsed');
   if (savedCollapsed === '1') {
     sidePanelCollapsed.value = true;
   }
+
+  try {
+    await ensureHelloAuth();
+  } catch (err: unknown) {
+    reportError(err);
+    return;
+  }
+
   void loadCurrentUser();
   void initTabId();
   void loadPage();

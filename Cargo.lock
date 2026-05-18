@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "luwiki"
-version = "0.9.23"
+version = "0.9.24"
 dependencies = [
  "actix-multipart",
  "actix-web",
