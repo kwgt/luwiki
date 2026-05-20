@@ -90,6 +90,7 @@ properties:
   |GET    | `/api/hello`                                     | [認証確立および疎通確認](#get-hello)
   |POST   | `/api/pages?path={page_path}`                     | [ドラフトページの作成](#create-page)
   |GET    | `/api/pages?prefix={page_path}[&forward={page_path}][&rewind={page_path}][&limit={number}][&with_deleted={boolean}]` | [ページの一覧取得](#get-pages)
+  |GET    | `/api/pages/id?path={page_path}`                  | [ページIDの取得](#get-page-id)
   |GET    | `/api/pages/deleted?path={page_path}`             | [削除済みページの一覧取得](#get-deleted-pages)
   |GET    | `/api/pages/template` | [テンプレートの一覧取得](#get-template-pages)
   |GET    | `/api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]` | [ページの検索](#search-pages)
@@ -384,6 +385,52 @@ properties:
   - `path` には正規化済みの絶対ページパスを指定する
   - `path` には `/wiki/...` のような閲覧URL形式を指定しない
   - サーバは `path` を追加変換せず、そのままページパスとして解決する
+
+<a id="get-page-id"></a>
+### `GET /api/pages/id?path={page_path}`
+#### 概要
+ページIDの取得
+
+#### 認証・権限
+
+- Basic 認証または Bearer 認証が必要
+- Bearer 認証時の必要スコープは `read`
+
+#### クエリーパラメータ
+  |名称|型|説明|必須|
+  |:--|:--|:--|:--|
+  | `path` | string | 対象ページパス | 必須 |
+
+#### レスポンス
+リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
+
+  | ヘッダ名 | 内容
+  |:--|:--
+  | `Content-Type` | application/json
+
+ボディには以下の内容のJSONデータが返される。
+
+```yaml
+type: "object"
+required:
+  - "id"
+properties:
+  id:
+    description: >-
+      ページのIDが格納される
+```
+
+リクエストに失敗したときは以下のステータスが返される。
+
+  | ステータス | 説明
+  |:--|:--
+  | 401 Unauthorized | 認証に失敗した
+  | 400 Bad Request | `path`で指定されたパスのフォーマットが不正
+  | 404 Not Found | `path`で指定されたパスのページが存在しない
+  | 410 Gone | `path`で指定されたページが削除済みである
+
+#### 注記
+  - 削除済みページおよびドラフトページは返却対象外とする
 
 <a id="get-deleted-pages"></a>
 ### `GET /api/pages/deleted?path={page_path}`

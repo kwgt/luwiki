@@ -90,8 +90,7 @@ pub async fn get_by_path(
     /*
      * page path から短縮URL対象を解決
      */
-    let resolved = match state.db().resolve_short_url_target_by_path(&query.path)
-    {
+    let resolved = match state.db().resolve_page_state_by_path(&query.path) {
         Ok(resolved) => resolved,
         Err(_) => {
             return Ok(resp_error_json(

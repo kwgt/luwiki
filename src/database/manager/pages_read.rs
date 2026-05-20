@@ -225,6 +225,12 @@ pub(crate) enum PagePathResolveState {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl PagePathResolveState {
+    /*
+     * path 解決結果の補助アクセサ群は、
+     * 今後の呼び出し側追加を見込んで保持する。
+     * 現時点では一部経路で未使用のため dead_code を抑止する。
+     */
+    #[allow(dead_code)]
     ///
     /// 通常ページとして解決したページIDを返す
     ///
@@ -238,6 +244,7 @@ impl PagePathResolveState {
         }
     }
 
+    #[allow(dead_code)]
     ///
     /// draft 状態かどうかを返す
     ///
@@ -251,6 +258,7 @@ impl PagePathResolveState {
         }
     }
 
+    #[allow(dead_code)]
     ///
     /// 短縮URL対象として返却可能なページIDを返す
     ///
@@ -956,7 +964,7 @@ impl DatabaseManager {
     }
 
     ///
-    /// page path から短縮URL向けのページ状態を解決
+    /// page path からページ状態を解決
     ///
     /// # 引数
     /// * `path` - 正規化済み page path
@@ -965,7 +973,7 @@ impl DatabaseManager {
     /// 通常ページ、draft、削除済み、未存在のいずれかの状態を返す。
     ///
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn resolve_short_url_target_by_path(
+    pub(crate) fn resolve_page_state_by_path(
         &self,
         path: &str,
     ) -> Result<PagePathResolveState> {

@@ -11,6 +11,7 @@
 pub(crate) mod assets;
 pub(crate) mod delete;
 pub(crate) mod deleted;
+pub(crate) mod id;
 pub(crate) mod list;
 pub(crate) mod lock;
 pub(crate) mod meta;
