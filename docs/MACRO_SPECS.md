@@ -23,6 +23,84 @@
   | `[[{page_path}\|{alias_name}]]` | 特例型 | [ページへのリンク](#macro-alias_link)
   | `![[asset:{asset_path}]]` | 特例型 | [アセットの埋め込み](#macro-asset_link)
 
+## 波括弧記法の責務境界
+
+LuWikiでは、既存マクロのほかにテンプレート適用時および
+MCP `prompts/get`時に処理する専用placeholderを使用する。
+
+| 記法 | 用途 | 処理時点 |
+|:--|:--|:--|
+| `{{macro}}` | 既存の即時変換・レンダリング時マクロ | 編集時または表示時 |
+| `{{!macro}}` | テンプレート適用時専用の即時変換placeholder | テンプレート適用時 |
+| `{{@name}}` | MCP prompt要求引数placeholder | `prompts/get`時 |
+| `{{@@name}}` | `{{@name}}`のリテラル表現 | `prompts/get`時 |
+
+各処理系は自身が担当する記法だけを展開する。
+
+- 既存マクロ処理は`{{@name}}`および`{{@@name}}`を展開しない
+- prompt引数展開は`{{macro}}`および`{{!macro}}`を展開しない
+- prompt引数展開はwiki linkおよびasset linkを変更しない
+- prompt引数値に含まれる各記法を再処理しない
+
+## テンプレート適用時専用placeholder
+
+### `{{!macro}}`
+
+`{{!macro}}`は、テンプレート適用時に既存の即時変換型マクロを
+明示的に展開するための専用placeholderとする。
+
+例:
+
+- `{{!today:iso}}`
+- `{{!page:basename}}`
+- `{{!user:display}}`
+
+以下の規則を適用する。
+
+- `wiki.template.macro_expand = true`の場合だけ展開する
+- 展開時は`!`を除去し、残りを既存の即時変換型マクロとして処理する
+- `macro_expand = false`または未指定の場合は入力をそのまま保持する
+- inline codeおよびfenced code内では展開しない
+- MCP prompt引数placeholderとは別の記法として扱う
+- `prompts/get`では`{{!macro}}`を展開しない
+
+## MCP prompt専用placeholder
+
+MCP prompt専用placeholderは、`mcp.primitive = prompt`の
+systemおよびページ本文に記述し、`prompts/get`時に処理する。
+
+公開契約の詳細は`MCP_PROMPT_SPECS.md`を参照すること。
+
+### `{{@name}}`
+
+`{{@name}}`は、`mcp.arguments`で宣言した同名引数の文字列を
+挿入するplaceholderとする。
+
+以下の規則を適用する。
+
+- systemと本文へ個別に一回だけ展開を適用する
+- 同じplaceholderが複数ある場合はすべて展開する
+- optional引数が未指定の場合は空文字列へ展開する
+- 挿入値に含まれるplaceholder、既存マクロ、wiki linkを再展開しない
+- inline codeおよびfenced code内でも展開する
+- `\{{@name}}`のバックスラッシュをescapeとして扱わず、
+  バックスラッシュを保持したままplaceholderを展開する
+- 引数名規則に一致しない`{{@...}}`は変更しない
+- 閉じ`}}`がない記法は変更しない
+- 有効な未宣言placeholderは`prompts/get`時の内部不整合とする
+- front matter保存時にはplaceholderと引数定義の参照整合性を検証しない
+
+### `{{@@name}}`
+
+`{{@@name}}`は、prompt本文またはsystemへ
+リテラル`{{@name}}`を含めるためのprompt専用escapeとする。
+
+以下の規則を適用する。
+
+- `prompts/get`時に`{{@name}}`へ一回だけ戻す
+- 戻した`{{@name}}`を同じ処理中に再展開しない
+- 既存マクロ処理およびテンプレート適用時処理のescapeには使用しない
+
 ## 即時変換型マクロ
 即時変換型は編集画面のエディタ上で入力時にリアルタイムに展開が行われる(このためソースには残らない)。
 
@@ -194,4 +272,3 @@ Obsidian 系由来
 
 ### 注記
 - `![[asset:/path/to/page:image.png]]`は`[image.png](!asset:/path/to/page:image.png)`と等価に展開される。
-

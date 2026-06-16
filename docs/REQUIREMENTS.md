@@ -42,12 +42,21 @@
 
 ### 2.4 パスフォーマット
 
-| パス | 対象 
+| パス | 対象
 |:---|:---
 | `/wiki/{page_path}` | 閲覧ページ
 | `/w/{short_id}` | 短縮URLによる閲覧ページ導線
 | `/edit/{page_path}` | 編集ページ
 | `/pages/{page_path}` | ページ一覧表示ページ
+
+### 2.5 front matter
+
+- ページソース先頭には YAML front matter を記述できること
+- front matter では少なくとも `wiki` 、 `mcp` 、 `custom_meta` の各 top-level 名前空間を扱えること
+- `wiki` および `mcp` は LuWiki が意味解釈する予約名前空間として扱うこと
+- `custom_meta` はユーザ定義メタデータ用の予約名前空間として扱うこと
+- `custom_meta` の値は object 限定とし、配下は文字列キーを持つ map として扱うこと
+- `custom_meta` 配下の個別キーや値意味は LuWiki 本体では解釈せず、保存・再読込・検索可能な任意メタデータ領域として扱うこと
 
 ---
 
@@ -86,6 +95,14 @@
 - ドラフトに対する `GET /api/pages/{page_id}/source` は 404 を返す
 - ドラフトに対する `PUT /api/pages/{page_id}/source` が成功した時点で通常ページとして登録され、リビジョン番号は1となる
 - ドラフトはロック解除やロック期限切れにより削除される
+
+### 3.5 front matter 編集体験
+
+- ブラウザUIの編集画面では、front matter 範囲を Markdown 本文とは独立した編集コンテキストとして扱えること
+- front matter 範囲のインデント幅は 2 文字とすること
+- Markdown 本文側のインデント幅は従来どおり 4 文字を維持すること
+- front matter 範囲で改行した場合は、YAML として自然な自動インデントを行うこと
+- front matter 範囲専用のインデントおよび改行時挙動は、本文側の Markdown 編集体験を壊さないこと
 
 ---
 
@@ -244,7 +261,9 @@
 - 本システムはローカル利用を前提とするが、
 - 操作主体を識別するためにユーザ認証をサポートする
 - 認証の主目的は履歴の帰属とする
-- ただし API および MCP では、Bearer スコープおよび path prefix 制約によるアクセス制御も行う
+- ただし API および MCP では、Bearer スコープによるアクセス制御を行う
+- 操作対象 path を認可単位とする API および MCP 操作では、Bearer の path prefix 制約によるアクセス制御も行う
+- path を認可単位としない MCP primitive は、個別の要求仕様で path prefix 制約の適用有無を定義する
 
 ### 11.2 ユーザ識別
 
@@ -291,7 +310,8 @@
   - 失効状態
 - Bearerトークンは、対象ユーザが削除された時点で利用不能として扱う
 - Bearerトークンには、正規化済みの絶対パスによる path prefix 制約を複数設定できる
-- path prefix 制約が設定されている場合、Bearer認証を受け付ける各インタフェースは、要求スコープに加えて操作対象 path が許可された prefix のいずれかに一致することを要求する
+- path prefix 制約が設定されている場合、Bearer認証を受け付け、操作対象 path を認可単位とする各インタフェースは、要求スコープに加えて操作対象 path が許可された prefix のいずれかに一致することを要求する
+- path を認可単位としない操作に対する path prefix 制約の適用有無は、各操作の要求仕様で定義する
 - path prefix 制約における `/` は全ページへのアクセスを許可する指定として扱う
 - path prefix 制約の判定は、正規化済みパス同士に対して、パス境界を考慮した prefix 判定で行う
 - Bearerトークンの path prefix 制約に違反した操作は拒否する
@@ -337,10 +357,11 @@
 - AIアシスタントから利用可能な MCP サーバ機能を提供する
 - MCP 機能は、`run` コマンドで明示的に有効化された場合にのみ公開する
 - MCP におけるページ操作は path ベースで行い、page_id は公開しない
+- ページ操作以外の MCP primitive は、個別の要求仕様で識別子および認可単位を定義する
 - MCP におけるページ作成・更新系操作は、クライアントが確定済みの入力内容を要求時点で提示することを前提とする
 - MCP におけるページ作成・更新系操作は、ブラウザUI向けのドラフト作成や段階的編集手順を前提とせず、単一要求・単一トランザクションで完結できること
 - MCP は Bearer 認証を前提とし、Basic 認証は前提としない
-- MCP の認可は Bearer スコープおよび path prefix 制約の両方に従う
+- MCP の認可は Bearer スコープに従い、path ベース操作では path prefix 制約にも従う
 - MCP では既存 REST API を内部的に呼び出す構成ではなく、共通処理を利用する専用ハンドラ層を設ける
 
 ### 12.2 初期実装で提供する機能
@@ -354,16 +375,25 @@
   - ページ追記（append）
   - ページリネーム
   - セクション取得
+  - MCP 標準の `prompts/list`
+  - MCP 標準の `prompts/get`
+  - MCP 標準の `resources/list`
+  - MCP 標準の `resources/read`
+- prompts 操作は LuWiki 独自 tool の `tools/call` ではなく、MCP 標準の prompts 操作として提供する
+- resources 操作は LuWiki 独自 tool の `tools/call` ではなく、MCP 標準の resources 操作として提供する
 - 初期実装の MCP では、削除済みページ参照、restore、アセット操作、ロック操作は提供しない
 
 ### 12.3 path ベース操作
 
+- 本節の path prefix 制約はページを対象とする path ベース操作、およびページ由来 MCP resources へ適用する
+- 本節の path prefix 制約は MCP prompts および固定組み込み MCP resources には適用しない
 - MCP の read 系操作は対象ページの現在 path を基準に認可判定する
 - MCP の create は新規作成要求の target path を基準に認可判定する
 - MCP の update は対象ページの現在 path を基準に認可判定する
 - MCP の append は対象ページの現在 path を基準に認可判定する
 - MCP の rename は移動元 path と移動先 path の両方が許可範囲内である場合にのみ許可する
 - MCP の検索・一覧で prefix 指定がある場合は、結果の後段フィルタだけでなく要求 prefix 自体も認可判定対象とする
+- MCP resources では、ページ由来 resource の current path が path prefix 範囲内にある場合だけ一覧・取得対象とする
 - rename 後の旧 path は自動追跡せず、旧 path 指定時は見つからないものとして扱う
 
 ### 12.4 append の扱い
@@ -380,6 +410,74 @@
 - MCP では restore を提供しない
 - MCP の rename は path jail 内同士の場合のみ許可する
 - jail 内から jail 外、または jail 外から jail 内への rename は許可しない
+
+### 12.6 MCP prompts
+
+- ページの front matter に `mcp.primitive = prompt` が指定されている場合、そのページを MCP prompt として公開する
+- prompt はページ path や page_id ではなく、front matter の `mcp.name` で識別する
+- `mcp.name` は prompt primitive 内で一意であることを要求する
+- 同一 primitive 内で別ページが使用中の名前を指定した create、update、amend、append、rollback、import は、ページ正本の commit 前に拒否する
+- soft delete 済みページの prompt 名は予約状態を維持し、hard delete 時に解放する
+- rename では prompt 名および prompt 公開指定を変更しない
+- prompt の名前、説明、system 情報、引数定義は front matter から取得する
+- prompt 本文は、front matter を除去した最新ページ本文を使用する
+- 初期版の prompt は、front matter とページ本文だけで定義が完結すること
+- `prompts/list` で公開可能な prompt の一覧情報を取得できること
+- `prompts/get` で要求引数を検証・展開し、prompt message を取得できること
+- `prompts/list` および `prompts/get` は Bearer の `read` scope を要求する
+- `ReadOnly` 属性を持つユーザでも、Bearer の `read` scope があれば prompts 操作を利用できること
+- prompts 操作にはページ用 path prefix 制約を適用しない
+- path prefix の範囲外にあるページ由来の prompt も、`read` scope を満たす場合は名前で一覧・取得できること
+- prompt の公開結果にはページ path および page_id を含めない
+- prompt は最新リビジョンだけを公開対象とする
+- draft、soft delete 済み、hard delete 済みのページは prompts の公開対象としない
+- undelete 後の prompt ページは、最新状態が公開条件を満たす場合に再び公開対象とする
+- prompt の正本は、最新ページソース内の front matter と本文とする
+- prompt 一覧情報は、最新ページソースから再構成可能な派生データとして保持する
+- ページ正本の保存成功後に prompt 一覧用派生データを同期する
+- prompt 一覧用派生データの同期に失敗した場合、保存済みのページ正本を巻き戻さず、同期未完了を呼び出し元へ通知する
+- prompt 一覧用派生データおよび prompt 名の逆引き情報を、最新ページソースから再構成できること
+- prompt 名の逆引き情報が対応済みの構築状態であることを確認できる場合だけ、MCP prompts capability を公開する
+- M3 初期版では `prompts.listChanged` を宣言せず、prompt 集合の変更通知を送信しない
+- クライアントは prompt 集合の最新状態が必要な場合、`prompts/list` を再取得する
+
+### 12.7 MCP resources
+
+- ページの front matter に `mcp.primitive = resource` が指定されている場合、そのページを MCP resource として公開する
+- ページ由来 resource は、明示された `mcp.resource_id` または current path から導出した resource ID で識別する
+- current path 由来 resource ID は先頭の `/` を除いた path 文字列とする
+- `mcp.resource_id` はページ由来 resource の URI 空間で一意であることを要求する
+- 固定組み込み resource の URI は `luwiki://<authority>/builtin/<id>` とする
+- ページ由来 resource の URI は `luwiki://<authority>/page/<resource_id>` とする
+- `builtin/` で始まる resource ID は固定組み込み resource 用に予約し、ページ由来 resource では使用できない
+- 固定組み込み resource とページ由来 resource は `resources/list` の同じ一覧結果へ合流する
+- 初期版では front matter 詳細仕様と MCP prompts 仕様を固定組み込み resource として公開する
+- resource の名前、説明、MIME type は front matter から取得する
+- MIME type が front matter に未指定の場合は `text/markdown` を既定値とする
+- ページ由来 resource の本文は、front matter を除去した最新ページソースの raw Markdown 本文を使用する
+- `resources/list` で公開可能な resource の一覧情報を取得できること
+- `resources/read` で指定 URI の resource 本文を取得できること
+- `resources/list` および `resources/read` は Bearer の `read` scope を要求する
+- `ReadOnly` 属性を持つユーザでも、Bearer の `read` scope があれば resources 操作を利用できること
+- ページ由来 resources にはページ用 path prefix 制約を適用する
+- path prefix 範囲外のページ由来 resource は、一覧では除外し、取得では見つからないものとして扱う
+- resource の公開結果にはページ path および page_id を含めない
+- resource は最新リビジョンだけを公開対象とする
+- draft、soft delete 済み、hard delete 済みのページは resources の公開対象としない
+- undelete 後の resource ページは、最新状態が公開条件を満たす場合に再び公開対象とする
+- URI 形式不正は入力不正として扱い、権限外、存在しない URI、削除済み、draft、hard delete 済みの違いは外部エラーから判別可能にしない
+- resource URI 索引と最新ソースの不整合、本文取得失敗、front matter 再検証失敗は内部不整合として扱う
+- resource の正本は、最新ページソース内の front matter と本文とする
+- resource 一覧情報および URI 逆引き情報は、最新ページソースから再構成可能な派生データとして保持する
+- ページ正本の保存成功後に resource 一覧用派生データを同期する
+- resource 一覧用派生データの同期に失敗した場合、保存済みのページ正本を巻き戻さず、同期未完了を呼び出し元へ通知する
+- create、update、amend、append、rollback、import は、resource 候補と URI 逆引き情報へ追従する
+- rename は明示 `mcp.resource_id` の URI を維持し、path 由来 resource ID の URI を移動後 path へ追従させる
+- soft delete 済みページの resource URI は予約状態を維持し、hard delete 時に解放する
+- resource 一覧用派生データおよび resource URI 逆引き情報を、最新ページソースから再構成できること
+- resource URI 逆引き情報が対応済みの構築状態であることを確認できる場合だけ、MCP resources capability を公開する
+- M4 初期版では `resources.listChanged` を宣言せず、resource 集合の変更通知を送信しない
+- クライアントは resource 集合の最新状態が必要な場合、`resources/list` を再取得する
 
 ---
 ## 13. 監査ログ
@@ -428,6 +526,13 @@
   - 記事中の見出し
   - 記事の本文
   - コードブロック
+  - front matter
+- front matter は本文とは独立した検索対象として扱うこと
+- 本文検索対象には front matter を含めないこと
+- front matter 内にのみ存在する語句は `front_matter` 指定時に検索できること
+- `custom_meta` 内にのみ存在する語句も `front_matter` 指定時の検索対象に含めること
+- REST API 、 CLI 、ブラウザUI の検索画面では、 `headings` 、 `body` 、 `code` 、 `front_matter` を一貫した検索対象名として扱えること
+- REST API 、 CLI 、ブラウザUI の既定検索対象は `body` とすること
 - 過去リビジョン及びソフトデリート状態の記事を含めて検索対象とする
 
 ### 14.3 検索結果
@@ -478,9 +583,14 @@
 
 ## 16. テンプレート機能
 
-- ページ編集時に、ページのテンプレートを初期ソースとして用いる機能を実装する。
-- テンプレートはシステム設定指定されたWiki上のパスの子ページ(直下の1階層のみ)を用いる
-- システム設定でテンプレート格納パスが指定されない場合はテンプレート機能自体を無効化する
+- ページ編集時に、ページのテンプレートを初期ソースとして用いる機能を提供する
+- 通常運用でのテンプレート候補の正本は、`wiki.template` を持つページと、保存後に back end が保持するテンプレート候補テーブルとする
+- `wiki.template` はテンプレートページを識別する front matter の予約名前空間とし、少なくとも `name`、`description`、`macro_expand` を扱えること
+- `wiki.template.name` はテンプレート候補の表示名として用い、`description` は補助説明として、`macro_expand` はテンプレート適用時の展開挙動フラグとして扱うこと
+- 既存の `template_root` は legacy な再構成入力源としてのみ扱い、通常運用の候補判定条件には用いないこと
+- `template_root` が未設定でもテンプレート機能自体は無効化しないこと
+- テンプレート候補が存在しない場合は、編集画面では空状態として扱えること
+- `template_root` 由来の候補と `wiki.template` 由来の候補が重複する場合は、`wiki.template` 由来の候補を正とすること
 
 ---
 

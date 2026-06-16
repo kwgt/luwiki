@@ -10,6 +10,8 @@
 
 use serde::Serialize;
 
+use crate::fts::FtsSearchTarget;
+
 use super::service::{
     AppendServiceResult,
     EditPageRequest as ServiceEditPageRequest,
@@ -172,12 +174,506 @@ pub(crate) struct ListPagesRequest {
 }
 
 ///
+/// MCP prompt一覧用の引数情報
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PromptListArgument {
+    /// 引数名
+    name: String,
+
+    /// 引数説明
+    description: String,
+
+    /// 必須可否
+    required: Option<bool>,
+}
+
+impl PromptListArgument {
+    ///
+    /// prompt一覧用引数情報を生成する
+    ///
+    /// # 引数
+    /// * `name` - 引数名
+    /// * `description` - 引数説明
+    /// * `required` - 必須可否
+    ///
+    /// # 戻り値
+    /// prompt一覧用引数情報を返す。
+    ///
+    pub(crate) fn new(
+        name: String,
+        description: String,
+        required: Option<bool>,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            required,
+        }
+    }
+
+    ///
+    /// 引数名を返す
+    ///
+    /// # 戻り値
+    /// 引数名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// 引数説明を返す
+    ///
+    /// # 戻り値
+    /// 引数説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// 必須可否を返す
+    ///
+    /// # 戻り値
+    /// 必須可否を返す。
+    ///
+    pub(crate) fn required(&self) -> Option<bool> {
+        self.required
+    }
+}
+
+///
+/// MCP prompt一覧項目
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PromptListItem {
+    /// prompt名
+    name: String,
+
+    /// prompt説明
+    description: String,
+
+    /// prompt引数
+    arguments: Vec<PromptListArgument>,
+}
+
+impl PromptListItem {
+    ///
+    /// prompt一覧項目を生成する
+    ///
+    /// # 引数
+    /// * `name` - prompt名
+    /// * `description` - prompt説明
+    /// * `arguments` - prompt引数
+    ///
+    /// # 戻り値
+    /// prompt一覧項目を返す。
+    ///
+    pub(crate) fn new(
+        name: String,
+        description: String,
+        arguments: Vec<PromptListArgument>,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            arguments,
+        }
+    }
+
+    ///
+    /// prompt名を返す
+    ///
+    /// # 戻り値
+    /// prompt名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// prompt説明を返す
+    ///
+    /// # 戻り値
+    /// prompt説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// prompt引数を返す
+    ///
+    /// # 戻り値
+    /// 定義順のprompt引数を返す。
+    ///
+    pub(crate) fn arguments(&self) -> &[PromptListArgument] {
+        &self.arguments
+    }
+}
+
+///
+/// MCP prompt一覧サービス結果
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ListPromptsServiceResult {
+    /// prompt一覧
+    items: Vec<PromptListItem>,
+
+    /// 次回cursor
+    next_cursor: Option<String>,
+}
+
+impl ListPromptsServiceResult {
+    ///
+    /// prompt一覧サービス結果を生成する
+    ///
+    /// # 引数
+    /// * `items` - prompt一覧
+    /// * `next_cursor` - 次回cursor
+    ///
+    /// # 戻り値
+    /// prompt一覧サービス結果を返す。
+    ///
+    pub(crate) fn new(
+        items: Vec<PromptListItem>,
+        next_cursor: Option<String>,
+    ) -> Self {
+        Self {
+            items,
+            next_cursor,
+        }
+    }
+
+    ///
+    /// prompt一覧を返す
+    ///
+    /// # 戻り値
+    /// prompt一覧を返す。
+    ///
+    pub(crate) fn items(&self) -> &[PromptListItem] {
+        &self.items
+    }
+
+    ///
+    /// 次回cursorを返す
+    ///
+    /// # 戻り値
+    /// 次回cursorが存在する場合はその値を返す。
+    ///
+    pub(crate) fn next_cursor(&self) -> Option<&str> {
+        self.next_cursor.as_deref()
+    }
+}
+
+///
+/// MCP resource一覧項目
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceListItem {
+    /// resource URI
+    uri: String,
+
+    /// resource 名
+    name: String,
+
+    /// resource 説明
+    description: String,
+
+    /// MIME type
+    mime_type: String,
+}
+
+impl ResourceListItem {
+    ///
+    /// resource一覧項目を生成する
+    ///
+    /// # 引数
+    /// * `uri` - resource URI
+    /// * `name` - resource名
+    /// * `description` - resource説明
+    /// * `mime_type` - MIME type
+    ///
+    /// # 戻り値
+    /// resource一覧項目を返す。
+    ///
+    pub(crate) fn new(
+        uri: String,
+        name: String,
+        description: String,
+        mime_type: String,
+    ) -> Self {
+        Self {
+            uri,
+            name,
+            description,
+            mime_type,
+        }
+    }
+
+    ///
+    /// resource URIを返す
+    ///
+    /// # 戻り値
+    /// resource URIを返す。
+    ///
+    pub(crate) fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    ///
+    /// resource名を返す
+    ///
+    /// # 戻り値
+    /// resource名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// resource説明を返す
+    ///
+    /// # 戻り値
+    /// resource説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// MIME typeを返す
+    ///
+    /// # 戻り値
+    /// MIME typeを返す。
+    ///
+    pub(crate) fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+}
+
+///
+/// MCP resource一覧サービス結果
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ListResourcesServiceResult {
+    /// resource一覧
+    items: Vec<ResourceListItem>,
+
+    /// 次回cursor
+    next_cursor: Option<String>,
+}
+
+impl ListResourcesServiceResult {
+    ///
+    /// resource一覧サービス結果を生成する
+    ///
+    /// # 引数
+    /// * `items` - resource一覧
+    /// * `next_cursor` - 次回cursor
+    ///
+    /// # 戻り値
+    /// resource一覧サービス結果を返す。
+    ///
+    pub(crate) fn new(
+        items: Vec<ResourceListItem>,
+        next_cursor: Option<String>,
+    ) -> Self {
+        Self {
+            items,
+            next_cursor,
+        }
+    }
+
+    ///
+    /// resource一覧を返す
+    ///
+    /// # 戻り値
+    /// resource一覧を返す。
+    ///
+    pub(crate) fn items(&self) -> &[ResourceListItem] {
+        &self.items
+    }
+
+    ///
+    /// 次回cursorを返す
+    ///
+    /// # 戻り値
+    /// 次回cursorが存在する場合はその値を返す。
+    ///
+    pub(crate) fn next_cursor(&self) -> Option<&str> {
+        self.next_cursor.as_deref()
+    }
+}
+
+///
+/// MCP resource取得サービス結果
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReadResourceServiceResult {
+    /// resource URI
+    uri: String,
+
+    /// MIME type
+    mime_type: String,
+
+    /// resource本文
+    text: String,
+
+    /// 取得した最新revision
+    revision: Option<u64>,
+}
+
+impl ReadResourceServiceResult {
+    ///
+    /// resource取得サービス結果を生成する
+    ///
+    /// # 引数
+    /// * `uri` - resource URI
+    /// * `mime_type` - MIME type
+    /// * `text` - resource本文
+    /// * `revision` - 取得した最新revision
+    ///
+    /// # 戻り値
+    /// resource取得サービス結果を返す。
+    ///
+    pub(crate) fn new(
+        uri: String,
+        mime_type: String,
+        text: String,
+        revision: Option<u64>,
+    ) -> Self {
+        Self {
+            uri,
+            mime_type,
+            text,
+            revision,
+        }
+    }
+
+    ///
+    /// resource URIを返す
+    ///
+    /// # 戻り値
+    /// resource URIを返す。
+    ///
+    pub(crate) fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    ///
+    /// MIME typeを返す
+    ///
+    /// # 戻り値
+    /// MIME typeを返す。
+    ///
+    pub(crate) fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+
+    ///
+    /// resource本文を返す
+    ///
+    /// # 戻り値
+    /// resource本文を返す。
+    ///
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    ///
+    /// 取得した最新revisionを返す
+    ///
+    /// # 戻り値
+    /// ページ由来resourceの場合は最新revisionを返す。
+    ///
+    pub(crate) fn revision(&self) -> Option<u64> {
+        self.revision
+    }
+}
+
+///
+/// MCP prompt取得サービス結果
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GetPromptServiceResult {
+    /// prompt説明
+    description: String,
+
+    /// 展開済みmessage本文
+    message: String,
+
+    /// 取得した最新revision
+    revision: u64,
+}
+
+impl GetPromptServiceResult {
+    ///
+    /// prompt取得サービス結果を生成する
+    ///
+    /// # 引数
+    /// * `description` - prompt説明
+    /// * `message` - 展開済みmessage本文
+    /// * `revision` - 取得した最新revision
+    ///
+    /// # 戻り値
+    /// prompt取得サービス結果を返す。
+    ///
+    pub(crate) fn new(
+        description: String,
+        message: String,
+        revision: u64,
+    ) -> Self {
+        Self {
+            description,
+            message,
+            revision,
+        }
+    }
+
+    ///
+    /// prompt説明を返す
+    ///
+    /// # 戻り値
+    /// prompt説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// 展開済みmessage本文を返す
+    ///
+    /// # 戻り値
+    /// 展開済みmessage本文を返す。
+    ///
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    ///
+    /// 取得した最新revisionを返す
+    ///
+    /// # 戻り値
+    /// 取得した最新revisionを返す。
+    ///
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+///
 /// `search_pages` 入力
 ///
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SearchPagesRequest {
     /// 全文検索式
     query: String,
+
+    /// 検索対象
+    targets: Vec<FtsSearchTarget>,
 
     /// 検索対象 prefix
     prefix: Option<String>,
@@ -750,11 +1246,13 @@ impl SearchPagesRequest {
     ///
     pub(crate) fn new(
         query: String,
+        targets: Vec<FtsSearchTarget>,
         prefix: Option<String>,
         limit: Option<usize>,
     ) -> Self {
         Self {
             query,
+            targets,
             prefix,
             limit,
         }
@@ -768,6 +1266,16 @@ impl SearchPagesRequest {
     ///
     pub(crate) fn query(&self) -> &str {
         &self.query
+    }
+
+    ///
+    /// 検索対象一覧を返す
+    ///
+    /// # 戻り値
+    /// 検索対象一覧を返す。
+    ///
+    pub(crate) fn targets(&self) -> &[FtsSearchTarget] {
+        &self.targets
     }
 
     ///

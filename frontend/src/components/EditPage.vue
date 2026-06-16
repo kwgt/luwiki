@@ -13,7 +13,7 @@ import {
   extractToc,
   normalizeWikiPath,
 } from '../lib/pageCommon';
-import { stripLeadingTitleHeading } from '../lib/pageContent';
+import { stripFrontMatter, stripLeadingTitleHeading } from '../lib/pageContent';
 import { expandRenderMacros } from '../lib/macroEngine';
 import { renderMermaidBlocks } from '../lib/mermaidRenderer';
 import {
@@ -50,6 +50,7 @@ const {
   restoreInProgress,
   restoreRecursive,
   templateItems,
+  templateDisplayItems,
   templateModalOpen,
   templateLoading,
   templateApplyLoading,
@@ -57,6 +58,7 @@ const {
   templateError,
   canApplyTemplate,
   selectedTemplateId,
+  selectedTemplateItem,
   assetDetails,
   assetMetaDetails,
   assetDetailsLoading,
@@ -359,11 +361,12 @@ function resolveFallbackTitle(): string {
 
 async function updateDerivedFromText(text: string): Promise<void> {
   const path = pagePath.value || resolveEditPath();
-  editorTitle.value = extractTitle(text, path) || resolveFallbackTitle();
-  tocItems.value = extractToc(text);
+  const sourceBody = stripFrontMatter(text);
+  editorTitle.value = extractTitle(sourceBody, path) || resolveFallbackTitle();
+  tocItems.value = extractToc(sourceBody);
   const renderer = ensureMarkdownRenderer();
   const seq = ++derivedRenderSeq;
-  const expanded = await expandRenderMacros(text, {
+  const expanded = await expandRenderMacros(sourceBody, {
     pagePath: path,
     pageId: pageId.value,
   });
@@ -787,6 +790,7 @@ function buildAssetDownloadUrl(fileName: string): string {
               :macro-page-id="pageId"
               :macro-user-id="macroUserId"
               :macro-user-display-name="macroUserDisplayName"
+              :fold-front-matter-by-default="true"
               :editor-style="editorStyle"
               class="h-full w-full"
             />
@@ -997,7 +1001,7 @@ function buildAssetDownloadUrl(fileName: string): string {
             </div>
             <select v-model="selectedTemplateId" class="select select-bordered">
               <option
-                v-for="item in templateItems"
+                v-for="item in templateDisplayItems"
                 :key="item.page_id"
                 :value="item.page_id"
               >
@@ -1005,6 +1009,20 @@ function buildAssetDownloadUrl(fileName: string): string {
               </option>
             </select>
           </label>
+          <div class="rounded-box border border-base-300 bg-base-200/60 p-4">
+            <div class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              説明
+            </div>
+            <p
+              v-if="selectedTemplateItem?.description"
+              class="mt-2 whitespace-pre-wrap text-sm text-base-content/80"
+            >
+              {{ selectedTemplateItem.description }}
+            </p>
+            <p v-else class="mt-2 text-sm text-base-content/60">
+              このテンプレートに説明はありません。
+            </p>
+          </div>
         </div>
         <div v-if="templateError" class="alert alert-error">
           {{ templateError }}
@@ -1117,7 +1135,7 @@ function buildAssetDownloadUrl(fileName: string): string {
 
     <div v-if="errorMessage" class="modal modal-open">
       <div class="modal-box space-y-4">
-        <h3 class="text-lg font-bold">読み込みエラー</h3>
+        <h3 class="text-lg font-bold">エラー</h3>
         <p class="text-sm text-base-content/70">{{ errorMessage }}</p>
         <div class="modal-action">
           <button class="btn btn-primary" type="button" @click="dismissError">

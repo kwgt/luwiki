@@ -8,9 +8,11 @@ import {
   fetchPageMeta,
   fetchPageSource,
   fetchTemplatePages,
+  isFrontMatterErrorResponse,
   restorePagePath,
   unlockPageLock,
   updatePageSource,
+  type FrontMatterErrorResponse,
   type PageMetaResponse,
   type TemplatePageItem,
 } from '../api/pages';
@@ -29,6 +31,13 @@ import {
   resolveUploadMimeType,
   toErrorMessage,
 } from '../lib/pageCommon';
+import { resolveTemplateImmediateMacros } from '../lib/macroEngine';
+import { stripFrontMatter } from '../lib/pageContent';
+import {
+  resolveSelectedTemplateId,
+  sortTemplateItems,
+} from '../lib/templateSelection';
+import { resolveFrontMatterErrorMessage } from '../lib/frontMatterErrorMessage';
 import { buildLockTokenKey, ensureTabIdReady } from '../lib/lockToken';
 import { buildAmendRefreshKey } from '../lib/amendRefresh';
 
@@ -214,6 +223,9 @@ export function usePageEdit() {
       && !interactionDisabled.value
       && source.value.trim().length === 0,
   );
+  const templateDisplayItems = computed(() =>
+    sortTemplateItems(templateItems.value),
+  );
   const selectedTemplateItem = computed(() =>
     templateItems.value.find((item) => item.page_id === selectedTemplateId.value)
       ?? null,
@@ -281,6 +293,17 @@ export function usePageEdit() {
     applyAutoAmendState();
   }
 
+  function buildTemplateAppliedSource(
+    templateSource: string,
+    templateItem: TemplatePageItem,
+  ): string {
+    const body = stripFrontMatter(templateSource);
+    return resolveTemplateImmediateMacros(body, {
+      pagePath: pagePath.value,
+      pageId: pageId.value || undefined,
+    }, templateItem.macro_expand === true);
+  }
+
   async function loadTemplatePages(): Promise<void> {
     if (templateLoading.value) {
       return;
@@ -292,14 +315,16 @@ export function usePageEdit() {
       templateItems.value = items;
       templateFeatureEnabled.value = true;
       templateChecked.value = true;
-      if (!selectedTemplateId.value && items.length > 0) {
-        selectedTemplateId.value = items[0].page_id;
-      }
+      selectedTemplateId.value = resolveSelectedTemplateId(
+        selectedTemplateId.value,
+        items,
+      );
     } catch (err: unknown) {
       if (isRequestError(err) && err.status === 404) {
         templateItems.value = [];
         templateFeatureEnabled.value = false;
         templateChecked.value = true;
+        selectedTemplateId.value = '';
         return;
       }
       templateError.value = toErrorMessage(err);
@@ -321,11 +346,7 @@ export function usePageEdit() {
     }
     templateError.value = '';
     templateModalOpen.value = true;
-    if (!templateChecked.value) {
-      void loadTemplatePages();
-    } else if (!selectedTemplateId.value && templateItems.value.length > 0) {
-      selectedTemplateId.value = templateItems.value[0].page_id;
-    }
+    void loadTemplatePages();
   }
 
   function closeTemplateModal(): void {
@@ -345,8 +366,19 @@ export function usePageEdit() {
     templateApplyLoading.value = true;
     templateError.value = '';
     try {
-      const markdown = await fetchPageSource(selectedTemplateItem.value.page_id);
-      applyTemplateSource(markdown);
+      const latestTemplateItems = await fetchTemplatePages();
+      templateItems.value = latestTemplateItems;
+      const latestTemplateItem = latestTemplateItems.find(
+        (item) => item.page_id === selectedTemplateId.value,
+      );
+      if (!latestTemplateItem) {
+        throw new Error('selected template not found');
+      }
+
+      const markdown = await fetchPageSource(latestTemplateItem.page_id);
+      applyTemplateSource(
+        buildTemplateAppliedSource(markdown, latestTemplateItem),
+      );
       templateModalOpen.value = false;
     } catch (err: unknown) {
       templateError.value = toErrorMessage(err);
@@ -872,6 +904,16 @@ export function usePageEdit() {
   }
 
   function reportError(err: unknown): void {
+    if (
+      isRequestError(err)
+      && 'data' in err
+      && isFrontMatterErrorResponse((err as { data?: unknown }).data)
+    ) {
+      errorMessage.value = resolveFrontMatterErrorMessage(
+        (err as { data: FrontMatterErrorResponse }).data.detail,
+      );
+      return;
+    }
     errorMessage.value = toErrorMessage(err);
   }
 
@@ -945,6 +987,7 @@ export function usePageEdit() {
     restoreInProgress,
     restoreRecursive,
     templateItems,
+    templateDisplayItems,
     templateModalOpen,
     templateLoading,
     templateApplyLoading,
@@ -952,6 +995,7 @@ export function usePageEdit() {
     templateError,
     canApplyTemplate,
     selectedTemplateId,
+    selectedTemplateItem,
     assetDetails,
     assetMetaDetails,
     assetDetailsLoading,

@@ -21,7 +21,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 | `-d`, `--db-path FILE` | データベースファイルのパスを指定する | $XDG_DATA_HOME/luwiki/database.redb
 | `-I`, `--fts-index DIR` | 全文検索インデックスの格納パスを指定する | $XDG_DATA_HOME/luwiki/index
 | `-a`, `--assets-path` | アセットデータ格納パスを指定する | $XDG_DATA_HOME/luwiki/assets
-| `-t`, `--template-root` | テンプレートページのパスを指定する | 
+| `-t`, `--template-root` | legacy なテンプレート再構成入力元のパスを指定する | 
 | `-T`, `--wiki-title` | Wiki名を指定する | LUWIKI
 | `-S`, `--asset-limit-size` | アップロード可能なアセットのサイズの上限 | 10Miバイト 
 |       `--audit-log-dir DIR` | 監査ログ出力ディレクトリを指定する | $XDG_DATA_HOME/luwiki/audit
@@ -43,7 +43,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 
 `--log-output`にはログの出力先を指定できるが、ファイルのパスを指定した場合は単一ファイルへの出力となり、ディレクトリパスを指定した場合はログローテション付きで10本のファイルに自動切り替えを行いながら記録を行う(一本あたりのサイズ制限は2Mバイト)。
 
-`--template-root`にはテンプレートとして使用するページが格納されるWiki上のパスを指定する。このオプションが指定された場合はページ編集時に、このオプションで指定されたページの子ページをテンプレートとして使用することができる(`--template-root`未指定時はテンプレート機能自体が無効化される)。
+`--template-root`には legacy なテンプレート再構成入力元として扱うWiki上のパスを指定する。通常運用でのテンプレート候補判定条件には用いず、`derived rebuild --target templates`または`derived rebuild --target all`実行時にlegacy候補を取り込むための入力源として扱う。`all`ではtemplates側だけに適用し、prompts側では使用しない。未指定時もテンプレート機能自体は無効化しない。
 
 `--asset-limit-size`にはアップロード可能なアセットのサイズの上限を指定するが、"10K", "10M"などの補助単位を指定可能とする(いずれも2進接頭辞のKi,Miを意味する)。また最大は100Miまで指定可能。
 
@@ -58,6 +58,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 - [run](#run) : サーバーの起動
 - [commands](#commands) : サブコマンドの一覧表示
 - [help-all](#help-all) : 全サブコマンドのヘルプ表示
+- [derived](#derived) : front matter 派生データの管理
 - user : ユーザ管理
     - [add](#subcmd-user-add) : ユーザの追加
     - [delete](#subcmd-user-delete) : ユーザの削除
@@ -101,6 +102,7 @@ luwiki [OPTIONS] <SUB-COMMAND> [COMMAND-OPTIONS]
 - run : `r`
 - commands : (なし)
 - help-all : (なし)
+- derived : `d`
 - user : `u`
     - add : `a`, `add`
     - delete : `d`, `del`
@@ -203,6 +205,82 @@ luwiki [OPTIONS] help-all
 ヘルプ本文の各行には、行頭に空白2文字を付与して表示する。
 
 出力にはルートコマンド(`luwiki`)を含める。
+
+<a id="derived"></a>
+### derivedコマンド
+front matter 派生データの管理
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] derived <SUB-COMMAND> [COMMAND-OPTIONS]
+```
+
+#### サブコマンド
+
+- [rebuild](#derived-rebuild) : front matter 派生データの再構成
+
+<a id="derived-rebuild"></a>
+### derived rebuildコマンド
+front matter 派生データの再構成
+
+#### コマンドライン
+```sh
+luwiki [OPTIONS] derived rebuild --target <TARGET>
+```
+
+#### オプション
+
+| オプション | 意味 | 指定可能な値 | デフォルト値
+|:--|:--|:--|:--
+| `--target` | 再構成対象 | `templates`, `prompts`, `resources`, `all` | なし（指定必須）
+
+#### 概要
+front matter 派生データを再構成する。
+
+各targetの処理内容は以下のとおり。
+
+- `templates`
+  - テンプレート候補派生データを最新ページソースから再構成する
+  - `template_root`が指定されている場合は、legacy候補の入力源として使用する
+- `prompts`
+  - prompt候補派生データ、prompt用MCP primitive名前索引、
+    名前索引の構築状態を最新ページソースから再構成する
+  - `template_root`は使用しない
+- `resources`
+  - resource候補派生データ、resource URI逆引き索引、
+    URI索引の構築状態を最新ページソースから再構成する
+  - `template_root`は使用しない
+- `all`
+  - templates、prompts、resourcesを単一のredb write transactionで再構成する
+  - `template_root`はtemplates側のlegacy候補にだけ使用する
+  - Tantivyなどredb外の派生データは対象に含めない
+
+成功時は対象別の再構成件数を標準出力へ表示する。
+
+```text
+rebuilt template candidates: <件数>
+rebuilt prompt candidates: <件数>
+rebuilt resource candidates: <件数>
+```
+
+`templates`、`prompts`、`resources`を単独指定した場合は、対応する1行だけを表示する。
+`all`を指定した場合は、templates、prompts、resourcesの順で表示する。
+件数には再構成対象となるsoft delete済み候補を含めるが、draftおよび対象用途でない
+ページを含めない。
+
+再構成は、対象となる全ページの収集、front matter解析、latest source確認、
+prompt名重複検査、resource ID重複検査に成功した後で既存テーブルを置換する。
+同じページ正本状態に対する再実行は冪等とする。
+
+front matter解析失敗、latest source欠落、prompt名重複、resource ID重複、
+DB操作またはcommit失敗時は非ゼロ終了とする。
+`prompts`では候補、名前索引、構築状態を一括して維持する。
+`resources`では候補、URI逆引き索引、URI索引構築状態を一括して維持する。
+`all`ではいずれかの対象が失敗した場合に全対象をcommitしない。
+いずれの場合も既存派生データとページ正本を変更しない。
+
+再構成処理はMCP通知を送信しない。クライアントは必要に応じて
+`prompts/list`または`resources/list`を再取得する。
 
 <a id="user-add"></a>
 ### user addコマンド
@@ -739,6 +817,14 @@ luwiki [OPTIONS] fts rebuild
 #### 概要
 全文検索用インデックスの削除を行いインデックスの再構築を行う。
 
+#### 注記
+- 全文検索スキーマが更新された後に既存インデックスを継続利用する場合は、
+  本コマンドで再構築を行う
+- 例として、front matter 対応で `front_matter` 検索対象が追加された後に
+  旧インデックスを利用している環境では、
+  `fts rebuild` を実行して `front_matter` フィールドを含む
+  新しいインデックスへ作り直す必要がある
+
 <a id="merge-segment"></a>
 ### fts mergeコマンド
 インデックスセグメントの強制マージ
@@ -782,6 +868,12 @@ luwiki [OPTIONS] fts search [OPTIONS] <SEARCH-EXPRESSION>
   - headings : 見出し
   - body : 本文
   - code : コードブロック
+  - front_matter : front matter
+
+`front_matter` は本文とは独立した検索対象とする。
+`--target body` では front matter を検索対象に含めない。
+`--target front_matter` では `wiki` 、 `mcp` 、 `custom_meta` を含む
+front matter 全体を検索対象に含める。
 
 `--with-deleted`オプションを指定した場合は削除済みページを検索対象に含める。
 
@@ -1242,7 +1334,7 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
 | `db_path` | データベースファイルのパス | `--db-path` | `$XDG_DATA_HOME/luwiki/database.redb`
 | `assets_path` | アセットデータ格納ディレクトリのパス | `--assets-path` | `$XDG_DATA_HOME/luwiki/assets/`
 | `fts_index` | 全文検索インデックス格納ディレクトリのパス | `--fts-index` | `$XDG_DATA_HOME/luwiki/index/`
-| `template_root` | テンプレートページの格納パス(Wiki上のパス) | `--template-root` |
+| `template_root` | legacy なテンプレート再構成入力元のパス(Wiki上のパス) | `--template-root` |
 | `wiki_title` | Wiki名 | `--wiki-title` |
 | `wiki_icon` | Wikiアイコン画像ファイルのパス | `--wiki-icon` |
 | `asset_limit_size` | アップロード可能なアセットサイズの上限 | `--asset-limit-size` |
@@ -1375,3 +1467,4 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
   - headings : 見出し
   - body : 本文
   - code : コードブロック
+  - front_matter : front matter

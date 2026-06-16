@@ -137,6 +137,160 @@ fn search_target_code_and_combination() {
 }
 
 #[test]
+/// GET: front_matter 指定で front matter だけを検索できることを確認する。
+///
+/// # 注記
+/// - front matter にのみ含まれるトークンで確認する。
+/// - target 省略時は body 既定のままでヒットしないことも確認する。
+fn search_target_front_matter() {
+    /*
+     * テスト環境の準備
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    /*
+     * ページ作成
+     */
+    let token = format!("frontmattertoken{}", unique_suffix());
+    let body = format!(
+        "---\ncustom_meta:\n  project: {}\n---\nbody only\n",
+        token
+    );
+    let page_id = create_page(&client, &api_url, "/search-front-matter", &body);
+
+    /*
+     * 検索と検証
+     */
+    let results =
+        search_pages(&client, &api_url, &token, Some("front_matter"), None, None);
+    assert!(contains_page(&results, &page_id));
+
+    let results = search_pages(&client, &api_url, &token, None, None, None);
+    assert!(!contains_page(&results, &page_id));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// GET: front_matter 指定で front matter 専用フィールドを検索できることを確認する。
+///
+/// # 注記
+/// - `wiki` 名前空間にのみ含まれるトークンで確認する。
+fn search_target_front_matter_hits_builtin_namespace_field() {
+    /*
+     * テスト環境の準備
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    /*
+     * ページ作成
+     */
+    let token = format!("frontmatterwikitoken{}", unique_suffix());
+    let body = format!(
+        "---\nwiki:\n  tags:\n    - rust\nmcp:\n  primitive: resource\n  name: {}\n  description: spec\n---\nbody only\n",
+        token
+    );
+    let page_id = create_page(&client, &api_url, "/search-front-matter-builtin", &body);
+
+    /*
+     * 検索と検証
+     */
+    let results =
+        search_pages(&client, &api_url, &token, Some("front_matter"), None, None);
+    assert!(contains_page(&results, &page_id));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// GET: front matter 専用トークンは body 指定ではヒットしないことを確認する。
+///
+/// # 注記
+/// - token は front matter にのみ置く。
+fn search_target_body_excludes_front_matter_only_token() {
+    /*
+     * テスト環境の準備
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    /*
+     * ページ作成
+     */
+    let token = format!("frontmatterbodyexclude{}", unique_suffix());
+    let body = format!(
+        "---\ncustom_meta:\n  project: {}\n---\nbody only\n",
+        token
+    );
+    let page_id = create_page(&client, &api_url, "/search-front-matter-body-exclude", &body);
+
+    /*
+     * 検索と検証
+     */
+    let results = search_pages(&client, &api_url, &token, Some("body"), None, None);
+    assert!(!contains_page(&results, &page_id));
+
+    let results =
+        search_pages(&client, &api_url, &token, Some("front_matter"), None, None);
+    assert!(contains_page(&results, &page_id));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// GET: custom_meta 内にのみ存在する語句を front_matter 指定で検索できることを確認する。
+///
+/// # 注記
+/// - 本文と他の予約名前空間には同一トークンを含めない。
+fn search_target_front_matter_hits_custom_meta_only_token() {
+    /*
+     * テスト環境の準備
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    /*
+     * ページ作成
+     */
+    let token = format!("custommetatoken{}", unique_suffix());
+    let body = format!(
+        "---\nwiki:\n  tags:\n    - rust\ncustom_meta:\n  search_note: {}\n---\nbody only\n",
+        token
+    );
+    let page_id = create_page(&client, &api_url, "/search-front-matter-custom-meta", &body);
+
+    /*
+     * 検索と検証
+     */
+    let results =
+        search_pages(&client, &api_url, &token, Some("front_matter"), None, None);
+    assert!(contains_page(&results, &page_id));
+
+    let results = search_pages(&client, &api_url, &token, Some("body"), None, None);
+    assert!(!contains_page(&results, &page_id));
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 /// GET: headings,body 指定時に重複結果が1件になることを確認する。
 ///
 /// # 注記

@@ -13,11 +13,17 @@ use std::sync::{Arc, RwLock};
 use actix_web::http::{StatusCode, header};
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
+use serde_json::json;
 
 use super::super::resp_error_json;
 use crate::database::types::{BearerScope, LockToken, PageId};
 use crate::fts;
 use crate::http_server::app_state::AppState;
+use crate::markdown_source::front_matter::{
+    ExtractFrontMatterError,
+    FrontMatterError,
+    FrontMatterValidationError,
+};
 use crate::rest_api::AuthContext;
 use crate::rest_api::{
     build_etag,
@@ -37,6 +43,87 @@ struct GetSourceQuery {
 #[derive(Deserialize)]
 struct PutSourceQuery {
     amend: Option<String>,
+}
+
+///
+/// front matter エラーを REST API 向けレスポンスへ変換する
+///
+/// # 引数
+/// * `err` - front matter エラー
+/// * `source` - 検証対象ソース
+///
+/// # 戻り値
+/// 変換済みレスポンスを返す。
+///
+fn resp_front_matter_error(
+    err: &FrontMatterError,
+    source: &str,
+) -> HttpResponse {
+    match err {
+        FrontMatterError::Extract(ExtractFrontMatterError::ClosingDelimiterNotFound) => {
+            let line = source.lines().count().max(1);
+            let body = json!({
+                "error": "front matter invalid",
+                "kind": "front_matter",
+                "detail": {
+                    "type": "syntax",
+                    "line": line,
+                    "message": "front matter closing delimiter not found",
+                }
+            });
+
+            HttpResponse::BadRequest()
+                .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
+                .content_type("application/json")
+                .body(body.to_string())
+        }
+        FrontMatterError::Validate(FrontMatterValidationError::Syntax {
+            message,
+            line,
+            column,
+        }) => {
+            let mut detail = json!({
+                "type": "syntax",
+                "message": message,
+            });
+            if let Some(line) = line {
+                detail["line"] = json!(*line);
+            }
+            if let Some(column) = column {
+                detail["column"] = json!(*column);
+            }
+
+            let body = json!({
+                "error": "front matter invalid",
+                "kind": "front_matter",
+                "detail": detail,
+            });
+
+            HttpResponse::BadRequest()
+                .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
+                .content_type("application/json")
+                .body(body.to_string())
+        }
+        FrontMatterError::Validate(FrontMatterValidationError::Validation {
+            property_path,
+            message,
+        }) => {
+            let body = json!({
+                "error": "front matter invalid",
+                "kind": "front_matter",
+                "detail": {
+                    "type": "validation",
+                    "property_path": property_path,
+                    "message": message,
+                }
+            });
+
+            HttpResponse::BadRequest()
+                .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
+                .content_type("application/json")
+                .body(body.to_string())
+        }
+    }
 }
 
 ///
@@ -411,11 +498,20 @@ pub async fn put(
     /*
      * ページ更新
      */
+    let source_for_error = source.clone();
     let update_result =
         state.db().put_page(&page_id, &auth_user, source, amend);
     match update_result {
         Ok(()) => {}
         Err(err) => {
+            if let Some(front_matter_err) =
+                err.downcast_ref::<FrontMatterError>()
+            {
+                return Ok(resp_front_matter_error(
+                    front_matter_err,
+                    &source_for_error,
+                ));
+            }
             if let Some(crate::database::DbError::AmendForbidden) =
                 err.downcast_ref::<crate::database::DbError>()
             {

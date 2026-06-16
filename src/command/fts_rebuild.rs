@@ -16,11 +16,7 @@ use anyhow::Result;
 use super::CommandContext;
 use crate::cmd_args::Options;
 use crate::database::DatabaseManager;
-use crate::fts::{
-    extract_markdown_sections,
-    FtsDocument,
-    FtsIndexConfig,
-};
+use crate::fts::{build_document_from_source, FtsIndexConfig};
 
 ///
 /// "fts rebuild"コマンド実行コンテキスト
@@ -83,18 +79,14 @@ impl CommandContext for FtsRebuildCommandContext {
                 Some(value) => *value,
                 None => continue,
             };
-            let source = entry.source().source();
-            let sections = extract_markdown_sections(&source);
             let is_latest = entry.revision() == latest;
-            docs.push(FtsDocument::new(
+            docs.push(build_document_from_source(
                 entry.page_id(),
                 entry.revision(),
                 deleted,
                 is_latest,
-                sections.headings,
-                sections.body,
-                sections.code,
-            ));
+                &entry.source().source(),
+            )?);
         }
 
         /*

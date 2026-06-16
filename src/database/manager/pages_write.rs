@@ -17,6 +17,16 @@ use redb::{ReadableMultimapTable, ReadableTable};
 
 use super::DatabaseManager;
 use crate::database::link_refs::{build_link_refs, build_link_refs_with_table};
+use crate::database::primitive_names::{
+    remove_mcp_primitive_names_by_page_ids_in_txn,
+    sync_mcp_primitive_name_for_source_in_txn,
+};
+use crate::database::resource_uris::{
+    remove_resource_uris_by_page_ids_in_txn,
+    sync_resource_uri_for_source_in_txn,
+    verify_resource_uri_owner_for_source_in_txn,
+};
+use crate::markdown_source::front_matter::validate_document_front_matter;
 use crate::database::schema::{
     ASSET_GROUP_TABLE,
     ASSET_INFO_TABLE,
@@ -177,6 +187,11 @@ impl DatabaseManager {
         let user_name = user_name.as_ref().to_string();
         let revision = 1u64;
 
+        /*
+         * front matter 検証
+         */
+        validate_document_front_matter(&source)?;
+
         let txn = self.db.begin_write()?;
         let page_id = PageId::new();
 
@@ -210,6 +225,17 @@ impl DatabaseManager {
                 build_link_refs_with_table(&path_table, &path, &source)?;
             let rename_info = RenameInfo::new(None, path.clone(), link_refs);
             let page_index = PageIndex::new_page(page_id.clone(), path.clone());
+            sync_mcp_primitive_name_for_source_in_txn(
+                &txn,
+                &page_id,
+                &source,
+            )?;
+            sync_resource_uri_for_source_in_txn(
+                &txn,
+                &page_id,
+                &path,
+                &source,
+            )?;
             let page_source = PageSource::new(source, user_id, rename_info);
 
             /*
@@ -223,6 +249,10 @@ impl DatabaseManager {
         }
 
         txn.commit()?;
+
+        self.sync_template_candidate_for_page(&page_id)?;
+        self.sync_prompt_candidate_for_page(&page_id)?;
+        self.sync_resource_candidate_for_page(&page_id)?;
 
         Ok(page_id)
     }
@@ -322,6 +352,11 @@ impl DatabaseManager {
         amend: bool,
     ) -> Result<()> {
         /*
+         * front matter 検証
+         */
+        validate_document_front_matter(&source)?;
+
+        /*
          * 書き込みトランザクション開始
          */
         let txn = self.db.begin_write()?;
@@ -347,6 +382,21 @@ impl DatabaseManager {
                 Some(entry) => entry.value(),
                 None => return Err(anyhow!(DbError::PageNotFound)),
             };
+            sync_mcp_primitive_name_for_source_in_txn(
+                &txn,
+                page_id,
+                &source,
+            )?;
+            let current_path = match index.current_path() {
+                Some(path) => path.to_string(),
+                None => return Err(anyhow!("page path not found")),
+            };
+            sync_resource_uri_for_source_in_txn(
+                &txn,
+                page_id,
+                &current_path,
+                &source,
+            )?;
 
             if index.is_draft() {
                 if amend {
@@ -409,6 +459,10 @@ impl DatabaseManager {
          * コミット
          */
         txn.commit()?;
+
+        self.sync_template_candidate_for_page(page_id)?;
+        self.sync_prompt_candidate_for_page(page_id)?;
+        self.sync_resource_candidate_for_page(page_id)?;
 
         Ok(())
     }
@@ -481,6 +535,21 @@ impl DatabaseManager {
                 Some(entry) => entry.value(),
                 None => return Err(anyhow!("page source not found")),
             };
+            sync_mcp_primitive_name_for_source_in_txn(
+                &txn,
+                &request.page_id,
+                &request.source,
+            )?;
+            let current_path = match index.current_path() {
+                Some(path) => path.to_string(),
+                None => return Err(anyhow!("page path not found")),
+            };
+            sync_resource_uri_for_source_in_txn(
+                &txn,
+                &request.page_id,
+                &current_path,
+                &request.source,
+            )?;
 
             if request.allow_amend {
                 if latest_source.user() != user_id {
@@ -517,6 +586,10 @@ impl DatabaseManager {
          * コミット
          */
         txn.commit()?;
+
+        self.sync_template_candidate_for_page(&request.page_id)?;
+        self.sync_prompt_candidate_for_page(&request.page_id)?;
+        self.sync_resource_candidate_for_page(&request.page_id)?;
 
         Ok(result)
     }
@@ -619,6 +692,14 @@ impl DatabaseManager {
              * ページ削除の実行
              */
             if hard_delete {
+                remove_mcp_primitive_names_by_page_ids_in_txn(
+                    &txn,
+                    &target_ids,
+                )?;
+                remove_resource_uris_by_page_ids_in_txn(
+                    &txn,
+                    &target_ids,
+                )?;
                 let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
                 for target_id in targets.iter() {
                     delete_page_hard_in_txn(
@@ -661,6 +742,9 @@ impl DatabaseManager {
          * アセットファイルの削除
          */
         if hard_delete {
+            self.remove_template_candidates_by_page_ids(&target_ids)?;
+            self.remove_prompt_candidates_by_page_ids(&target_ids)?;
+            self.remove_resource_candidates_by_page_ids(&target_ids)?;
             for asset_id in asset_ids {
                 let asset_path = self.asset_file_path(&asset_id);
                 let _ = fs::remove_file(asset_path);
@@ -722,6 +806,34 @@ impl DatabaseManager {
             }
 
             /*
+             * ロールバック先ソースの front matter 検証
+             */
+            let target_source = match source_table
+                .get((page_id.clone(), rollback_to))?
+            {
+                Some(entry) => entry.value(),
+                None => {
+                    return Err(anyhow!("page source not found"));
+                }
+            };
+            validate_document_front_matter(&target_source.source())?;
+            sync_mcp_primitive_name_for_source_in_txn(
+                &txn,
+                page_id,
+                &target_source.source(),
+            )?;
+            let current_path = match index.current_path() {
+                Some(path) => path.to_string(),
+                None => return Err(anyhow!("page path not found")),
+            };
+            sync_resource_uri_for_source_in_txn(
+                &txn,
+                page_id,
+                &current_path,
+                &target_source.source(),
+            )?;
+
+            /*
              * ロック検証
              */
             let now = Local::now();
@@ -751,6 +863,10 @@ impl DatabaseManager {
          * コミット
          */
         txn.commit()?;
+
+        self.sync_template_candidate_for_page(page_id)?;
+        self.sync_prompt_candidate_for_page(page_id)?;
+        self.sync_resource_candidate_for_page(page_id)?;
 
         Ok(())
     }
@@ -1009,6 +1125,13 @@ impl DatabaseManager {
                 source_table
                     .insert((target_id.clone(), revision), page_source)?;
 
+                sync_resource_uri_for_source_in_txn(
+                    &txn,
+                    &target_id,
+                    &new_path,
+                    &latest_source.source(),
+                )?;
+
                 path_table.remove(&src_path)?;
                 path_table.insert(&new_path, target_id.clone())?;
             }
@@ -1199,6 +1322,8 @@ impl DatabaseManager {
          */
         txn.commit()?;
 
+        self.remove_template_candidate_by_page_id(page_id)?;
+
         /*
          * アセットファイルの削除
          */
@@ -1288,6 +1413,7 @@ impl DatabaseManager {
             let mut deleted_path_table =
                 txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
             let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
             let group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
@@ -1327,10 +1453,28 @@ impl DatabaseManager {
                 Some(path) => path.to_string(),
                 None => return Err(anyhow!("deleted path not found")),
             };
+            let latest_source = match source_table
+                .get((page_id.clone(), index.latest()))?
+            {
+                Some(entry) => entry.value(),
+                None => return Err(anyhow!("page source not found")),
+            };
+            verify_resource_uri_owner_for_source_in_txn(
+                &txn,
+                page_id,
+                &deleted_path,
+                &latest_source.source(),
+            )?;
             index.set_path(restore_to.to_string());
             index_table.insert(page_id.clone(), index)?;
             let _ = deleted_path_table.remove(deleted_path, page_id.clone())?;
-            let _ = path_table.insert(restore_to, page_id.clone())?;
+            let _ = path_table.insert(&restore_to, page_id.clone())?;
+            sync_resource_uri_for_source_in_txn(
+                &txn,
+                page_id,
+                &restore_to,
+                &latest_source.source(),
+            )?;
 
             if with_assets {
                 /*
@@ -1399,6 +1543,7 @@ impl DatabaseManager {
             let mut deleted_path_table =
                 txn.open_multimap_table(DELETED_PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+            let source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
             let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
             let mut asset_table = txn.open_table(ASSET_INFO_TABLE)?;
             let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
@@ -1498,11 +1643,29 @@ impl DatabaseManager {
                     return Err(anyhow!("page not deleted"));
                 }
 
+                let latest_source = match source_table
+                    .get((target_id.clone(), index.latest()))?
+                {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!("page source not found")),
+                };
+                verify_resource_uri_owner_for_source_in_txn(
+                    &txn,
+                    &target_id,
+                    &deleted_path,
+                    &latest_source.source(),
+                )?;
                 index.set_path(new_path.to_string());
                 index_table.insert(target_id.clone(), index)?;
                 let _ =
                     deleted_path_table.remove(deleted_path, target_id.clone())?;
-                let _ = path_table.insert(new_path, target_id.clone())?;
+                let _ = path_table.insert(&new_path, target_id.clone())?;
+                sync_resource_uri_for_source_in_txn(
+                    &txn,
+                    &target_id,
+                    &new_path,
+                    &latest_source.source(),
+                )?;
 
                 if with_assets {
                     /*
@@ -1597,12 +1760,24 @@ impl DatabaseManager {
                 &mut group_table,
                 &mut asset_ids,
             )?;
+            remove_mcp_primitive_names_by_page_ids_in_txn(
+                &txn,
+                &[page_id.clone()],
+            )?;
+            remove_resource_uris_by_page_ids_in_txn(
+                &txn,
+                &[page_id.clone()],
+            )?;
         }
 
         /*
          * コミット
          */
         txn.commit()?;
+
+        self.remove_template_candidate_by_page_id(page_id)?;
+        self.remove_prompt_candidate_by_page_id(page_id)?;
+        self.remove_resource_candidate_by_page_id(page_id)?;
 
         /*
          * アセットファイルの削除
@@ -1743,6 +1918,12 @@ impl DatabaseManager {
             index.push_rename_revision(revision);
             index_table.insert(page_id.clone(), index)?;
             source_table.insert((page_id.clone(), revision), page_source)?;
+            sync_resource_uri_for_source_in_txn(
+                &txn,
+                &page_id,
+                &dst_path,
+                &latest_source.source(),
+            )?;
 
             path_table.remove(&path)?;
             path_table.insert(&dst_path, page_id)?;

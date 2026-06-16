@@ -31,6 +31,7 @@ interface Change {
 }
 
 const INLINE_MACRO_RE = /\{\{([^{}\n]+)\}\}/g;
+const TEMPLATE_INLINE_MACRO_RE = /\{\{!([^{}\n]+)\}\}/g;
 const FENCE_START_RE = /^(?:```|~~~)/;
 
 export function collectImmediateMacroChanges(
@@ -61,6 +62,30 @@ export function collectImmediateMacroChanges(
     });
   }
   return changes;
+}
+
+export function resolveTemplateImmediateMacros(
+  source: string,
+  context: MacroContext,
+  macroExpand: boolean,
+): string {
+  const masked = maskCodeRegions(source);
+
+  if (!macroExpand) {
+    return source;
+  }
+
+  const normalized = masked.text.replace(
+    TEMPLATE_INLINE_MACRO_RE,
+    '{{$1}}',
+  );
+
+  const changes = collectImmediateMacroChanges(normalized, context);
+  if (changes.length === 0) {
+    return masked.restore(normalized);
+  }
+
+  return masked.restore(applyChanges(normalized, changes));
 }
 
 export async function expandRenderMacros(
@@ -442,6 +467,14 @@ async function replaceInlineMacros(
 
   result += source.slice(lastIndex);
   return result;
+}
+
+function applyChanges(source: string, changes: Change[]): string {
+  let updated = source;
+  for (const change of [...changes].sort((left, right) => right.from - left.from)) {
+    updated = updated.slice(0, change.from) + change.insert + updated.slice(change.to);
+  }
+  return updated;
 }
 
 function maskCodeRegions(source: string): { text: string; restore: (text: string) => string } {

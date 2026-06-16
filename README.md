@@ -1,96 +1,168 @@
 # luwiki
 
-ローカル運用を目的とした軽量Wikiシステム
+ローカル運用を目的とした、Rust製の軽量Wikiシステムです。
+
+## v0.9.25以前からの既存データ利用時の注意
+
+v0.9.25以前のバージョンで作成・運用していた既存データを利用する場合は、
+front matter対応およびfront matter由来派生データ対応後の状態に合わせるため、
+アップデート後に次の再構成コマンドを実行してください。
+
+```sh
+luwiki fts rebuild
+luwiki derived rebuild --target all
+```
+
+`fts rebuild`は、全文検索インデックスを現行スキーマで作り直します。
+特に、front matter対応前に作成された全文検索インデックスには
+`front_matter`フィールドが存在しないため、再構築しないまま検索やページ更新を行うと
+FTS関連エラーになる場合があります。
+
+`derived rebuild --target all`は、ページ正本からテンプレート、MCP prompts、
+MCP resourcesなどのfront matter由来派生データを再構成します。
+
+安全のため、これらのコマンドはサーバを停止するか、少なくともページ更新などの
+書き込み操作が行われない状態で実行してください。
+
+## 主な機能
+
+- Markdownページの作成、編集、履歴管理、rename、削除・復元
+- YAML front matterの編集、検証、表示時の除外
+- 本文、見出し、コード、front matterを対象とした全文検索
+- front matterおよびlegacy設定に対応したテンプレート機能
+- マクロ、Mermaid、数式、GitHub風チェックボックス
+- アセット管理
+- バックアップ／マイグレート用のexport/import
+- Basic認証、Bearer認証、スコープ、path prefix制約
+- MCP toolsによるページ操作
+- MCP標準`prompts/list`・`prompts/get`
+- MCP標準`resources/list`・`resources/read`
+- front matter由来派生データの再構成
+
+要求仕様と設計の詳細は[`docs`](docs/)を参照してください。
+
+## ビルド方法
+
+### 前提
+
+- Rust 2024 editionを利用できるRust toolchain
+- Node.js
+- npm
+
+フロントエンドの生成物は`frontend/dist`へ出力され、Rust側の`rust-embed`によって
+実行ファイルへ埋め込まれます。そのため、フロントエンドを先にビルドしてください。
+
+### リリースビルド
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run build
+cargo build --release
+```
+
+生成される実行ファイル:
+
+```text
+target/release/luwiki
+```
+
+### デバッグビルド
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run build:debug
+cargo build
+```
+
+生成される実行ファイル:
+
+```text
+target/debug/luwiki
+```
+
+`frontend`の依存パッケージが導入済みで、`package-lock.json`に変更がない場合は、
+2回目以降の`npm ci`を省略できます。
 
 ## 使用方法
+
 ```text
-ローカル運用向けWikiシステム
-
-Usage: luwiki [OPTIONS] [COMMAND]
-
-Commands:
-  run       サーバの起動
-  user      ユーザ管理コマンド一覧の表示
-  page      ページ管理コマンド一覧の表示
-  lock      ロック管理コマンド一覧の表示
-  asset     アセット管理コマンド一覧の表示
-  fts       全文検索管理コマンド一覧の表示
-  token     Bearerトークン管理コマンド一覧の表示
-  export    バックアップ／マイグレート用データのエクスポート
-  import    エクスポートデータのインポート
-  commands  サブコマンド一覧の表示
-  help-all  全サブコマンドのヘルプ出力
-  help      Print this message or the help of the given subcommand(s)
-
-Options:
-  -c, --config-path <CONFIG_PATH>
-          config.tomlを使用する場合のパス
-
-  -l, --log-level <LEVEL>
-          記録するログレベルの指定
-
-          Possible values:
-          - NONE:  ログを記録しない
-          - ERROR: エラー情報以上のレベルを記録
-          - WARN:  警告情報以上のレベルを記録
-          - INFO:  一般情報以上のレベルを記録
-          - DEBUG: デバッグ情報以上のレベルを記録
-          - TRACE: トレース情報以上のレベルを記録
-
-  -L, --log-output <PATH>
-          ログの出力先の指定
-
-      --log-tee
-          ログを標準出力にも同時出力するか否か
-
-  -d, --db-path <DB_PATH>
-          データベースファイルのパス
-
-  -I, --fts-index <FTS_INDEX>
-          全文検索インデックスの格納パス
-
-  -a, --assets-path <ASSETS_PATH>
-          アセットデータ格納ディレクトリのパス
-
-  -t, --template-root <PATH>
-          テンプレートページの格納パス
-
-  -T, --wiki-title <TITLE>
-          Wikiタイトル
-
-  -S, --asset-limit-size <SIZE>
-          アセットサイズ上限
-
-      --audit-log-dir <DIR>
-          監査ログ出力先
-
-      --audit-log-retention <DURATION>
-          監査ログ保持期間
-
-      --audit-log-rotate-size <SIZE>
-          監査ログローテーション閾値
-
-      --show-options
-          設定情報の表示
-
-      --save-config
-          設定情報の保存
-
-  -h, --help
-          Print help (see a summary with '-h')
-
-  -V, --version
-          Print version
+luwiki [OPTIONS] [COMMAND]
 ```
+
+主なコマンド:
+
+| コマンド | 用途 |
+|:--|:--|
+| `run` | サーバの起動 |
+| `derived` | front matter由来派生データの管理 |
+| `user` | ユーザ管理 |
+| `page` | ページ管理 |
+| `lock` | ロック管理 |
+| `asset` | アセット管理 |
+| `fts` | 全文検索の管理 |
+| `token` | Bearerトークン管理 |
+| `export` | バックアップ／マイグレート用データのexport |
+| `import` | エクスポートデータのimport |
+| `commands` | サブコマンド一覧の表示 |
+| `help-all` | 全サブコマンドのヘルプ表示 |
+
+front matter由来の派生データは、次のコマンドで再構成できます。
+
+```sh
+luwiki derived rebuild --target templates
+luwiki derived rebuild --target prompts
+luwiki derived rebuild --target resources
+luwiki derived rebuild --target all
+```
+
+`--template-root`は、通常運用のテンプレート判定条件ではなく、
+テンプレート再構成時にlegacy候補を取り込むための入力元です。
+`prompts` / `resources` targetでは使用せず、`all` targetではtemplates側だけに適用します。
+
+利用可能なオプションと各サブコマンドの詳細は、次を参照してください。
+
+```sh
+luwiki --help
+luwiki <COMMAND> --help
+```
+
+CLI仕様は[`docs/CLI_SPECS.md`](docs/CLI_SPECS.md)に記載しています。
 
 ## ブートストラップ
 
-  1. ユーザの追加 : `user add`サブコマンドでユーザを追加
-  2. サーバの起動 : `run`サブコマンドでサーバを起動
-  3. ブラウザで http://127.0.0.1:8080/wiki を開く
+リリースビルドした実行ファイルを使う場合:
 
-## MCPサーバ機能を使用する場合
-[こちら](MCP_SETUP.md)をご覧ください。
+1. ユーザを追加します。
+
+   ```sh
+   target/release/luwiki user add <USER-NAME>
+   ```
+
+2. サーバを起動します。
+
+   ```sh
+   target/release/luwiki run
+   ```
+
+3. ブラウザで<http://127.0.0.1:8080/wiki>を開きます。
+
+## MCPサーバ機能
+
+MCPサーバ機能を有効にする場合は、`run`へ`--mcp`を指定します。
+
+```sh
+luwiki run --mcp
+```
+
+MCP endpointはBearer認証を必要とし、ページ操作用tools、
+MCP標準`prompts/list`・`prompts/get`、
+MCP標準`resources/list`・`resources/read`を提供します。
+
+セットアップ例は[`MCP_SETUP.md`](MCP_SETUP.md)を参照してください。
+promptsの外部仕様は
+[`docs/MCP_PROMPT_SPECS.md`](docs/MCP_PROMPT_SPECS.md)に記載しています。
+resourcesの外部仕様は
+[`docs/MCP_RESOURCE_SPECS.md`](docs/MCP_RESOURCE_SPECS.md)に記載しています。
 
 ## Todo
   - [x] TLS対応
@@ -119,6 +191,8 @@ Options:
       - [x] アセットのコードブロック展開マクロ
       - [x] ページ名展開
   - [x] Bearer認証のサポート
+  - [x] YAML front matter対応
+  - [x] front matter由来派生データの再構成
   - MCPサーバ機能
       - tools
           - ページ本文の操作
@@ -131,11 +205,17 @@ Options:
               - [x] append_page
               - [x] rename_page
               - [x] get_page_section
-              - [ ] edit_page
+              - [x] edit_page
           - [ ] アセットの操作
-      - resources
-          - [ ] テンプレート
-      - [ ] prompts
+      - resources (未テスト)
+          - [x] 固定組み込みresource
+              - [x] front matter詳細仕様
+          - [x] ページ由来resource
+              - [x] resources/list
+              - [x] resources/read
+      - prompts (未テスト)
+          - [x] prompts/list
+          - [x] prompts/get
 
 ## ライセンス
 このソフトウェアは[MITライセンス](https://opensource.org/licenses/MIT)の条件下でオープンソースとして利用可能です。

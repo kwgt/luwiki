@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::Error;
 use chrono::{DateTime, Local};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use serde_json::{Map as JsonObject, Value as JsonValue};
 
 use crate::auth::AuthContext;
 use crate::database::{
@@ -24,6 +25,15 @@ use crate::database::{
     DatabaseManager,
     DbError,
     PageListEntry,
+    ResourceSourceLookupResult,
+};
+use crate::database::resource_list::{
+    DEFAULT_RESOURCE_MIME_TYPE,
+    builtin_resource_contents,
+    builtin_resource_list_entries,
+    merge_resource_list_entries,
+    page_resource_list_entry,
+    page_resource_uri,
 };
 use crate::database::types::{
     BearerScope,
@@ -33,14 +43,40 @@ use crate::database::types::{
     UserId,
 };
 use crate::fts::{self, FtsIndexConfig, FtsSearchTarget};
+use crate::markdown_source::front_matter::{
+    PromptPageFrontMatter,
+    extract_front_matter,
+    is_valid_prompt_argument_name,
+    parse_front_matter,
+    validate_prompt_name,
+    validate_resource_id,
+};
 
 use super::errors::{McpError, McpErrorCode};
+use super::model::{
+    GetPromptServiceResult,
+    ListResourcesServiceResult,
+    ListPromptsServiceResult,
+    PromptListArgument,
+    PromptListItem,
+    ReadResourceServiceResult,
+    ResourceListItem,
+};
 
 /// path で禁止する文字
 const FORBIDDEN_PATH_CHARS: &[char] = &['\\'];
 
 /// `list_pages` の既定件数
 const DEFAULT_LIST_LIMIT: usize = 50;
+
+/// `prompts/list`の既定件数
+const DEFAULT_PROMPT_LIST_LIMIT: usize = 50;
+
+/// `resources/list`の既定件数
+const DEFAULT_RESOURCE_LIST_LIMIT: usize = 50;
+
+/// resource URI authority の既定値
+const DEFAULT_RESOURCE_AUTHORITY: &str = "local.luwiki";
 
 /// `search_pages` の既定件数
 const DEFAULT_SEARCH_LIMIT: usize = 20;
@@ -67,6 +103,18 @@ pub(crate) enum McpOperation {
 
     /// 一覧取得
     ListPages,
+
+    /// prompt一覧取得
+    ListPrompts,
+
+    /// resource一覧取得
+    ListResources,
+
+    /// resource取得
+    ReadResource,
+
+    /// prompt取得
+    GetPrompt,
 
     /// 検索
     SearchPages,
@@ -477,6 +525,10 @@ impl McpOperation {
             Self::GetPage
             | Self::GetPageToc
             | Self::ListPages
+            | Self::ListPrompts
+            | Self::ListResources
+            | Self::ReadResource
+            | Self::GetPrompt
             | Self::SearchPages
             | Self::GetPageSection => BearerScope::Read,
             Self::CreatePage => BearerScope::Create,
@@ -500,6 +552,10 @@ impl McpOperation {
             Self::GetPage
                 | Self::GetPageToc
                 | Self::ListPages
+                | Self::ListPrompts
+                | Self::ListResources
+                | Self::ReadResource
+                | Self::GetPrompt
                 | Self::SearchPages
                 | Self::GetPageSection
         )
@@ -1842,6 +1898,363 @@ impl McpService {
     }
 
     ///
+    /// `prompts/list`を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `cursor` - 次ページcursor
+    ///
+    /// # 戻り値
+    /// prompt一覧取得結果を返す。
+    ///
+    pub(crate) fn list_prompts(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        cursor: Option<&str>,
+    ) -> Result<ListPromptsServiceResult, McpError> {
+        /*
+         * read scopeとcursorを検証する
+         */
+        self.ensure_operation_scope(auth, McpOperation::ListPrompts)?;
+        if let Some(cursor) = cursor {
+            validate_prompt_name(cursor).map_err(|_| {
+                McpError::new(
+                    McpErrorCode::InvalidInput,
+                    "cursor is invalid",
+                )
+            })?;
+        }
+
+        /*
+         * 公開可能な候補を取得する
+         */
+        let mut entries = db.list_prompt_candidates().map_err(|_| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "internal error",
+            )
+        })?;
+        entries.sort_by(|left, right| left.name().cmp(right.name()));
+
+        /*
+         * cursor境界と既定件数を適用する
+         */
+        let filtered = entries
+            .into_iter()
+            .filter(|entry| match cursor {
+                Some(cursor) => entry.name() > cursor,
+                None => true,
+            })
+            .take(DEFAULT_PROMPT_LIST_LIMIT + 1)
+            .collect::<Vec<_>>();
+        let has_more = filtered.len() > DEFAULT_PROMPT_LIST_LIMIT;
+        let selected = filtered
+            .into_iter()
+            .take(DEFAULT_PROMPT_LIST_LIMIT)
+            .collect::<Vec<_>>();
+        let next_cursor = if has_more {
+            selected.last().map(|entry| entry.name().to_string())
+        } else {
+            None
+        };
+
+        /*
+         * database候補をMCP内部モデルへ変換する
+         */
+        let items = selected
+            .into_iter()
+            .map(|entry| {
+                let arguments = entry
+                    .arguments()
+                    .iter()
+                    .map(|argument| {
+                        PromptListArgument::new(
+                            argument.name().to_string(),
+                            argument.description().to_string(),
+                            argument.required(),
+                        )
+                    })
+                    .collect();
+                PromptListItem::new(
+                    entry.name().to_string(),
+                    entry.description().to_string(),
+                    arguments,
+                )
+            })
+            .collect();
+
+        Ok(ListPromptsServiceResult::new(items, next_cursor))
+    }
+
+    ///
+    /// `resources/list`を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `cursor` - 次ページcursor
+    ///
+    /// # 戻り値
+    /// resource一覧取得結果を返す。
+    ///
+    pub(crate) fn list_resources(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        cursor: Option<&str>,
+    ) -> Result<ListResourcesServiceResult, McpError> {
+        /*
+         * read scopeとcursorを検証する
+         */
+        self.ensure_operation_scope(auth, McpOperation::ListResources)?;
+        if let Some(cursor) = cursor {
+            validate_resource_list_cursor(cursor)?;
+        }
+
+        /*
+         * 固定組み込みresourceと認可済みページ由来resourceを合流する
+         */
+        let page_entries = db
+            .list_resource_candidates()
+            .map_err(|_| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "internal error",
+                )
+            })?
+            .into_iter()
+            .filter(|entry| {
+                self.is_path_prefix_allowed(auth, entry.current_path())
+            })
+            .map(|entry| {
+                page_resource_list_entry(
+                    DEFAULT_RESOURCE_AUTHORITY,
+                    &entry,
+                )
+            })
+            .collect::<Vec<_>>();
+        let entries = merge_resource_list_entries(
+            builtin_resource_list_entries(DEFAULT_RESOURCE_AUTHORITY),
+            page_entries,
+        )
+        .map_err(|_| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "internal error",
+            )
+        })?;
+
+        /*
+         * cursor境界と既定件数を適用する
+         */
+        let filtered = entries
+            .into_iter()
+            .filter(|entry| match cursor {
+                Some(cursor) => entry.uri() > cursor,
+                None => true,
+            })
+            .take(DEFAULT_RESOURCE_LIST_LIMIT + 1)
+            .collect::<Vec<_>>();
+        let has_more = filtered.len() > DEFAULT_RESOURCE_LIST_LIMIT;
+        let selected = filtered
+            .into_iter()
+            .take(DEFAULT_RESOURCE_LIST_LIMIT)
+            .collect::<Vec<_>>();
+        let next_cursor = if has_more {
+            selected.last().map(|entry| entry.uri().to_string())
+        } else {
+            None
+        };
+
+        /*
+         * database一覧エントリをMCP内部モデルへ変換する
+         */
+        let items = selected
+            .into_iter()
+            .map(|entry| {
+                ResourceListItem::new(
+                    entry.uri().to_string(),
+                    entry.name().to_string(),
+                    entry.description().to_string(),
+                    entry.mime_type().to_string(),
+                )
+            })
+            .collect();
+
+        Ok(ListResourcesServiceResult::new(items, next_cursor))
+    }
+
+    ///
+    /// `resources/read`を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `uri` - resource URI
+    ///
+    /// # 戻り値
+    /// resource取得結果を返す。
+    ///
+    pub(crate) fn read_resource(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        uri: &str,
+    ) -> Result<ReadResourceServiceResult, McpError> {
+        /*
+         * read scopeとURIを検証する
+         */
+        self.ensure_operation_scope(auth, McpOperation::ReadResource)?;
+        let target = parse_resource_read_uri(uri)?;
+
+        match target {
+            ResourceUriTarget::Builtin { builtin_id } => {
+                let contents = builtin_resource_contents(
+                    DEFAULT_RESOURCE_AUTHORITY,
+                    &builtin_id,
+                )
+                .ok_or_else(resource_not_found)?;
+
+                Ok(ReadResourceServiceResult::new(
+                    contents.uri().to_string(),
+                    contents.mime_type().to_string(),
+                    contents.text().to_string(),
+                    None,
+                ))
+            }
+            ResourceUriTarget::Page { resource_id } => {
+                let lookup = db
+                    .get_resource_source_by_id(&resource_id)
+                    .map_err(|_| resource_internal_error())?;
+                let entry = match lookup {
+                    ResourceSourceLookupResult::Found(entry) => entry,
+                    ResourceSourceLookupResult::NotFound
+                    | ResourceSourceLookupResult::Unavailable => {
+                        return Err(resource_not_found());
+                    }
+                    ResourceSourceLookupResult::Inconsistent => {
+                        return Err(resource_internal_error());
+                    }
+                };
+                if !self.is_path_prefix_allowed(
+                    auth,
+                    entry.current_path(),
+                ) {
+                    return Err(resource_not_found());
+                }
+
+                let extracted = extract_front_matter(entry.source())
+                    .map_err(|_| resource_internal_error())?
+                    .ok_or_else(resource_internal_error)?;
+                let front_matter = parse_front_matter(
+                    extracted.front_matter(),
+                )
+                .map_err(|_| resource_internal_error())?;
+                let resource = front_matter
+                    .resource_page()
+                    .ok_or_else(resource_internal_error)?;
+                let actual_resource_id = match resource.resource_id() {
+                    Some(resource_id) => resource_id.to_string(),
+                    None => resource_id_from_current_path(
+                        entry.current_path(),
+                    )?,
+                };
+                if actual_resource_id != resource_id {
+                    return Err(resource_internal_error());
+                }
+
+                let mime_type = resource
+                    .mime_type()
+                    .unwrap_or(DEFAULT_RESOURCE_MIME_TYPE)
+                    .to_string();
+
+                Ok(ReadResourceServiceResult::new(
+                    page_resource_uri(
+                        DEFAULT_RESOURCE_AUTHORITY,
+                        &resource_id,
+                    ),
+                    mime_type,
+                    extracted.body().to_string(),
+                    Some(entry.revision()),
+                ))
+            }
+        }
+    }
+
+    ///
+    /// `prompts/get`を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `name` - prompt名
+    /// * `arguments` - prompt引数
+    ///
+    /// # 戻り値
+    /// prompt取得結果を返す。
+    ///
+    pub(crate) fn get_prompt(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        name: &str,
+        arguments: Option<&JsonObject<String, JsonValue>>,
+    ) -> Result<GetPromptServiceResult, McpError> {
+        /*
+         * read scopeとprompt名を検証する
+         */
+        self.ensure_operation_scope(auth, McpOperation::GetPrompt)?;
+        validate_prompt_name(name).map_err(|_| {
+            McpError::new(
+                McpErrorCode::NotFound,
+                "prompt not found",
+            )
+        })?;
+
+        /*
+         * 名前索引から最新ページソースを解決する
+         */
+        let entry = db
+            .get_prompt_source_by_name(name)
+            .map_err(|_| prompt_internal_error())?
+            .ok_or_else(prompt_not_found)?;
+        let extracted = extract_front_matter(entry.source())
+            .map_err(|_| prompt_internal_error())?
+            .ok_or_else(prompt_internal_error)?;
+        let front_matter = parse_front_matter(
+            extracted.front_matter(),
+        )
+        .map_err(|_| prompt_internal_error())?;
+        let prompt = front_matter
+            .prompt_page()
+            .ok_or_else(prompt_internal_error)?;
+        if prompt.name() != name {
+            return Err(prompt_internal_error());
+        }
+
+        /*
+         * 引数を検証・展開して単一message本文を生成する
+         */
+        let values = validate_prompt_arguments(&prompt, arguments)?;
+        let body = expand_prompt_text(extracted.body(), &values)?;
+        let message = match prompt.system() {
+            Some(system) => {
+                let system = expand_prompt_text(system, &values)?;
+                format!("{}\n\n{}", system, body)
+            }
+            None => body,
+        };
+
+        Ok(GetPromptServiceResult::new(
+            prompt.description().to_string(),
+            message,
+            entry.revision(),
+        ))
+    }
+
+    ///
     /// `search_pages` を実行する
     ///
     /// # 引数
@@ -1861,6 +2274,7 @@ impl McpService {
         db: &DatabaseManager,
         fts_config: &FtsIndexConfig,
         query: &str,
+        targets: &[FtsSearchTarget],
         raw_prefix: Option<&str>,
         limit: Option<usize>,
     ) -> Result<SearchPagesResult, McpError> {
@@ -1875,6 +2289,12 @@ impl McpService {
                 "query must not be empty",
             ));
         }
+        if targets.is_empty() {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "target must not be empty",
+            ));
+        }
         let resolved_prefix =
             self.resolve_search_prefix_request(auth, raw_prefix)?;
         let limit = self.resolve_limit(limit, DEFAULT_SEARCH_LIMIT)?;
@@ -1883,14 +2303,10 @@ impl McpService {
          * FTS の実行とスコアマージ
          */
         let mut merged = HashMap::new();
-        for target in [
-            FtsSearchTarget::Headings,
-            FtsSearchTarget::Body,
-            FtsSearchTarget::Code,
-        ] {
+        for target in targets {
             let results = fts::search_index(
                 fts_config,
-                target,
+                *target,
                 query,
                 false,
                 false,
@@ -3579,6 +3995,181 @@ fn path_matches_prefix(target_path: &str, prefix: &str) -> bool {
 }
 
 ///
+/// resources/list 用 cursor の妥当性検証を行う
+///
+/// # 引数
+/// * `cursor` - 検証対象 cursor
+///
+/// # 戻り値
+/// 検証に成功した場合は `Ok(())` を返す。
+///
+fn validate_resource_list_cursor(cursor: &str) -> Result<(), McpError> {
+    let invalid_cursor = || {
+        McpError::new(
+            McpErrorCode::InvalidInput,
+            "cursor is invalid",
+        )
+    };
+
+    /*
+     * 空値、境界空白、制御文字、最大長を検証する
+     */
+    if cursor.trim().is_empty() || cursor.trim() != cursor {
+        return Err(invalid_cursor());
+    }
+    if cursor.chars().any(char::is_control) {
+        return Err(invalid_cursor());
+    }
+    let max_cursor_chars = format!(
+        "luwiki://{}/page/",
+        DEFAULT_RESOURCE_AUTHORITY,
+    )
+        .chars()
+        .count()
+        + 512;
+    if cursor.chars().count() > max_cursor_chars {
+        return Err(invalid_cursor());
+    }
+
+    /*
+     * LuWiki resource URI として扱える形かを検証する
+     */
+    let Some(rest) = cursor.strip_prefix("luwiki://") else {
+        return Err(invalid_cursor());
+    };
+    let Some(path_start) = rest.find('/') else {
+        return Err(invalid_cursor());
+    };
+    let authority = &rest[..path_start];
+    if authority != DEFAULT_RESOURCE_AUTHORITY {
+        return Err(invalid_cursor());
+    }
+    let path = &rest[path_start..];
+
+    if let Some(builtin_id) = path.strip_prefix("/builtin/") {
+        if builtin_id.is_empty()
+            || builtin_id.contains('/')
+            || builtin_id.trim() != builtin_id
+            || builtin_id.chars().any(char::is_control)
+        {
+            return Err(invalid_cursor());
+        }
+
+        return Ok(());
+    }
+
+    if let Some(resource_id) = path.strip_prefix("/page/") {
+        return validate_resource_id(resource_id)
+            .map_err(|_| invalid_cursor());
+    }
+
+    Err(invalid_cursor())
+}
+
+///
+/// resources/read 対象URI
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResourceUriTarget {
+    /// 固定組み込みresource
+    Builtin {
+        /// 固定組み込みresource識別子
+        builtin_id: String,
+    },
+
+    /// ページ由来resource
+    Page {
+        /// resource 識別子
+        resource_id: String,
+    },
+}
+
+///
+/// resources/read 用URIを分解する
+///
+/// # 引数
+/// * `uri` - resource URI
+///
+/// # 戻り値
+/// 解決対象のresource種別と識別子を返す。
+///
+fn parse_resource_read_uri(
+    uri: &str,
+) -> Result<ResourceUriTarget, McpError> {
+    /*
+     * 空値、境界空白、制御文字を検証する
+     */
+    if uri.trim().is_empty()
+        || uri.trim() != uri
+        || uri.chars().any(char::is_control)
+    {
+        return Err(resource_uri_invalid());
+    }
+
+    /*
+     * LuWiki resource URIとして分解する
+     */
+    let Some(rest) = uri.strip_prefix("luwiki://") else {
+        return Err(resource_uri_invalid());
+    };
+    let Some(path_start) = rest.find('/') else {
+        return Err(resource_uri_invalid());
+    };
+    let authority = &rest[..path_start];
+    if authority != DEFAULT_RESOURCE_AUTHORITY {
+        return Err(resource_not_found());
+    }
+    let path = &rest[path_start..];
+
+    if let Some(builtin_id) = path.strip_prefix("/builtin/") {
+        if builtin_id.is_empty()
+            || builtin_id.contains('/')
+            || builtin_id.trim() != builtin_id
+            || builtin_id.chars().any(char::is_control)
+        {
+            return Err(resource_not_found());
+        }
+
+        return Ok(ResourceUriTarget::Builtin {
+            builtin_id: builtin_id.to_string(),
+        });
+    }
+
+    if let Some(resource_id) = path.strip_prefix("/page/") {
+        validate_resource_id(resource_id)
+            .map_err(|_| resource_uri_invalid())?;
+
+        return Ok(ResourceUriTarget::Page {
+            resource_id: resource_id.to_string(),
+        });
+    }
+
+    Err(resource_not_found())
+}
+
+///
+/// current pathからresource_idを導出する
+///
+/// # 引数
+/// * `current_path` - 対象ページのcurrent path
+///
+/// # 戻り値
+/// 導出したresource_idを返す。
+///
+fn resource_id_from_current_path(
+    current_path: &str,
+) -> Result<String, McpError> {
+    let resource_id = current_path
+        .strip_prefix('/')
+        .unwrap_or(current_path)
+        .to_string();
+    validate_resource_id(&resource_id)
+        .map_err(|_| resource_internal_error())?;
+
+    Ok(resource_id)
+}
+
+///
 /// MCP 用のページ path 妥当性検証を行う
 ///
 /// # 引数
@@ -3627,6 +4218,181 @@ fn normalize_absolute_path(raw_path: &str) -> String {
 ///
 fn has_dot_path_segment(path: &str) -> bool {
     path.split('/').any(|segment| segment == "." || segment == "..")
+}
+
+///
+/// resource URI不正エラーを生成する
+///
+/// # 戻り値
+/// resource URI不正エラーを返す。
+///
+fn resource_uri_invalid() -> McpError {
+    McpError::new(
+        McpErrorCode::InvalidInput,
+        "resource uri is invalid",
+    )
+}
+
+///
+/// resource取得の不存在エラーを生成する
+///
+/// # 戻り値
+/// 情報を秘匿したresource不存在エラーを返す。
+///
+fn resource_not_found() -> McpError {
+    McpError::new(McpErrorCode::NotFound, "resource not found")
+}
+
+///
+/// resource取得の内部エラーを生成する
+///
+/// # 戻り値
+/// 内部情報を秘匿したエラーを返す。
+///
+fn resource_internal_error() -> McpError {
+    McpError::new(McpErrorCode::InternalError, "internal error")
+}
+
+///
+/// prompt取得の不存在エラーを生成する
+///
+/// # 戻り値
+/// 情報を秘匿したprompt不存在エラーを返す。
+///
+fn prompt_not_found() -> McpError {
+    McpError::new(McpErrorCode::NotFound, "prompt not found")
+}
+
+///
+/// prompt取得の内部エラーを生成する
+///
+/// # 戻り値
+/// 内部情報を秘匿したエラーを返す。
+///
+fn prompt_internal_error() -> McpError {
+    McpError::new(McpErrorCode::InternalError, "internal error")
+}
+
+///
+/// prompt要求引数を検証して展開値を構築する
+///
+/// # 引数
+/// * `prompt` - prompt定義
+/// * `arguments` - 要求引数
+///
+/// # 戻り値
+/// 宣言済み引数ごとの展開値を返す。
+///
+fn validate_prompt_arguments(
+    prompt: &PromptPageFrontMatter,
+    arguments: Option<&JsonObject<String, JsonValue>>,
+) -> Result<HashMap<String, String>, McpError> {
+    let definitions = prompt
+        .arguments()
+        .iter()
+        .map(|argument| (argument.name(), argument))
+        .collect::<HashMap<_, _>>();
+
+    /*
+     * 未知引数と値型を検証する
+     */
+    if let Some(arguments) = arguments {
+        for (name, value) in arguments {
+            if !definitions.contains_key(name.as_str()) {
+                return Err(McpError::new(
+                    McpErrorCode::InvalidInput,
+                    format!("unknown prompt argument: {}", name),
+                ));
+            }
+            if !value.is_string() {
+                return Err(McpError::new(
+                    McpErrorCode::InvalidInput,
+                    format!(
+                        "prompt argument must be a string: {}",
+                        name,
+                    ),
+                ));
+            }
+        }
+    }
+
+    /*
+     * 必須判定とoptional既定値を適用する
+     */
+    let mut values = HashMap::new();
+    for definition in prompt.arguments() {
+        let value = arguments
+            .and_then(|arguments| arguments.get(definition.name()))
+            .and_then(JsonValue::as_str);
+        if definition.required() == Some(true) && value.is_none() {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                format!(
+                    "required prompt argument is missing: {}",
+                    definition.name(),
+                ),
+            ));
+        }
+        values.insert(
+            definition.name().to_string(),
+            value.unwrap_or_default().to_string(),
+        );
+    }
+
+    Ok(values)
+}
+
+///
+/// prompt専用placeholderを一回だけ展開する
+///
+/// # 引数
+/// * `text` - 展開対象文字列
+/// * `values` - 宣言済み引数ごとの展開値
+///
+/// # 戻り値
+/// 展開済み文字列を返す。
+///
+fn expand_prompt_text(
+    text: &str,
+    values: &HashMap<String, String>,
+) -> Result<String, McpError> {
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+
+    /*
+     * placeholder候補を左から一回だけ走査する
+     */
+    while let Some(start) = rest.find("{{@") {
+        result.push_str(&rest[..start]);
+        let placeholder = &rest[start..];
+        let Some(end) = placeholder.find("}}") else {
+            result.push_str(placeholder);
+            return Ok(result);
+        };
+        let token = &placeholder[..end + 2];
+        let inner = &placeholder[3..end];
+
+        if let Some(escaped_name) = inner.strip_prefix('@') {
+            if is_valid_prompt_argument_name(escaped_name) {
+                result.push_str("{{@");
+                result.push_str(escaped_name);
+                result.push_str("}}");
+            } else {
+                result.push_str(token);
+            }
+        } else if is_valid_prompt_argument_name(inner) {
+            let value = values
+                .get(inner)
+                .ok_or_else(prompt_internal_error)?;
+            result.push_str(value);
+        } else {
+            result.push_str(token);
+        }
+        rest = &placeholder[end + 2..];
+    }
+    result.push_str(rest);
+
+    Ok(result)
 }
 
 ///
@@ -3978,6 +4744,21 @@ mod tests {
         assert!(service
             .ensure_operation_scope(&auth, McpOperation::GetPage)
             .is_ok());
+        assert_eq!(
+            McpOperation::ListPrompts.required_scope(),
+            BearerScope::Read,
+        );
+        assert!(!McpOperation::ListPrompts.is_write());
+        assert_eq!(
+            McpOperation::ListResources.required_scope(),
+            BearerScope::Read,
+        );
+        assert!(!McpOperation::ListResources.is_write());
+        assert_eq!(
+            McpOperation::GetPrompt.required_scope(),
+            BearerScope::Read,
+        );
+        assert!(!McpOperation::GetPrompt.is_write());
         assert!(service
             .ensure_operation_scope(&auth, McpOperation::CreatePage)
             .is_ok());
@@ -3990,6 +4771,252 @@ mod tests {
         assert!(service
             .ensure_operation_scope(&auth, McpOperation::DeletePage)
             .is_ok());
+    }
+
+    ///
+    /// prompts/getが要求引数の必須性、名前、型を
+    /// 決定済み規則で検証することを確認する。
+    ///
+    /// # 注記
+    /// required不足、未知引数、各非string型を拒否し、
+    /// optional未指定と未使用引数を許可する。
+    ///
+    #[test]
+    fn get_prompt_validates_argument_inputs() {
+        /*
+         * 引数定義を持つpromptとread認証文脈を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/prompts/validation",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: validate-arguments\n",
+                    "  description: validate arguments\n",
+                    "  arguments:\n",
+                    "    - name: required\n",
+                    "      description: required value\n",
+                    "      required: true\n",
+                    "    - name: optional\n",
+                    "      description: optional value\n",
+                    "    - name: unused\n",
+                    "      description: unused value\n",
+                    "---\n",
+                    "{{@required}}/{{@optional}}",
+                )
+                .to_string(),
+            )
+            .expect("create prompt failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * rmcp引数mapのキー一意性を確認する
+         */
+        let mut unique_arguments = JsonObject::new();
+        unique_arguments.insert(
+            "required".to_string(),
+            JsonValue::String("first".to_string()),
+        );
+        unique_arguments.insert(
+            "required".to_string(),
+            JsonValue::String("second".to_string()),
+        );
+        assert_eq!(unique_arguments.len(), 1);
+        assert_eq!(
+            unique_arguments
+                .get("required")
+                .and_then(JsonValue::as_str),
+            Some("second"),
+        );
+
+        /*
+         * required不足と未知引数を拒否する
+         */
+        let missing = service
+            .get_prompt(
+                &auth,
+                &manager,
+                "validate-arguments",
+                None,
+            )
+            .expect_err("required argument must be rejected");
+        assert_eq!(missing.code(), McpErrorCode::InvalidInput);
+        assert_eq!(
+            missing.message(),
+            "required prompt argument is missing: required",
+        );
+        let unknown = JsonObject::from_iter([
+            (
+                "required".to_string(),
+                JsonValue::String("value".to_string()),
+            ),
+            (
+                "unknown".to_string(),
+                JsonValue::String("secret-value".to_string()),
+            ),
+        ]);
+        let unknown_error = service
+            .get_prompt(
+                &auth,
+                &manager,
+                "validate-arguments",
+                Some(&unknown),
+            )
+            .expect_err("unknown argument must be rejected");
+        assert_eq!(
+            unknown_error.message(),
+            "unknown prompt argument: unknown",
+        );
+        assert!(!unknown_error.message().contains("secret-value"));
+
+        /*
+         * string以外の全JSON型を拒否する
+         */
+        for value in [
+            JsonValue::Null,
+            JsonValue::Bool(true),
+            JsonValue::Number(1.into()),
+            JsonValue::Array(Vec::new()),
+            JsonValue::Object(JsonObject::new()),
+        ] {
+            let arguments = JsonObject::from_iter([
+                (
+                    "required".to_string(),
+                    JsonValue::String("value".to_string()),
+                ),
+                ("optional".to_string(), value),
+            ]);
+            let error = service
+                .get_prompt(
+                    &auth,
+                    &manager,
+                    "validate-arguments",
+                    Some(&arguments),
+                )
+                .expect_err("non-string argument must be rejected");
+            assert_eq!(error.code(), McpErrorCode::InvalidInput);
+            assert_eq!(
+                error.message(),
+                "prompt argument must be a string: optional",
+            );
+        }
+
+        /*
+         * optional未指定と未使用引数を許可する
+         */
+        let arguments = JsonObject::from_iter([(
+            "required".to_string(),
+            JsonValue::String("value".to_string()),
+        )]);
+        let result = service
+            .get_prompt(
+                &auth,
+                &manager,
+                "validate-arguments",
+                Some(&arguments),
+            )
+            .expect("valid arguments must succeed");
+        assert_eq!(result.message(), "value/");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// prompts/getがplaceholderを一回だけ展開し、
+    /// 専用エスケープ規則を適用することを確認する。
+    ///
+    /// # 注記
+    /// system、Markdownコード、複数出現、不正形式、
+    /// 挿入値内placeholderを同時に検証する。
+    ///
+    #[test]
+    fn get_prompt_expands_placeholders_once() {
+        /*
+         * 展開規則を判別できるpromptを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/prompts/expansion",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: expand-arguments\n",
+                    "  description: expand arguments\n",
+                    "  system: \"System {{@value}}\"\n",
+                    "  arguments:\n",
+                    "    - name: value\n",
+                    "      description: required value\n",
+                    "      required: true\n",
+                    "    - name: optional\n",
+                    "      description: optional value\n",
+                    "---\n",
+                    "{{@value}}|{{@value}}|{{@optional}}\n",
+                    "{{@@literal}}|\\{{@value}}\n",
+                    "{{@ value }}|{{@value }}\n",
+                    "`{{@value}}`\n",
+                    "```\n{{@value}}\n```\n",
+                )
+                .to_string(),
+            )
+            .expect("create prompt failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            None,
+        );
+        let inserted = "{{@optional}}/{{macro}}/{{!macro}}";
+        let arguments = JsonObject::from_iter([(
+            "value".to_string(),
+            JsonValue::String(inserted.to_string()),
+        )]);
+
+        /*
+         * systemと本文の一回展開結果を確認する
+         */
+        let result = McpService::new()
+            .get_prompt(
+                &auth,
+                &manager,
+                "expand-arguments",
+                Some(&arguments),
+            )
+            .expect("expand prompt failed");
+        assert_eq!(
+            result.message(),
+            concat!(
+                "System {{@optional}}/{{macro}}/{{!macro}}\n\n",
+                "{{@optional}}/{{macro}}/{{!macro}}|",
+                "{{@optional}}/{{macro}}/{{!macro}}|\n",
+                "{{@literal}}|\\{{@optional}}/{{macro}}/{{!macro}}\n",
+                "{{@ value }}|{{@value }}\n",
+                "`{{@optional}}/{{macro}}/{{!macro}}`\n",
+                "```\n",
+                "{{@optional}}/{{macro}}/{{!macro}}\n",
+                "```\n",
+            ),
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
     }
 
     ///
@@ -4124,6 +5151,7 @@ mod tests {
                 &manager,
                 &fts_config,
                 "child",
+                &[FtsSearchTarget::Body],
                 Some("/mcp"),
                 Some(10),
             )
@@ -5090,6 +6118,7 @@ mod tests {
                 &manager,
                 &fts_config,
                 "keyword",
+                &[FtsSearchTarget::Headings, FtsSearchTarget::Body],
                 Some("/mcp"),
                 Some(10),
             )
@@ -5152,6 +6181,7 @@ mod tests {
                 &manager,
                 &fts_config,
                 "keyword",
+                &[FtsSearchTarget::Headings, FtsSearchTarget::Body],
                 Some("/mcp"),
                 Some(1),
             )
@@ -5159,6 +6189,166 @@ mod tests {
 
         assert_eq!(result.items().len(), 1);
         assert_eq!(result.items()[0].path(), "/mcp/high");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn search_pages_rejects_empty_targets() {
+        let (base_dir, manager) = open_test_manager();
+        let fts_config = open_test_fts_config(&base_dir);
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let service = McpService::new();
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+
+        let err = service
+            .search_pages(
+                &auth,
+                &manager,
+                &fts_config,
+                "keyword",
+                &[],
+                Some("/mcp"),
+                Some(10),
+            )
+            .expect_err("empty targets must fail");
+
+        assert_eq!(err.code(), McpErrorCode::InvalidInput);
+        assert_eq!(err.message(), "target must not be empty");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn search_pages_supports_front_matter_target() {
+        /*
+         * テスト用データベースと FTS を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        let fts_config = open_test_fts_config(&base_dir);
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/mcp/front-matter",
+                "user",
+                "---\ncustom_meta:\n  search_note: mcpfrontmattertoken\n---\nbody only\n"
+                    .to_string(),
+            )
+            .expect("create front matter page failed");
+        rebuild_test_fts_page(&manager, &fts_config, "/mcp/front-matter");
+        let service = McpService::new();
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+
+        /*
+         * front_matter 指定でのみヒットすることを検証する
+         */
+        let front_matter_result = service
+            .search_pages(
+                &auth,
+                &manager,
+                &fts_config,
+                "mcpfrontmattertoken",
+                &[FtsSearchTarget::FrontMatter],
+                Some("/mcp"),
+                Some(10),
+            )
+            .expect("front matter search pages failed");
+        let body_result = service
+            .search_pages(
+                &auth,
+                &manager,
+                &fts_config,
+                "mcpfrontmattertoken",
+                &[FtsSearchTarget::Body],
+                Some("/mcp"),
+                Some(10),
+            )
+            .expect("body search pages failed");
+
+        assert_eq!(front_matter_result.items().len(), 1);
+        assert_eq!(front_matter_result.items()[0].path(), "/mcp/front-matter");
+        assert!(body_result.items().is_empty());
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn search_pages_merges_front_matter_and_body_targets() {
+        /*
+         * テスト用データベースと FTS を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        let fts_config = open_test_fts_config(&base_dir);
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/mcp/merged-front-matter",
+                "user",
+                "---\ncustom_meta:\n  search_note: sharedmcpkeyword\n---\nbody only\n"
+                    .to_string(),
+            )
+            .expect("create merged front matter page failed");
+        manager
+            .create_page(
+                "/mcp/merged-body",
+                "user",
+                "body sharedmcpkeyword\n".to_string(),
+            )
+            .expect("create merged body page failed");
+        rebuild_test_fts_page(&manager, &fts_config, "/mcp/merged-front-matter");
+        rebuild_test_fts_page(&manager, &fts_config, "/mcp/merged-body");
+        let service = McpService::new();
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+
+        /*
+         * front_matter と body の複合指定で双方のヒットを返すことを検証する
+         */
+        let result = service
+            .search_pages(
+                &auth,
+                &manager,
+                &fts_config,
+                "sharedmcpkeyword",
+                &[FtsSearchTarget::FrontMatter, FtsSearchTarget::Body],
+                Some("/mcp"),
+                Some(10),
+            )
+            .expect("merged search pages failed");
+
+        assert_eq!(result.items().len(), 2);
+        assert!(
+            result
+                .items()
+                .iter()
+                .any(|item| item.path() == "/mcp/merged-front-matter")
+        );
+        assert!(
+            result
+                .items()
+                .iter()
+                .any(|item| item.path() == "/mcp/merged-body")
+        );
 
         fs::remove_dir_all(base_dir).expect("cleanup failed");
     }

@@ -11,7 +11,7 @@ import {
   canWriteAction,
   hasReadOnlyAttribute,
   isWriteActionDisabled,
-} from './readOnlyUi.ts';
+} from './readOnlyUi';
 
 test('hasReadOnlyAttribute は ReadOnly 属性を検出する', () => {
   assert.equal(hasReadOnlyAttribute(['NoBasicAuth', 'ReadOnly']), true);

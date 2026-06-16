@@ -41,12 +41,18 @@ pub(crate) async fn execute(
      * 既存 handler / service へ `search_pages` を橋渡しする
      */
     let result = server.with_state_read(|state| {
+        let targets = args
+            .target
+            .iter()
+            .map(|target| target.to_fts_search_target())
+            .collect::<Vec<_>>();
         Ok(handler.handle_search_pages(
             &auth,
             state.db(),
             state.fts_config(),
             address,
             &args.query,
+            &targets,
             args.prefix.as_deref(),
             args.limit,
         ))

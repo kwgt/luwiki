@@ -6,6 +6,11 @@
 ツール責務、入出力モデル、エラー分類の設計意図を整理するのに対し、
 本書は外部契約としてのツール名、入力、出力、エラー、および注記を定義する。
 
+MCP標準`prompts/list`と`prompts/get`はtoolではなく標準prompts操作である。
+promptsの外部契約は`docs/MCP_PROMPT_SPECS.md`を参照する。
+MCP標準`resources/list`と`resources/read`はtoolではなく標準resources操作である。
+resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
+
 初期版MCPの外部仕様は、`docs/REQUIREMENTS.md`、`docs/MCP_SPEC_DECISION_TASKS.md`、
 および各設計分冊で確定した内容を本書へ集約する。
 
@@ -34,8 +39,9 @@
 
 - MCP は `run` コマンドで明示的に有効化された場合のみ公開する
 - MCP は Bearer 認証を前提とし、Basic 認証は受け付けない
-- MCP は path ベースで公開し、外部へ `page_id` を露出しない
-- 認可は Bearer スコープと path prefix 制約の両方で判定する
+- 本書で定義するページtoolはpathベースで公開し、外部へ`page_id`を露出しない
+- pathベースtoolの認可はBearerスコープとpath prefix制約の両方で判定する
+- MCP promptsはread scopeを要求するが、ページ用path prefix制約を適用しない
 - 監査ログは MCP 操作および関連する認可失敗を対象として記録する
 
 ### 1.2 公開するツール
@@ -77,6 +83,22 @@
 - `internal_error`
 
 各ツール節では、必要に応じて主な発生条件を補足する。
+
+front matter 起因のwrite系失敗は`invalid_input`として扱う。
+対象は`create_page`、`update_page`、`edit_page`、`append_page`とする。
+
+### 1.5 front matter 仕様導線
+
+- `create_page`、`update_page`、`append_page` の `content` は、
+  front matter を含む raw source 全体を受け付ける
+- `initialize.instructions`は、すべてのHTTP要求でBearer認証を使用する旨を
+  案内する
+- front matter詳細仕様およびMCP prompts仕様は、
+  MCP標準resourcesの固定組み込みresourceとして参照できる
+- MCP promptsのfront matter、field、cursor、message、errorの外部契約は
+  `docs/MCP_PROMPT_SPECS.md`を参照する
+- MCP resourcesのURI、field、cursor、contents、errorの外部契約は
+  `docs/MCP_RESOURCE_SPECS.md`を参照する
 
 ---
 
@@ -428,11 +450,25 @@ properties:
 type: object
 required:
   - query
+  - target
 properties:
   query:
     description: >-
       全文検索式。
     type: string
+  target:
+    description: >-
+      検索対象一覧。少なくとも 1 件を必須とし、`headings`、`body`、`code`、
+      `front_matter` から 1 件以上を明示指定する。
+    type: array
+    minItems: 1
+    items:
+      type: string
+      enum:
+        - headings
+        - body
+        - code
+        - front_matter
   prefix:
     description: >-
       検索対象を絞り込む絶対 path prefix 。未指定時は全体検索とする。
@@ -486,6 +522,8 @@ properties:
 
 - 並び順は FTS スコア降順とする
 - 同点時は `path` 昇順で安定化する
+- 受け取った `target` 群だけを検索対象とし、複数指定時のみ結果マージを行う
+- `target` 省略時の既定値は持たず、クライアントが検索意図を明示する
 - `cursor` は持たない
 - `has_more` / `next_cursor` は持たない
 - `limit` は返却する最大件数を表す
@@ -501,6 +539,7 @@ properties:
   - `prefix` 指定時に `prefix` 自体が path prefix 制約違反
 - `invalid_input`
   - `query` が不正
+  - `target` が未指定または空
   - `prefix` が不正
   - `limit` が 1 未満または上限超過
 - `internal_error`
@@ -544,6 +583,7 @@ properties:
   content:
     description: >-
       初期 Markdown 本文。
+      front matter を含む raw source 全体を指定してよい。
     type: string
 ```
 
@@ -588,12 +628,14 @@ properties:
 - `invalid_input`
   - `path` が不正
   - `content` の指定形式が不正
+  - `content` に含まれる front matter の構文またはスキーマが不正
 - `internal_error`
   - 作成処理や内部処理で想定外の失敗が発生した
 
 #### 注記
 
 - `path` は最終作成先 path を明示する
+- front matter を含む場合、`content` は本文だけでなくページ全体の raw source を渡す
 - restore は初期版対象外であり、削除済み path の復元操作としては扱わない
 - 親 path の存在有無は初期版 MCP の追加制約とせず、既存保存系の振る舞いに従う
 
@@ -629,6 +671,7 @@ properties:
   content:
     description: >-
       更新後の Markdown 本文全体。
+      front matter を含む raw source 全体を指定してよい。
     type: string
 ```
 
@@ -675,12 +718,14 @@ properties:
 - `invalid_input`
   - `path` が不正
   - `content` の指定形式が不正
+  - `content` に含まれる front matter の構文またはスキーマが不正
 - `internal_error`
   - 更新処理や内部処理で想定外の失敗が発生した
 
 #### 注記
 
 - 初期版では amend 指定引数は公開せず、通常更新として扱う
+- front matter を含む場合、`content` は本文だけでなくページ全体の raw source を渡す
 - path 自体は変更せず、結果 `path` は解決後の current path を返す
 
 <a id="tool-edit-page"></a>
@@ -982,6 +1027,7 @@ properties:
   content:
     description: >-
       末尾へ追記する文字列。全文置換ではなく差分文字列を表す。
+      先頭 front matter を含む既存 raw source に対する本文末尾追記として扱う。
     type: string
 ```
 
@@ -1033,6 +1079,7 @@ properties:
   - `path` が不正
   - `content` が空
   - `content` の指定形式が不正
+  - 追記後の raw source に含まれる front matter の構文またはスキーマが不正
 - `internal_error`
   - 追記処理や内部処理で想定外の失敗が発生した
 
@@ -1041,6 +1088,7 @@ properties:
 - 追記位置は常に最新本文の末尾とする
 - サーバは `content` の内部改変を原則行わず、改行自動補完も行わない
 - 行を分けて追記したい場合の改行は、クライアントが `content` に含める
+- front matter は raw source 先頭の一部として保持され、`append_page` は既存 front matter を直接編集する用途には用いない
 - amend 相当保存の可否は内部判定で決め、公開入力として amend 指定は受け付けない
 
 <a id="tool-rename-page"></a>

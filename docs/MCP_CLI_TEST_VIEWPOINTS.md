@@ -26,6 +26,8 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
   - スコープ表示
   - path prefix 制約
   - ユーザ属性モデルとの責務分離
+- `docs/MCP_RESOURCE_SPECS.md`
+  - resource派生データと再構成、resources capability、通知非対応
 
 ## 2. 観点の使い方
 
@@ -225,3 +227,104 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
 - `user info` の観点を、属性集合、`BASIC AUTH`、token 系との責務分離まで含めて定義した
 - 分解スコープ表示の観点を、`SCOPE` 欄の `rcdua`、`write` 互換、保存値と実効権限の分離まで含めて定義した
 - path 制約表示の観点を、`PATH` 欄の `*` / `L`、詳細 prefix 群の `token info` への責務分離まで含めて定義した
+
+## 12. front matter派生データ再構成の観点
+
+### 12.1 CLI入力
+
+1. `derived rebuild --target templates`を受理すること
+2. `derived rebuild --target prompts`を受理すること
+3. `derived rebuild --target resources`を受理すること
+4. `derived rebuild --target all`を受理すること
+5. `--target`省略を拒否すること
+6. 未知のtargetを拒否すること
+7. prompts targetでは`template_root`を使用しないこと
+8. resources targetでは`template_root`を使用しないこと
+9. all targetでは`template_root`をtemplates側のlegacy fallbackだけに使用すること
+
+### 12.2 prompts再構成
+
+1. prompt候補、prompt用MCP primitive名前索引、名前索引readiness version 1を
+   単一redb write transactionで再構成すること
+2. `PAGE_INDEX_TABLE`に存在する非draftページのlatest sourceを使用すること
+3. soft delete済みpromptを候補と名前予約の再構成対象に含めること
+4. draft、通常ページ、templateページ、resourceページをprompt候補から除外すること
+5. front matter内のargumentsの順序と`required`の三状態を候補へ維持すること
+6. 同じページ正本状態で再実行しても同じ候補、名前索引、
+   readinessを生成すること
+7. 成功時に`rebuilt prompt candidates: <件数>`を表示すること
+8. 表示件数にsoft delete済み候補を含め、draftと非prompt用途を含めないこと
+
+### 12.3 resources再構成
+
+1. resource候補、resource URI逆引き索引、URI索引readiness version 1を
+   単一redb write transactionで再構成すること
+2. `PAGE_INDEX_TABLE`に存在する非draftページのlatest sourceを使用すること
+3. soft delete済みresourceを候補とURI予約の再構成対象に含めること
+4. draft、通常ページ、templateページ、promptページをresource候補から除外すること
+5. 明示`mcp.resource_id`がある場合はその値をresource IDとして使用すること
+6. `mcp.resource_id`未指定時はcurrent path由来resource IDを使用すること
+7. resource ID重複を検出し、再構成失敗として扱うこと
+8. 同じページ正本状態で再実行しても同じ候補、URI逆引き索引、
+   readinessを生成すること
+9. 成功時に`rebuilt resource candidates: <件数>`を表示すること
+10. 表示件数にsoft delete済み候補を含め、draftと非resource用途を含めないこと
+11. resources targetでは`template_root`を使用しないこと
+
+### 12.4 all再構成
+
+1. M4時点ではtemplates、prompts、resourcesを再構成対象とすること
+2. templates、prompts、resourcesの順で対象別件数を表示すること
+3. templates、prompts、resourcesを単一redb write transactionで更新すること
+4. template候補の収集・検証後にprompt候補と名前索引を収集・検証し、
+   さらにresource候補とURI逆引き索引を収集・検証したうえで、
+   全対象の検証成功後に各テーブルを置換すること
+5. templates、prompts、resourcesのいずれかが失敗した場合、
+   他対象を含めてcommitしないこと
+6. `template_root`由来候補とfront matter由来候補の既存優先規則を維持すること
+7. `template_root`をpromptsおよびresourcesへ使用しないこと
+8. Tantivyなどredb外の派生データを変更しないこと
+
+### 12.5 原子性と失敗時保持
+
+次の失敗を非ゼロ終了として上位へ伝播すること。
+
+1. front matter解析失敗
+2. latest source欠落
+3. prompt primitive内の名前重複
+4. resource ID重複
+5. DB読取、書込み、commit失敗
+
+失敗時は次を確認する。
+
+1. prompts targetでは既存のprompt候補、prompt用名前索引、
+   readinessを一括して維持すること
+2. resources targetでは既存のresource候補、resource URI逆引き索引、
+   URI索引readinessを一括して維持すること
+3. all targetでは既存のtemplate候補、prompt候補、prompt用名前索引、
+   resource候補、resource URI逆引き索引、各readinessを維持すること
+4. ページ正本を変更しないこと
+5. 一部だけ置換された派生テーブルを公開しないこと
+
+### 12.6 capabilityと通知
+
+1. prompt再構成後のreadiness version 1に基づいてprompts capabilityを
+   公開できること
+2. readinessなし、または未知versionではprompts capabilityを公開しないこと
+3. resource再構成後のURI索引readiness version 1に基づいてresources capabilityを
+   公開できること
+4. readinessなし、または未知versionではresources capabilityを公開しないこと
+5. 再構成から`prompts.listChanged`通知および`resources.listChanged`通知を送信しないこと
+6. 再構成後の候補を次回の`prompts/list`または`resources/list`取得で確認できること
+7. prompts/resources readinessの状態にかかわらず既存tools capabilityを維持すること
+
+### 12.7 実施レイヤ分割
+
+- CLI引数解析テスト
+  - targetの受理、省略、未知値
+- database単体テスト
+  - 対象抽出、名前重複、resource ID重複、原子性、冪等性、失敗時保持
+- CLI結合テスト
+  - target別の成功表示、非ゼロ終了、`template_root`の適用範囲
+- MCP transport回帰テスト
+  - readinessに応じたcapability、通知非送信、既存toolsの維持

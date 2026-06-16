@@ -14,8 +14,14 @@ mod entries;
 mod init;
 mod link_refs;
 mod manager;
+mod primitive_names;
+mod prompt_candidates;
+mod resource_candidates;
+pub(crate) mod resource_list;
+mod resource_uris;
 mod schema;
 pub(crate) mod short_id;
+mod template_candidates;
 mod txn_helpers;
 
 #[allow(unused_imports)]
@@ -24,6 +30,12 @@ pub(crate) use entries::{
     AssetMoveResult,
     LockListEntry,
     PageListEntry,
+    PromptSourceEntry,
+    ResourceCandidateListEntry,
+    ResourceListEntry,
+    ResourceListSource,
+    ResourceSourceLookupResult,
+    TemplateCandidateListEntry,
 };
 pub(crate) use manager::DatabaseManager;
 pub(crate) use manager::bearer_tokens::VerifyBearerTokenFailureReason;

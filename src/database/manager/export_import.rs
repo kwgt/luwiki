@@ -30,10 +30,19 @@ use crate::database::schema::{
     USER_ID_TABLE,
     USER_INFO_TABLE,
 };
+use crate::database::primitive_names::{
+    remove_mcp_primitive_names_by_page_ids_in_txn,
+    sync_mcp_primitive_name_for_source_in_txn,
+};
+use crate::database::resource_uris::{
+    remove_resource_uris_by_page_ids_in_txn,
+    sync_resource_uri_for_source_in_txn,
+};
 use crate::database::txn_helpers::{delete_draft_in_txn, delete_page_hard_in_txn};
 use crate::database::types::{AssetId, AssetInfo, Id, PageId, PageIndex, PageSource, RenameInfo, UserInfo};
 use crate::export_import::MigrateExportPageSnapshot;
 use crate::export_import::model::{ExportBundle, ExportRevision, ExportRevisionRename};
+use crate::markdown_source::front_matter::validate_document_front_matter;
 
 ///
 /// export 用のページ収集結果
@@ -205,6 +214,13 @@ impl DatabaseManager {
         &self,
         bundle: &ExportBundle,
     ) -> Result<()> {
+        /*
+         * import 対象リビジョンの front matter 検証
+         */
+        for revision in &bundle.revisions {
+            validate_document_front_matter(&revision.source)?;
+        }
+
         let revision_map = build_revision_map(&bundle.revisions);
         let txn = self.db.begin_write()?;
 
@@ -287,9 +303,38 @@ impl DatabaseManager {
                 )?;
                 let _ = asset_group_table.insert(asset.page.clone(), asset.id.clone())?;
             }
+
+            for page in &bundle.pages {
+                let final_path = rebuild_absolute_path(
+                    &bundle.manifest.export_root,
+                    &page.path,
+                );
+                let revisions = revision_map
+                    .get(&page.id)
+                    .ok_or_else(|| anyhow::anyhow!("page revision missing"))?;
+                let latest = revisions
+                    .iter()
+                    .find(|revision| revision.revision == page.latest)
+                    .ok_or_else(|| anyhow::anyhow!("latest revision missing"))?;
+                sync_mcp_primitive_name_for_source_in_txn(
+                    &txn,
+                    &page.id,
+                    &latest.source,
+                )?;
+                sync_resource_uri_for_source_in_txn(
+                    &txn,
+                    &page.id,
+                    &final_path,
+                    &latest.source,
+                )?;
+            }
         }
 
         txn.commit()?;
+        let page_ids: Vec<PageId> =
+            bundle.pages.iter().map(|page| page.id.clone()).collect();
+        self.sync_resource_candidates_for_page_ids(&page_ids)?;
+
         Ok(())
     }
 
@@ -353,6 +398,18 @@ impl DatabaseManager {
                     &mut removed_asset_ids,
                 )?;
             }
+            let page_ids: Vec<PageId> = exported_pages
+                .iter()
+                .map(|page| page.page_id.clone())
+                .collect();
+            remove_mcp_primitive_names_by_page_ids_in_txn(
+                &txn,
+                &page_ids,
+            )?;
+            remove_resource_uris_by_page_ids_in_txn(
+                &txn,
+                &page_ids,
+            )?;
         }
 
         {
@@ -367,6 +424,13 @@ impl DatabaseManager {
         }
 
         txn.commit()?;
+
+        let page_ids: Vec<PageId> = exported_pages
+            .iter()
+            .map(|page| page.page_id.clone())
+            .collect();
+        self.remove_prompt_candidates_by_page_ids(&page_ids)?;
+        self.remove_resource_candidates_by_page_ids(&page_ids)?;
 
         for asset_id in removed_asset_ids {
             let _ = fs::remove_file(self.asset_file_path(&asset_id));

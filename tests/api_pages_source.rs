@@ -263,6 +263,331 @@ fn put_page_source_creates_new_revision() {
 }
 
 #[test]
+/// PUT: front matter の YAML 構文不正時に詳細付き 400 を返すことを確認する。
+fn put_page_source_rejects_invalid_front_matter_syntax() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-front-matter-syntax", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let invalid_source = "---\nwiki: [\n---\n# title\n本文";
+
+    let response = client
+        .put(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "text/markdown")
+        .body(invalid_source.to_string())
+        .send()
+        .expect("put invalid front matter syntax failed");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let value = read_json_body(response);
+
+    assert_eq!(
+        value["error"].as_str().expect("missing error"),
+        "front matter invalid"
+    );
+    assert_eq!(
+        value["kind"].as_str().expect("missing kind"),
+        "front_matter"
+    );
+    assert_eq!(
+        value["detail"]["type"].as_str().expect("missing detail.type"),
+        "syntax"
+    );
+    assert!(
+        value["detail"]["line"]
+            .as_u64()
+            .expect("missing detail.line")
+            > 0
+    );
+    assert!(
+        value["detail"]["column"]
+            .as_u64()
+            .expect("missing detail.column")
+            > 0
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT: front matter のトップレベル構造不正時に詳細付き 400 を返すことを確認する。
+fn put_page_source_rejects_invalid_front_matter_top_level() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-front-matter-top-level", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let invalid_source = "---\n- item\n---\n# title\n本文";
+
+    let response = client
+        .put(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "text/markdown")
+        .body(invalid_source.to_string())
+        .send()
+        .expect("put invalid front matter top-level failed");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let value = read_json_body(response);
+
+    assert_eq!(
+        value["error"].as_str().expect("missing error"),
+        "front matter invalid"
+    );
+    assert_eq!(
+        value["kind"].as_str().expect("missing kind"),
+        "front_matter"
+    );
+    assert_eq!(
+        value["detail"]["type"].as_str().expect("missing detail.type"),
+        "validation"
+    );
+    assert_eq!(
+        value["detail"]["property_path"]
+            .as_str()
+            .expect("missing detail.property_path"),
+        "$"
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT: custom_meta があっても既存 wiki validation の property_path を維持することを確認する。
+fn put_page_source_keeps_wiki_validation_with_custom_meta() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-front-matter-custom-meta-wiki-error", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let invalid_source = [
+        "---",
+        "wiki:",
+        "  tags:",
+        "    - rust lang",
+        "custom_meta:",
+        "  project: alpha",
+        "---",
+        "# title",
+        "本文",
+    ]
+    .join("\n");
+
+    let response = client
+        .put(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "text/markdown")
+        .body(invalid_source)
+        .send()
+        .expect("put invalid custom_meta wiki source failed");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let value = read_json_body(response);
+    assert_eq!(
+        value["detail"]["property_path"]
+            .as_str()
+            .expect("missing detail.property_path"),
+        "wiki.tags[0]"
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT: custom_meta 自身の validation error が既存 front matter 応答形式と競合しないことを確認する。
+fn put_page_source_reports_custom_meta_validation_without_conflict() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-front-matter-custom-meta-error", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let invalid_source = [
+        "---",
+        "custom_meta: tagged",
+        "---",
+        "# title",
+        "本文",
+    ]
+    .join("\n");
+
+    let response = client
+        .put(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "text/markdown")
+        .body(invalid_source)
+        .send()
+        .expect("put invalid custom_meta source failed");
+
+    assert_eq!(response.status().as_u16(), 400);
+
+    let value = read_json_body(response);
+    assert_eq!(
+        value["kind"].as_str().expect("missing kind"),
+        "front_matter"
+    );
+    assert_eq!(
+        value["detail"]["type"].as_str().expect("missing detail.type"),
+        "validation"
+    );
+    assert_eq!(
+        value["detail"]["property_path"]
+            .as_str()
+            .expect("missing detail.property_path"),
+        "custom_meta"
+    );
+    assert_eq!(
+        value["detail"]["message"]
+            .as_str()
+            .expect("missing detail.message"),
+        "custom_meta must be object"
+    );
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT + GET: custom_meta を含む front matter を保存し再読込できることを確認する。
+fn put_page_source_round_trips_front_matter_with_custom_meta() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(&client, &base_url, "/put-front-matter-custom-meta", "body");
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let source = [
+        "---",
+        "wiki:",
+        "  tags:",
+        "    - rust",
+        "custom_meta:",
+        "  project: alpha",
+        "  priority: 3",
+        "  flags:",
+        "    reviewed: true",
+        "---",
+        "# title",
+        "本文",
+    ]
+    .join("\n");
+
+    let response = client
+        .put(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "text/markdown")
+        .body(source.clone())
+        .send()
+        .expect("put custom_meta source failed");
+    assert_eq!(response.status().as_u16(), 204);
+
+    let response = client
+        .get(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get custom_meta source failed");
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(response.text().expect("read body failed"), source);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+/// PUT + GET: wiki / mcp / custom_meta を同時に含む front matter を保存し再読込できることを確認する。
+fn put_page_source_round_trips_front_matter_with_builtin_namespaces_and_custom_meta() {
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir);
+    let server = ServerGuard::start(port, &db_path, &assets_dir);
+    let (api_base_url, client) = wait_for_server_with_scheme(port, server.stderr_path());
+
+    let base_url = format!("{}/pages", api_base_url);
+    let page_id = create_page(
+        &client,
+        &base_url,
+        "/put-front-matter-builtin-and-custom-meta",
+        "body",
+    );
+    let url = format!("{}/{}/source", base_url, page_id);
+
+    let source = [
+        "---",
+        "wiki:",
+        "  tags:",
+        "    - rust",
+        "    - search",
+        "mcp:",
+        "  primitive: prompt",
+        "  name: summarize",
+        "  description: summarize current page",
+        "  system: keep concise",
+        "  arguments:",
+        "    - name: target",
+        "      description: page path",
+        "      required: true",
+        "custom_meta:",
+        "  project: alpha",
+        "  owner: docs",
+        "---",
+        "# title",
+        "本文",
+    ]
+    .join("\n");
+
+    let response = client
+        .put(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "text/markdown")
+        .body(source.clone())
+        .send()
+        .expect("put builtin namespaces with custom_meta source failed");
+    assert_eq!(response.status().as_u16(), 204);
+
+    let response = client
+        .get(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("get builtin namespaces with custom_meta source failed");
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(response.text().expect("read body failed"), source);
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
 /// PUT: Bearer read は拒否され、write は更新できることを確認する。
 fn put_page_source_enforces_bearer_read_and_write_scopes() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
@@ -742,10 +1067,23 @@ fn parse_lock_header(response: &reqwest::blocking::Response) -> Option<String> {
 /// 理由メッセージ
 ///
 fn read_error_reason(response: reqwest::blocking::Response) -> String {
-    let body = response.text().expect("read error body failed");
-    let value: Value = serde_json::from_str(&body).expect("parse error body failed");
+    let value = read_json_body(response);
     value["reason"]
         .as_str()
         .expect("missing reason")
         .to_string()
+}
+
+///
+/// JSON レスポンス本文をパースする
+///
+/// # 引数
+/// * `response` - レスポンス
+///
+/// # 戻り値
+/// JSON 値
+///
+fn read_json_body(response: reqwest::blocking::Response) -> Value {
+    let body = response.text().expect("read error body failed");
+    serde_json::from_str(&body).expect("parse json body failed")
 }

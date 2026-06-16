@@ -18,7 +18,7 @@ use super::model::ExportBundle;
 use super::policy::{ExportImportPolicy, PlacementRule};
 use super::validate::ValidatedImportBundle;
 use crate::database::DatabaseManager;
-use crate::database::types::{AssetId, UserId};
+use crate::database::types::{AssetId, PageId, UserId};
 
 ///
 /// import 反映の入口
@@ -52,7 +52,19 @@ pub(crate) fn apply_import(
      */
     let staged_assets = stage_asset_blobs(db, &bundle)?;
     match db.insert_import_bundle(&bundle) {
-        Ok(()) => commit_staged_assets(db, staged_assets),
+        Ok(()) => {
+            commit_staged_assets(db, staged_assets)?;
+
+            /*
+             * import対象ページのprompt候補を同期する
+             */
+            let page_ids: Vec<PageId> = bundle
+                .pages
+                .iter()
+                .map(|page| page.id.clone())
+                .collect();
+            db.sync_prompt_candidates_for_page_ids(&page_ids)
+        }
         Err(err) => {
             discard_staged_assets(db, staged_assets);
             Err(err)
@@ -374,6 +386,130 @@ mod tests {
         fs::remove_dir_all(base_dir).expect("cleanup failed");
     }
 
+    ///
+    /// 複数ページのimport後同期がprompt候補だけを
+    /// 生成することを確認する。
+    ///
+    /// # 注記
+    /// 低水準DB投入後にpromptページと通常ページを
+    /// まとめて同期する。
+    ///
+    #[test]
+    fn sync_imported_page_ids_builds_prompt_candidates() {
+        /*
+         * promptページと通常ページを含むbundleを準備する
+         */
+        let (base_dir, db_path, asset_path) = prepare_test_dirs();
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        let mut bundle = build_backup_bundle();
+        let prompt_id = bundle.pages[0].id.clone();
+        let user_id = bundle.users[0].id.clone();
+        let normal_id = PageId::new();
+        let timestamp = Local::now();
+        bundle.revisions[0].source =
+            prompt_source("imported", "import description");
+        bundle.pages.push(ExportPage {
+            id: normal_id.clone(),
+            path: "normal".to_string(),
+            latest: 1,
+            earliest: 1,
+            rename_revisions: Some(vec![1]),
+        });
+        bundle.revisions.push(ExportRevision {
+            page: normal_id.clone(),
+            revision: 1,
+            timestamp,
+            user: user_id,
+            rename: None,
+            source: "# normal".to_string(),
+        });
+        bundle.sync_manifest_counts();
+
+        /*
+         * 低水準投入後にimport対象ページを同期する
+         */
+        manager
+            .insert_import_bundle(&bundle)
+            .expect("insert import bundle failed");
+        manager
+            .sync_prompt_candidates_for_page_ids(&[])
+            .expect("sync empty page IDs failed");
+        manager
+            .sync_prompt_candidates_for_page_ids(&[
+                prompt_id.clone(),
+                normal_id.clone(),
+            ])
+            .expect("sync imported pages failed");
+
+        /*
+         * promptページだけに候補が生成されたことを確認する
+         */
+        let candidate = manager
+            .get_prompt_candidate_by_page_id(&prompt_id)
+            .expect("get prompt candidate failed")
+            .expect("prompt candidate missing");
+        assert_eq!(candidate.name(), "imported");
+        assert_eq!(candidate.description(), "import description");
+        assert!(
+            manager
+                .get_prompt_candidate_by_page_id(&normal_id)
+                .expect("get normal candidate failed")
+                .is_none()
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// apply_import完了後にprompt候補が
+    /// 自動同期されることを確認する。
+    ///
+    /// # 注記
+    /// promptページを持つbackup bundleを検証してimportする。
+    ///
+    #[test]
+    fn apply_import_auto_syncs_prompt_candidate() {
+        /*
+         * promptページを含む検証済みbundleを準備する
+         */
+        let (base_dir, db_path, asset_path) = prepare_test_dirs();
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        let policy = ExportImportPolicy::backup();
+        let mut bundle = build_backup_bundle();
+        let page_id = bundle.pages[0].id.clone();
+        bundle.revisions[0].source =
+            prompt_source("imported", "import description");
+        let validated = validate_import(
+            &manager,
+            &policy,
+            &[],
+            false,
+            false,
+            bundle,
+        )
+        .expect("validate import failed");
+
+        /*
+         * importを適用する
+         */
+        apply_import(&manager, &policy, &[], validated)
+            .expect("apply import failed");
+
+        /*
+         * import完了後のprompt候補を確認する
+         */
+        let candidate = manager
+            .get_prompt_candidate_by_page_id(&page_id)
+            .expect("get prompt candidate failed")
+            .expect("prompt candidate missing");
+        assert_eq!(candidate.name(), "imported");
+        assert_eq!(candidate.description(), "import description");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
     #[test]
     fn apply_import_relocates_migrate_bundle_and_applies_user_map() {
         let (base_dir, db_path, asset_path) = prepare_test_dirs();
@@ -570,6 +706,32 @@ mod tests {
                 relocate_prefix: None,
             },
         }
+    }
+
+    ///
+    /// テスト用promptページソースを生成する。
+    ///
+    /// # 引数
+    /// * `name` - prompt名
+    /// * `description` - prompt説明
+    ///
+    /// # 戻り値
+    /// front matterと本文を含むページソースを返す。
+    ///
+    fn prompt_source(name: &str, description: &str) -> String {
+        format!(
+            concat!(
+                "---\n",
+                "mcp:\n",
+                "  primitive: prompt\n",
+                "  name: {}\n",
+                "  description: {}\n",
+                "---\n",
+                "本文",
+            ),
+            name,
+            description,
+        )
     }
 
     fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {

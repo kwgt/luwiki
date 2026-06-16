@@ -12,6 +12,7 @@ pub(crate) mod database;
 pub(crate) mod export_import;
 pub(crate) mod fts;
 pub(crate) mod http_server;
+pub(crate) mod markdown_source;
 pub(crate) mod mcp;
 pub(crate) mod rest_api;
 

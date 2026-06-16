@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "skipLibCheck": true,
+    "outDir": "./.tmp-test",
+    "rootDir": "./src",
+    "noEmit": false
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.d.ts"]
+}

@@ -1,12 +1,20 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import {
   autocompletion,
-  completeFromList,
-  type CompletionSource,
-  snippetCompletion,
 } from '@codemirror/autocomplete';
-import { HighlightStyle, LanguageDescription, LanguageSupport, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
+import {
+  HighlightStyle,
+  LanguageDescription,
+  LanguageSupport,
+  StreamLanguage,
+  foldGutter,
+  foldKeymap,
+  foldService,
+  indentService,
+  syntaxHighlighting,
+} from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
+import { yamlFrontmatter } from '@codemirror/lang-yaml';
 import { powerShell } from '@codemirror/legacy-modes/mode/powershell';
 import { ruby } from '@codemirror/legacy-modes/mode/ruby';
 import { python } from '@codemirror/lang-python';
@@ -29,6 +37,15 @@ import { emacs } from '@replit/codemirror-emacs';
 import { csharp } from '@replit/codemirror-lang-csharp';
 import { vim } from '@replit/codemirror-vim';
 import { vscodeKeymap } from '@replit/codemirror-vscode-keymap';
+import { frontMatterCompletionSource } from './frontMatterCompletion';
+import { getFrontMatterFoldRange } from './frontMatterFold';
+import {
+  getFrontMatterIndentation,
+  getFrontMatterIndentationForContext,
+  indentFrontMatterLess,
+  indentFrontMatterMore,
+} from './frontMatterIndent';
+import { mermaidCompletionSource } from './mermaidCompletion';
 import { wikiLinkExtension } from './markdown/wikiLinkExtension';
 
 export type EditorKeymap = 'default' | 'vim' | 'emacs' | 'vscode';
@@ -144,28 +161,6 @@ function parseFenceInfo(text: string): { marker: string; lang: string } | null {
   return { marker, lang };
 }
 
-function isMermaidFenceOpen(state: EditorState, pos: number): boolean {
-  let inMermaid = false;
-  let fenceMarker = '';
-  const targetLine = state.doc.lineAt(pos).number;
-  for (let lineNo = 1; lineNo <= targetLine; lineNo += 1) {
-    const line = state.doc.line(lineNo);
-    const info = parseFenceInfo(line.text);
-    if (!inMermaid) {
-      if (info?.lang === 'mermaid') {
-        inMermaid = true;
-        fenceMarker = info.marker;
-      }
-      continue;
-    }
-    if (info && info.marker[0] === fenceMarker[0] && info.marker.length >= fenceMarker.length) {
-      inMermaid = false;
-      fenceMarker = '';
-    }
-  }
-  return inMermaid;
-}
-
 function buildMermaidDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   let inMermaid = false;
@@ -250,51 +245,28 @@ const mermaidHighlightPlugin = ViewPlugin.fromClass(
   },
 );
 
-const mermaidCompletionList = completeFromList([
-  snippetCompletion('flowchart TD\n  A[Start] --> B[End]', {
-    label: 'flowchart template',
-    type: 'snippet',
-  }),
-  snippetCompletion('sequenceDiagram\n  participant A\n  participant B\n  A->>B: message', {
-    label: 'sequence template',
-    type: 'snippet',
-  }),
-  { label: 'flowchart', type: 'keyword' },
-  { label: 'graph', type: 'keyword' },
-  { label: 'sequenceDiagram', type: 'keyword' },
-  { label: 'classDiagram', type: 'keyword' },
-  { label: 'stateDiagram-v2', type: 'keyword' },
-  { label: 'erDiagram', type: 'keyword' },
-  { label: 'gantt', type: 'keyword' },
-  { label: 'subgraph', type: 'keyword' },
-  { label: 'participant', type: 'keyword' },
-  { label: 'linkStyle', type: 'keyword' },
-  { label: '-->', type: 'operator' },
-  { label: '==>', type: 'operator' },
-  { label: '-.->', type: 'operator' },
-]);
-
-const mermaidCompletionSource: CompletionSource = (context) => {
-  if (!isMermaidFenceOpen(context.state, context.pos)) {
-    return null;
-  }
-  return mermaidCompletionList(context);
-};
-
 export function buildBaseExtensions(): Extension[] {
   return [
     EditorView.lineWrapping,
     EditorState.tabSize.of(4),
     indentUnit.of('    '),
+    indentService.of((context, pos) => getFrontMatterIndentationForContext(context, pos)),
+    foldService.of(getFrontMatterFoldRange),
+    foldGutter({
+      openText: "\u25BE",
+      closedText: "\u25B8"
+    }),
     history(),
     search(),
     highlightSelectionMatches(),
-    markdown({
-      codeLanguages,
-      extensions: [wikiLinkExtension],
+    yamlFrontmatter({
+      content: markdown({
+        codeLanguages,
+        extensions: [wikiLinkExtension],
+      }),
     }),
     autocompletion({
-      override: [mermaidCompletionSource],
+      override: [frontMatterCompletionSource, mermaidCompletionSource],
     }),
     mermaidHighlightPlugin,
     baseTheme,
@@ -319,7 +291,13 @@ export function buildThemeExtension(theme: EditorTheme): Extension {
 }
 
 export function buildKeymapExtension(keymapName: EditorKeymap): Extension {
-  const commonKeymaps = [indentWithTab, ...searchKeymap, ...historyKeymap];
+  const commonKeymaps = [
+    { key: 'Tab', run: indentFrontMatterMore, shift: indentFrontMatterLess },
+    indentWithTab,
+    ...foldKeymap,
+    ...searchKeymap,
+    ...historyKeymap,
+  ];
   if (keymapName === 'vim') {
     return [vim(), keymap.of(commonKeymaps)];
   }
@@ -327,7 +305,7 @@ export function buildKeymapExtension(keymapName: EditorKeymap): Extension {
     return [emacs(), keymap.of(commonKeymaps)];
   }
   if (keymapName === 'vscode') {
-    return keymap.of([...vscodeKeymap, ...commonKeymaps]);
+    return keymap.of([...commonKeymaps, ...vscodeKeymap]);
   }
   return keymap.of([...commonKeymaps, ...defaultKeymap]);
 }

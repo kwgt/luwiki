@@ -1958,6 +1958,590 @@ impl Value for PageSource {
 }
 
 ///
+/// テンプレート候補派生データ
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) enum TemplateCandidateSource {
+    /// front matter 由来候補
+    FrontMatter,
+
+    /// legacy template_root 由来候補
+    LegacyTemplateRoot,
+}
+
+impl Default for TemplateCandidateSource {
+    fn default() -> Self {
+        Self::FrontMatter
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct TemplateCandidateEntry {
+    /// テンプレート表示名
+    name: String,
+
+    /// テンプレート説明
+    description: Option<String>,
+
+    /// マクロ即時展開可否
+    macro_expand: Option<bool>,
+
+    /// 候補の由来
+    #[serde(default)]
+    source: TemplateCandidateSource,
+}
+
+impl TemplateCandidateEntry {
+    ///
+    /// テンプレート候補派生データの生成
+    ///
+    /// # 引数
+    /// * `name` - テンプレート表示名
+    /// * `description` - テンプレート説明
+    /// * `macro_expand` - マクロ即時展開可否
+    ///
+    /// # 戻り値
+    /// 生成したテンプレート候補派生データを返す。
+    ///
+    pub(crate) fn new(
+        name: String,
+        description: Option<String>,
+        macro_expand: Option<bool>,
+        source: TemplateCandidateSource,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            macro_expand,
+            source,
+        }
+    }
+
+    ///
+    /// テンプレート表示名へのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレート表示名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// テンプレート説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレート説明を返す。
+    ///
+    pub(crate) fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    ///
+    /// マクロ即時展開可否へのアクセサ
+    ///
+    /// # 戻り値
+    /// マクロ即時展開可否を返す。
+    ///
+    pub(crate) fn macro_expand(&self) -> Option<bool> {
+        self.macro_expand
+    }
+
+    ///
+    /// 候補の由来へのアクセサ
+    ///
+    /// # 戻り値
+    /// 候補の由来を返す。
+    ///
+    pub(crate) fn source(&self) -> &TemplateCandidateSource {
+        &self.source
+    }
+}
+
+// Valueトレイトの実装
+impl Value for TemplateCandidateEntry {
+    type SelfType<'a> = TemplateCandidateEntry;
+    type AsBytes<'a> = Vec<u8>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("TemplateCandidateEntry")
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'b,
+    {
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
+    }
+}
+
+///
+/// MCP primitive種別
+///
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum McpPrimitiveKind {
+    /// prompt primitive
+    Prompt,
+}
+
+impl McpPrimitiveKind {
+    ///
+    /// primitive種別の固定文字列を取得する
+    ///
+    /// # 戻り値
+    /// primitive種別を表す固定文字列を返す。
+    ///
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+        }
+    }
+
+    ///
+    /// redbキー用の識別子を取得する
+    ///
+    /// # 戻り値
+    /// primitive種別に対応する固定識別子を返す。
+    ///
+    fn key_tag(self) -> u8 {
+        match self {
+            Self::Prompt => 0x01,
+        }
+    }
+
+    ///
+    /// redbキー用の識別子からprimitive種別を復元する
+    ///
+    /// # 引数
+    /// * `tag` - primitive識別子
+    ///
+    /// # 戻り値
+    /// 識別子に対応するprimitive種別を返す。
+    ///
+    fn from_key_tag(tag: u8) -> Self {
+        match tag {
+            0x01 => Self::Prompt,
+            _ => panic!("invalid MCP primitive key tag"),
+        }
+    }
+}
+
+///
+/// MCP primitive共通名前索引キー
+///
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct McpPrimitiveNameKey {
+    /// primitive種別
+    primitive: McpPrimitiveKind,
+
+    /// primitive名
+    name: String,
+}
+
+impl McpPrimitiveNameKey {
+    ///
+    /// MCP primitive共通名前索引キーを生成する
+    ///
+    /// # 引数
+    /// * `primitive` - primitive種別
+    /// * `name` - primitive名
+    ///
+    /// # 戻り値
+    /// primitive種別と名前を保持するキーを返す。
+    ///
+    pub(crate) fn new(
+        primitive: McpPrimitiveKind,
+        name: String,
+    ) -> Self {
+        Self { primitive, name }
+    }
+
+    ///
+    /// primitive種別へのアクセサ
+    ///
+    /// # 戻り値
+    /// primitive種別を返す。
+    ///
+    pub(crate) fn primitive(&self) -> McpPrimitiveKind {
+        self.primitive
+    }
+
+    ///
+    /// primitive名へのアクセサ
+    ///
+    /// # 戻り値
+    /// primitive名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+// Valueトレイトの実装
+impl Value for McpPrimitiveNameKey {
+    type SelfType<'a> = McpPrimitiveNameKey;
+    type AsBytes<'a> = Vec<u8>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("McpPrimitiveNameKey")
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        let (tag, name) = data
+            .split_first()
+            .expect("invalid empty MCP primitive name key");
+        let primitive = McpPrimitiveKind::from_key_tag(*tag);
+        let name = String::from_utf8(name.to_vec())
+            .expect("invalid UTF-8 MCP primitive name key");
+
+        Self::new(primitive, name)
+    }
+
+    fn as_bytes<'a, 'b: 'a>(
+        value: &'a Self::SelfType<'b>,
+    ) -> Self::AsBytes<'a>
+    where
+        Self: 'b,
+    {
+        let mut bytes = Vec::with_capacity(value.name.len() + 1);
+        bytes.push(value.primitive.key_tag());
+        bytes.extend_from_slice(value.name.as_bytes());
+        bytes
+    }
+}
+
+// Keyトレイトの実装
+impl Key for McpPrimitiveNameKey {
+    fn compare(a: &[u8], b: &[u8]) -> Ordering {
+        a.cmp(b)
+    }
+}
+
+///
+/// prompt 引数派生データ
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PromptArgumentEntry {
+    /// 引数名
+    name: String,
+
+    /// 引数説明
+    description: String,
+
+    /// 必須可否
+    required: Option<bool>,
+}
+
+impl PromptArgumentEntry {
+    ///
+    /// prompt 引数派生データの生成
+    ///
+    /// # 引数
+    /// * `name` - 引数名
+    /// * `description` - 引数説明
+    /// * `required` - 必須可否
+    ///
+    /// # 戻り値
+    /// 生成した prompt 引数派生データを返す。
+    ///
+    pub(crate) fn new(
+        name: String,
+        description: String,
+        required: Option<bool>,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            required,
+        }
+    }
+
+    ///
+    /// 引数名へのアクセサ
+    ///
+    /// # 戻り値
+    /// 引数名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// 引数説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// 引数説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// 必須可否へのアクセサ
+    ///
+    /// # 戻り値
+    /// 必須可否を返す。
+    ///
+    pub(crate) fn required(&self) -> Option<bool> {
+        self.required
+    }
+}
+
+///
+/// prompt 候補派生データ
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PromptCandidateEntry {
+    /// prompt 名
+    name: String,
+
+    /// prompt 説明
+    description: String,
+
+    /// system 情報
+    system: Option<String>,
+
+    /// prompt 引数
+    arguments: Vec<PromptArgumentEntry>,
+}
+
+impl PromptCandidateEntry {
+    ///
+    /// prompt 候補派生データの生成
+    ///
+    /// # 引数
+    /// * `name` - prompt 名
+    /// * `description` - prompt 説明
+    /// * `system` - system 情報
+    /// * `arguments` - prompt 引数
+    ///
+    /// # 戻り値
+    /// 生成した prompt 候補派生データを返す。
+    ///
+    pub(crate) fn new(
+        name: String,
+        description: String,
+        system: Option<String>,
+        arguments: Vec<PromptArgumentEntry>,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            system,
+            arguments,
+        }
+    }
+
+    ///
+    /// prompt 名へのアクセサ
+    ///
+    /// # 戻り値
+    /// prompt 名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// prompt 説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// prompt 説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// system 情報へのアクセサ
+    ///
+    /// # 戻り値
+    /// system 情報が存在する場合はその値を返す。
+    ///
+    pub(crate) fn system(&self) -> Option<&str> {
+        self.system.as_deref()
+    }
+
+    ///
+    /// prompt 引数へのアクセサ
+    ///
+    /// # 戻り値
+    /// prompt 引数を定義順で返す。
+    ///
+    pub(crate) fn arguments(&self) -> &[PromptArgumentEntry] {
+        &self.arguments
+    }
+}
+
+// Valueトレイトの実装
+impl Value for PromptCandidateEntry {
+    type SelfType<'a> = PromptCandidateEntry;
+    type AsBytes<'a> = Vec<u8>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("PromptCandidateEntry")
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'b,
+    {
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
+    }
+}
+
+///
+/// resource 候補派生データ
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ResourceCandidateEntry {
+    /// resource 識別子
+    resource_id: String,
+
+    /// resource 名
+    name: String,
+
+    /// resource 説明
+    description: String,
+
+    /// MIME type
+    mime_type: Option<String>,
+}
+
+impl ResourceCandidateEntry {
+    ///
+    /// resource 候補派生データの生成
+    ///
+    /// # 引数
+    /// * `resource_id` - resource 識別子
+    /// * `name` - resource 名
+    /// * `description` - resource 説明
+    /// * `mime_type` - MIME type
+    ///
+    /// # 戻り値
+    /// 生成した resource 候補派生データを返す。
+    ///
+    pub(crate) fn new(
+        resource_id: String,
+        name: String,
+        description: String,
+        mime_type: Option<String>,
+    ) -> Self {
+        Self {
+            resource_id,
+            name,
+            description,
+            mime_type,
+        }
+    }
+
+    ///
+    /// resource 識別子へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 識別子を返す。
+    ///
+    pub(crate) fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+
+    ///
+    /// resource 名へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// resource 説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// MIME type へのアクセサ
+    ///
+    /// # 戻り値
+    /// MIME type が存在する場合はその値を返す。
+    ///
+    pub(crate) fn mime_type(&self) -> Option<&str> {
+        self.mime_type.as_deref()
+    }
+}
+
+// Valueトレイトの実装
+impl Value for ResourceCandidateEntry {
+    type SelfType<'a> = ResourceCandidateEntry;
+    type AsBytes<'a> = Vec<u8>;
+
+    fn fixed_width() -> Option<usize> {
+        None
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("ResourceCandidateEntry")
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a,
+    {
+        rmp_serde::from_slice::<Self>(data)
+            .expect("invalid MessagePack packed bytes")
+    }
+
+    fn as_bytes<'a, 'b: 'a>(
+        value: &'a Self::SelfType<'b>,
+    ) -> Self::AsBytes<'a>
+    where
+        Self: 'b,
+    {
+        rmp_serde::to_vec_named(value)
+            .expect("failed to serialize to MessagePack bytes")
+    }
+}
+
+///
 /// リネーム操作情報構造体
 ///
 #[derive(Clone, Debug, Deserialize, Serialize)]

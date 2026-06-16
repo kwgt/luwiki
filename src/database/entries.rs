@@ -10,7 +10,14 @@
 
 use chrono::{DateTime, Local};
 
-use crate::database::types::{AssetId, LockToken, PageId, PageIndex, PageSource};
+use crate::database::types::{
+    AssetId,
+    LockToken,
+    PageId,
+    PageIndex,
+    PageSource,
+    PromptArgumentEntry,
+};
 
 ///
 /// page list 用のページ情報
@@ -39,6 +46,158 @@ pub(crate) struct PageListEntry {
 
     /// ロックフラグ
     locked: bool,
+}
+
+///
+/// template list 用のテンプレート候補情報
+///
+pub(crate) struct TemplateCandidateListEntry {
+    /// ページID
+    page_id: PageId,
+
+    /// current path
+    current_path: String,
+
+    /// テンプレート表示名
+    name: String,
+
+    /// テンプレート説明
+    description: Option<String>,
+
+    /// マクロ即時展開可否
+    macro_expand: Option<bool>,
+}
+
+///
+/// prompt list用のprompt候補情報
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PromptCandidateListEntry {
+    /// ページID
+    page_id: PageId,
+
+    /// current path
+    current_path: String,
+
+    /// prompt名
+    name: String,
+
+    /// prompt説明
+    description: String,
+
+    /// system情報
+    system: Option<String>,
+
+    /// prompt引数
+    arguments: Vec<PromptArgumentEntry>,
+}
+
+///
+/// prompt名から解決した最新ページソース
+///
+#[derive(Clone, Debug)]
+pub(crate) struct PromptSourceEntry {
+    /// 最新リビジョン番号
+    revision: u64,
+
+    /// 最新ページソース
+    source: String,
+}
+
+///
+/// resource 候補一覧用のページ由来resource情報
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceCandidateListEntry {
+    /// ページID
+    page_id: PageId,
+
+    /// current path
+    current_path: String,
+
+    /// resource 識別子
+    resource_id: String,
+
+    /// resource 名
+    name: String,
+
+    /// resource 説明
+    description: String,
+
+    /// MIME type
+    mime_type: String,
+}
+
+///
+/// resource URIから解決した最新ページソース
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceSourceEntry {
+    /// current path
+    current_path: String,
+
+    /// 最新リビジョン番号
+    revision: u64,
+
+    /// 最新ページソース
+    source: String,
+}
+
+///
+/// resource URIからの最新ページソース解決結果
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceSourceLookupResult {
+    /// 最新ページソースを取得できた
+    Found(ResourceSourceEntry),
+
+    /// URI索引が存在しない
+    NotFound,
+
+    /// draft、soft delete等により公開不能
+    Unavailable,
+
+    /// URI索引とページ正本の内部不整合
+    Inconsistent,
+}
+
+///
+/// resource 一覧エントリの由来
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceListSource {
+    /// 固定組み込みresource
+    Builtin,
+
+    /// ページ由来resource
+    Page,
+}
+
+///
+/// resource list用のresource情報
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceListEntry {
+    /// MCP公開URI
+    uri: String,
+
+    /// resource 名
+    name: String,
+
+    /// resource 説明
+    description: String,
+
+    /// MIME type
+    mime_type: String,
+
+    /// resourceの由来
+    source: ResourceListSource,
+
+    /// ページID
+    page_id: Option<PageId>,
+
+    /// current path
+    current_path: Option<String>,
 }
 
 ///
@@ -536,6 +695,479 @@ impl PageListEntry {
             draft,
             locked,
         }
+    }
+}
+
+impl TemplateCandidateListEntry {
+    ///
+    /// テンプレート候補一覧用の情報を生成する。
+    ///
+    /// # 引数
+    /// * `page_id` - ページID
+    /// * `current_path` - current path
+    /// * `name` - テンプレート表示名
+    /// * `description` - テンプレート説明
+    /// * `macro_expand` - マクロ即時展開可否
+    ///
+    /// # 戻り値
+    /// TemplateCandidateListEntry を返す。
+    ///
+    pub(in crate::database) fn new(
+        page_id: PageId,
+        current_path: String,
+        name: String,
+        description: Option<String>,
+        macro_expand: Option<bool>,
+    ) -> Self {
+        Self {
+            page_id,
+            current_path,
+            name,
+            description,
+            macro_expand,
+        }
+    }
+
+    ///
+    /// ページIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// ページIDを返す。
+    ///
+    pub(crate) fn page_id(&self) -> PageId {
+        self.page_id.clone()
+    }
+
+    ///
+    /// current path へのアクセサ
+    ///
+    /// # 戻り値
+    /// current path を返す。
+    ///
+    pub(crate) fn current_path(&self) -> &str {
+        &self.current_path
+    }
+
+    ///
+    /// テンプレート表示名へのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレート表示名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// テンプレート説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// テンプレート説明を返す。
+    ///
+    pub(crate) fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    ///
+    /// マクロ即時展開可否へのアクセサ
+    ///
+    /// # 戻り値
+    /// マクロ即時展開可否を返す。
+    ///
+    pub(crate) fn macro_expand(&self) -> Option<bool> {
+        self.macro_expand
+    }
+}
+
+impl PromptCandidateListEntry {
+    ///
+    /// prompt候補一覧用の情報を生成する。
+    ///
+    /// # 引数
+    /// * `page_id` - ページID
+    /// * `current_path` - current path
+    /// * `name` - prompt名
+    /// * `description` - prompt説明
+    /// * `system` - system情報
+    /// * `arguments` - prompt引数
+    ///
+    /// # 戻り値
+    /// PromptCandidateListEntryを返す。
+    ///
+    pub(in crate::database) fn new(
+        page_id: PageId,
+        current_path: String,
+        name: String,
+        description: String,
+        system: Option<String>,
+        arguments: Vec<PromptArgumentEntry>,
+    ) -> Self {
+        Self {
+            page_id,
+            current_path,
+            name,
+            description,
+            system,
+            arguments,
+        }
+    }
+
+    ///
+    /// ページIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// ページIDを返す。
+    ///
+    pub(crate) fn page_id(&self) -> PageId {
+        self.page_id.clone()
+    }
+
+    ///
+    /// current pathへのアクセサ
+    ///
+    /// # 戻り値
+    /// current pathを返す。
+    ///
+    pub(crate) fn current_path(&self) -> &str {
+        &self.current_path
+    }
+
+    ///
+    /// prompt名へのアクセサ
+    ///
+    /// # 戻り値
+    /// prompt名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// prompt説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// prompt説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// system情報へのアクセサ
+    ///
+    /// # 戻り値
+    /// system情報が存在する場合はその値を返す。
+    ///
+    pub(crate) fn system(&self) -> Option<&str> {
+        self.system.as_deref()
+    }
+
+    ///
+    /// prompt引数へのアクセサ
+    ///
+    /// # 戻り値
+    /// prompt引数を定義順で返す。
+    ///
+    pub(crate) fn arguments(&self) -> &[PromptArgumentEntry] {
+        &self.arguments
+    }
+}
+
+impl ResourceCandidateListEntry {
+    ///
+    /// ページ由来resource候補一覧用の情報を生成する。
+    ///
+    /// # 引数
+    /// * `page_id` - ページID
+    /// * `current_path` - current path
+    /// * `resource_id` - resource 識別子
+    /// * `name` - resource 名
+    /// * `description` - resource 説明
+    /// * `mime_type` - MIME type
+    ///
+    /// # 戻り値
+    /// ResourceCandidateListEntryを返す。
+    ///
+    pub(in crate::database) fn new(
+        page_id: PageId,
+        current_path: String,
+        resource_id: String,
+        name: String,
+        description: String,
+        mime_type: String,
+    ) -> Self {
+        Self {
+            page_id,
+            current_path,
+            resource_id,
+            name,
+            description,
+            mime_type,
+        }
+    }
+
+    ///
+    /// ページIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// ページIDを返す。
+    ///
+    pub(crate) fn page_id(&self) -> PageId {
+        self.page_id.clone()
+    }
+
+    ///
+    /// current pathへのアクセサ
+    ///
+    /// # 戻り値
+    /// current pathを返す。
+    ///
+    pub(crate) fn current_path(&self) -> &str {
+        &self.current_path
+    }
+
+    ///
+    /// resource 識別子へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 識別子を返す。
+    ///
+    pub(crate) fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+
+    ///
+    /// resource 名へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// resource 説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// MIME typeへのアクセサ
+    ///
+    /// # 戻り値
+    /// MIME typeを返す。
+    ///
+    pub(crate) fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+}
+
+impl ResourceSourceEntry {
+    ///
+    /// resource URIから解決した最新ページソースを生成する。
+    ///
+    /// # 引数
+    /// * `current_path` - current path
+    /// * `revision` - 最新リビジョン番号
+    /// * `source` - 最新ページソース
+    ///
+    /// # 戻り値
+    /// ResourceSourceEntryを返す。
+    ///
+    pub(in crate::database) fn new(
+        current_path: String,
+        revision: u64,
+        source: String,
+    ) -> Self {
+        Self {
+            current_path,
+            revision,
+            source,
+        }
+    }
+
+    ///
+    /// current pathへのアクセサ
+    ///
+    /// # 戻り値
+    /// current pathを返す。
+    ///
+    pub(crate) fn current_path(&self) -> &str {
+        &self.current_path
+    }
+
+    ///
+    /// 最新リビジョン番号へのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新リビジョン番号を返す。
+    ///
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    ///
+    /// 最新ページソースへのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新ページソースを返す。
+    ///
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+impl ResourceListEntry {
+    ///
+    /// resource一覧用の情報を生成する。
+    ///
+    /// # 引数
+    /// * `uri` - MCP公開URI
+    /// * `name` - resource 名
+    /// * `description` - resource 説明
+    /// * `mime_type` - MIME type
+    /// * `source` - resourceの由来
+    /// * `page_id` - ページID
+    /// * `current_path` - current path
+    ///
+    /// # 戻り値
+    /// ResourceListEntryを返す。
+    ///
+    pub(in crate::database) fn new(
+        uri: String,
+        name: String,
+        description: String,
+        mime_type: String,
+        source: ResourceListSource,
+        page_id: Option<PageId>,
+        current_path: Option<String>,
+    ) -> Self {
+        Self {
+            uri,
+            name,
+            description,
+            mime_type,
+            source,
+            page_id,
+            current_path,
+        }
+    }
+
+    ///
+    /// MCP公開URIへのアクセサ
+    ///
+    /// # 戻り値
+    /// MCP公開URIを返す。
+    ///
+    pub(crate) fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    ///
+    /// resource 名へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 名を返す。
+    ///
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    ///
+    /// resource 説明へのアクセサ
+    ///
+    /// # 戻り値
+    /// resource 説明を返す。
+    ///
+    pub(crate) fn description(&self) -> &str {
+        &self.description
+    }
+
+    ///
+    /// MIME typeへのアクセサ
+    ///
+    /// # 戻り値
+    /// MIME typeを返す。
+    ///
+    pub(crate) fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+
+    ///
+    /// resourceの由来へのアクセサ
+    ///
+    /// # 戻り値
+    /// resourceの由来を返す。
+    ///
+    pub(crate) fn source(&self) -> ResourceListSource {
+        self.source
+    }
+
+    ///
+    /// ページIDへのアクセサ
+    ///
+    /// # 戻り値
+    /// ページIDが存在する場合はその値を返す。
+    ///
+    pub(crate) fn page_id(&self) -> Option<PageId> {
+        self.page_id.clone()
+    }
+
+    ///
+    /// current pathへのアクセサ
+    ///
+    /// # 戻り値
+    /// current pathが存在する場合はその値を返す。
+    ///
+    pub(crate) fn current_path(&self) -> Option<&str> {
+        self.current_path.as_deref()
+    }
+}
+
+impl PromptSourceEntry {
+    ///
+    /// prompt名から解決した最新ページソースを生成する
+    ///
+    /// # 引数
+    /// * `revision` - 最新リビジョン番号
+    /// * `source` - 最新ページソース
+    ///
+    /// # 戻り値
+    /// prompt最新ページソースを返す。
+    ///
+    pub(in crate::database) fn new(
+        revision: u64,
+        source: String,
+    ) -> Self {
+        Self {
+            revision,
+            source,
+        }
+    }
+
+    ///
+    /// 最新リビジョン番号へのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新リビジョン番号を返す。
+    ///
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    ///
+    /// 最新ページソースへのアクセサ
+    ///
+    /// # 戻り値
+    /// 最新ページソースを返す。
+    ///
+    pub(crate) fn source(&self) -> &str {
+        &self.source
     }
 }
 

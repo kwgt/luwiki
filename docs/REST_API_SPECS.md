@@ -69,6 +69,9 @@ properties:
     type: "string"
 ```
 
+一部の API では、上記に加えて機械可読な詳細情報を返す拡張エラーボディを採用してよい。
+M1 時点では `PUT /api/pages/{page_id}/source` における front matter 起因の保存失敗がこれに該当する。
+
 ### ページパスの指定
 クエリーパラメータでページパスを渡す場合は絶対パスで渡すことを前提としている(それ以外はエラー)。
 
@@ -491,6 +494,10 @@ items:
 
 ボディには以下の内容のJSONデータが返される。
 
+テンプレート候補の一覧は、front matter の `wiki.template` から生成された
+テンプレート候補派生データと、現在のページ状態を合流した結果として返す。
+`template_root` の設定有無で機能自体を無効化しない。
+
 ```yaml
 type: "array"
 items:
@@ -506,8 +513,18 @@ items:
 
     name:
       description: >-
-        テンプレート名(パスの最終エレメント)が格納される
+        テンプレート候補の表示名が格納される
       type: "string"
+
+    description:
+      description: >-
+        テンプレート候補の補助説明が格納される
+      type: "string"
+
+    macro_expand:
+      description: >-
+        テンプレート適用時の展開挙動フラグが格納される
+      type: "boolean"
 ```
 
 リクエストに失敗したときは以下のステータスが返される。
@@ -515,10 +532,10 @@ items:
   | ステータス | 説明
   |:--|:--
   | 401 Unauthorized | 認証に失敗した
-  | 404 Not Found | テンプレート機能が無効化さている場合に返される
 
 #### 注記
   - 対象が存在しない場合は空配列を返す
+  - `description` と `macro_expand` は front matter 由来候補でのみ値を持ち、legacy な候補では未設定として扱う
 
 <a id="search-pages"></a>
 ### `GET /api/pages/search?expr={expression}[&target={targets}][&with_deleted={boolean}][&all_revision={boolean}]`
@@ -542,13 +559,14 @@ items:
 ##### targetへの検索対象の指定
 クエリーパラメータ`target`を指定する場合は、以下の文字列を","で連結したリストを指定する。また、最低限でも一つを指定する必要がある。
 
-例: `target=headings`, `target=body,code`
+例: `target=headings`, `target=body,code`, `target=front_matter`, `target=body,front_matter`
 
 | 値 | 検索対象
 |:---|:---
 |`headings` | 見出し
 |`body` | 本文
 |`code` | コードブロック
+|`front_matter` | front matter
 
 #### レスポンス
 リクエストに成功した場合、ステータスは200を返しHTTPヘッダは以下の内容が設定される。
@@ -613,6 +631,10 @@ maxItems: 100
 #### 注記
   - 検索式にマッチするページが存在しない場合は空配列を返す
   - クエリーパラメータ`target`が省略された場合は本文のみを検索対象とする(`target=body`を指定したのと同等)
+  - `front_matter` は本文とは独立した検索対象として扱う
+  - `target=body` では front matter を検索対象に含めない
+  - `target=front_matter` では `wiki` 、 `mcp` 、 `custom_meta` を含む front matter 全体を検索対象に含める
+  - `front_matter` 指定時もレスポンス構造は他の検索対象と同一とし、`text` には front matter 由来のスニペットを返してよい
   - クエリーパラメータ`with_deleted`が省略された場合は`with_deleted=false`を指定した物として扱う
   - クエリーパラメータ`all_revision`が省略された場合は`all_revision=false`を指定した物として扱う
 
@@ -695,11 +717,100 @@ maxItems: 100
   | ステータス | 説明
   |:--|:--
   | 401 Unauthorized | 認証に失敗した
-  | 400 Bad Request | `amend`に`true`または`false`以外が指定された
+  | 400 Bad Request | `amend`に`true`または`false`以外が指定された<br>front matter 起因の保存失敗が発生した
   | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>`ReadOnly` 属性により書き込み系操作が禁止されている<br>記述者以外が`amend=true`を指定した<br>ロックしたユーザと異なるユーザが更新しようとした<br>リクエストヘッダの`X-Lock-Authentication`によるロック解除認証に失敗した
   | 404 Not Found | 指定されたページIDに対応するページが存在しない
   | 410 Gone | 削除済みのページを指定した
   | 423 Locked | ロックされているページにリクエストヘッダ`X-Lock-Authentication`なしでリクエストした
+
+front matter 起因の保存失敗時は、通常の `reason` ベースのエラーボディではなく、
+以下の拡張 JSON ボディを返す。
+
+```yaml
+type: "object"
+required:
+  - error
+  - kind
+  - detail
+properties:
+  error:
+    description: >-
+      人間向けのエラー要約。
+      現在は "front matter invalid" 固定。
+    type: "string"
+
+  kind:
+    description: >-
+      エラー種別の大分類。
+      front matter 起因の保存失敗では "front_matter" 固定。
+    type: "string"
+
+  detail:
+    description: >-
+      front matter エラーの詳細情報。
+    type: "object"
+    required:
+      - type
+      - message
+    properties:
+      type:
+        description: >-
+          詳細種別。
+          YAML 構文不正では "syntax"、
+          スキーマまたは妥当性検証失敗では "validation" を返す。
+        type: "string"
+
+      message:
+        description: >-
+          詳細エラーメッセージ。
+        type: "string"
+
+      line:
+        description: >-
+          YAML 構文不正時の行番号。
+          front matter 部分だけではなく、Markdown ソース全体を 1 起点で数えた行番号として扱う。
+        type: "integer"
+
+      column:
+        description: >-
+          YAML 構文不正時の列番号。
+        type: "integer"
+
+      property_path:
+        description: >-
+          妥当性検証失敗時の対象位置を表す単一路径表現。
+          例: "$"、"wiki.tags[0]"、"mcp.primitive"。
+        type: "string"
+```
+
+構文不正時のレスポンス例:
+
+```json
+{
+  "error": "front matter invalid",
+  "kind": "front_matter",
+  "detail": {
+    "type": "syntax",
+    "line": 2,
+    "column": 7,
+    "message": "did not find expected node content"
+  }
+}
+```
+
+妥当性検証失敗時のレスポンス例:
+
+```json
+{
+  "error": "front matter invalid",
+  "kind": "front_matter",
+  "detail": {
+    "type": "validation",
+    "property_path": "$",
+    "message": "front matter top-level must be object"
+  }
+}
+```
 
 #### 注記
   - ロックされているページへの更新を行う場合、リクエストヘッダ`X-Lock-Authentication`を設定する必要がある
@@ -709,6 +820,25 @@ maxItems: 100
   - クエリーパラメータ`amend`を省略した場合は`false`が指定されたものとして処理を行う
   - `amend=true`を指定した場合はリビジョンを更新せず、最新リビジョンのソースを上書きする（誤字程度の修正用）
   - `amend=true`は最新リビジョンを記述したユーザのみが指定可能
+  - prompt front matterの`mcp.name`、`mcp.description`、`mcp.system`、
+    `mcp.arguments`、未知propertyなどの不正はfront matterの
+    validation errorとしてHTTP 400を返す
+  - prompt定義不正時も`kind = "front_matter"`、
+    `detail.type = "validation"`、`property_path`、安全なmessageを返す
+  - 同一primitive内で別ページが使用中の`mcp.name`を指定した場合は、
+    ページ正本のcommit前に拒否する
+  - primitive名前重複には専用HTTP statusを実装しておらず、
+    HTTP 500、`reason = "page update failed"`を返す
+  - primitive名前重複応答へprimitive名、prompt名、衝突先path、
+    page IDを含めず、ページ正本は変更しない
+  - prompt候補の保存後同期は、ページ正本とprimitive名前索引の
+    commit成功後に別transactionで実行する
+  - 保存後同期失敗には専用レスポンスを実装しておらず、
+    HTTP 500、`reason = "page update failed"`を返す
+  - 保存後同期失敗時は、HTTP応答だけでは正本保存済みか判別できないため、
+    クライアントはページソースを再取得して状態を確認する
+  - 保存後同期失敗時も保存済みの正本とprimitive名前索引は巻き戻さず、
+    `derived rebuild --target prompts`または`all`を復旧手段とする
 
 <a id="get-page-metadata"></a>
 ### `GET /api/pages/{page_id}/meta[?rev={revision}]`

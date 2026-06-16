@@ -4,27 +4,28 @@ import anchor from 'markdown-it-anchor';
 import taskLists from 'markdown-it-task-lists';
 import { katex } from '@mdit/plugin-katex';
 import Prism from 'prismjs';
-import 'prismjs/components/prism-markup';
-import 'prismjs/components/prism-markdown';
-import 'prismjs/components/prism-json';
-import 'prismjs/components/prism-yaml';
-import 'prismjs/components/prism-bash';
-import 'prismjs/components/prism-javascript';
-import 'prismjs/components/prism-typescript';
-import 'prismjs/components/prism-jsx';
-import 'prismjs/components/prism-tsx';
-import 'prismjs/components/prism-python';
-import 'prismjs/components/prism-rust';
-import 'prismjs/components/prism-go';
-import 'prismjs/components/prism-csharp';
-import 'prismjs/components/prism-powershell';
-import 'prismjs/components/prism-ruby';
-import 'prismjs/components/prism-toml';
-import 'prismjs/components/prism-diff';
-import 'prismjs/components/prism-css';
-import 'prismjs/components/prism-sql';
+import type Token from 'markdown-it/lib/token.mjs';
+import 'prismjs/components/prism-markup.js';
+import 'prismjs/components/prism-markdown.js';
+import 'prismjs/components/prism-json.js';
+import 'prismjs/components/prism-yaml.js';
+import 'prismjs/components/prism-bash.js';
+import 'prismjs/components/prism-javascript.js';
+import 'prismjs/components/prism-typescript.js';
+import 'prismjs/components/prism-jsx.js';
+import 'prismjs/components/prism-tsx.js';
+import 'prismjs/components/prism-python.js';
+import 'prismjs/components/prism-rust.js';
+import 'prismjs/components/prism-go.js';
+import 'prismjs/components/prism-csharp.js';
+import 'prismjs/components/prism-powershell.js';
+import 'prismjs/components/prism-ruby.js';
+import 'prismjs/components/prism-toml.js';
+import 'prismjs/components/prism-diff.js';
+import 'prismjs/components/prism-css.js';
+import 'prismjs/components/prism-sql.js';
 
-export { getMetaContent, getWikiIconUrl, getWikiTitle } from './pageMeta.ts';
+export { getMetaContent, getWikiIconUrl, getWikiTitle } from './pageMeta';
 
 export interface TocEntry {
   level: number;
@@ -37,6 +38,10 @@ export interface MarkdownRendererOptions {
     taskList?: boolean;
   };
 }
+
+type MarkdownItInstance = InstanceType<typeof MarkdownIt>;
+type MarkdownItOptions = MarkdownItInstance['options'];
+type MarkdownItRenderer = MarkdownItInstance['renderer'];
 
 const ASSET_PREFIX = 'asset:';
 
@@ -256,29 +261,29 @@ export function createMarkdownRenderer(
   const md = new MarkdownIt({
     html: false,
     linkify: true,
-    highlight(code, lang) {
-      const normalizedRaw = (lang ?? '').trim().toLowerCase();
-      if (normalizedRaw === 'mermaid') {
-        const escaped = md.utils.escapeHtml(code);
-        return `<pre class="mermaid">${escaped}</pre>`;
-      }
-
-      const normalized = normalizeLanguage(lang);
-      if (!normalized) {
-        const escaped = md.utils.escapeHtml(code);
-        return `<pre class="language-text"><code class="language-text">${escaped}</code></pre>`;
-      }
-
-      const grammar = Prism.languages[normalized];
-      if (!grammar) {
-        const escaped = md.utils.escapeHtml(code);
-        return `<pre class="language-text"><code class="language-text">${escaped}</code></pre>`;
-      }
-
-      const highlighted = Prism.highlight(code, grammar, normalized);
-      return `<pre class="language-${normalized}"><code class="language-${normalized}">${highlighted}</code></pre>`;
-    },
   });
+  md.options.highlight = (code: string, lang?: string): string => {
+    const normalizedRaw = (lang ?? '').trim().toLowerCase();
+    if (normalizedRaw === 'mermaid') {
+      const escaped: string = md.utils.escapeHtml(code);
+      return `<pre class="mermaid">${escaped}</pre>`;
+    }
+
+    const normalized = normalizeLanguage(lang);
+    if (!normalized) {
+      const escaped: string = md.utils.escapeHtml(code);
+      return `<pre class="language-text"><code class="language-text">${escaped}</code></pre>`;
+    }
+
+    const grammar = Prism.languages[normalized];
+    if (!grammar) {
+      const escaped: string = md.utils.escapeHtml(code);
+      return `<pre class="language-text"><code class="language-text">${escaped}</code></pre>`;
+    }
+
+    const highlighted = Prism.highlight(code, grammar, normalized);
+    return `<pre class="language-${normalized}"><code class="language-${normalized}">${highlighted}</code></pre>`;
+  };
 
   const taskListEnabled = options?.plugins?.taskList ?? true;
   if (taskListEnabled) {
@@ -300,7 +305,13 @@ export function createMarkdownRenderer(
   });
 
   const defaultLinkOpen = md.renderer.rules.link_open;
-  md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  md.renderer.rules.link_open = (
+    tokens: Token[],
+    idx: number,
+    options: MarkdownItOptions,
+    env: unknown,
+    self: MarkdownItRenderer,
+  ): string => {
     const href = tokens[idx].attrGet('href');
     if (href && href.startsWith(ASSET_PREFIX)) {
       const resolved = resolveAssetUrl(pagePath, href);
@@ -323,7 +334,13 @@ export function createMarkdownRenderer(
   };
 
   const defaultImage = md.renderer.rules.image;
-  md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  md.renderer.rules.image = (
+    tokens: Token[],
+    idx: number,
+    options: MarkdownItOptions,
+    env: unknown,
+    self: MarkdownItRenderer,
+  ): string => {
     const src = tokens[idx].attrGet('src');
     if (src && src.startsWith(ASSET_PREFIX)) {
       const resolved = resolveAssetUrl(pagePath, src);

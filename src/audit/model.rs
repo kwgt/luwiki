@@ -38,6 +38,18 @@ pub(crate) enum AuditOperation {
     /// ページ一覧取得
     List,
 
+    /// prompt一覧取得
+    ListPrompts,
+
+    /// prompt取得
+    GetPrompt,
+
+    /// resource一覧取得
+    ListResources,
+
+    /// resource取得
+    ReadResource,
+
     /// ページ検索
     Search,
 
@@ -66,6 +78,10 @@ impl AuditOperation {
             Self::Get => "get",
             Self::GetSection => "get_section",
             Self::List => "list",
+            Self::ListPrompts => "list_prompts",
+            Self::GetPrompt => "get_prompt",
+            Self::ListResources => "list_resources",
+            Self::ReadResource => "read_resource",
             Self::Search => "search",
             Self::Create => "create",
             Self::Update => "update",

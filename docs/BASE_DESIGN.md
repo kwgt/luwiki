@@ -167,7 +167,75 @@ struct PageSource {
 
 ---
 
-### 3.3 RenameInfo（リネーム履歴情報）
+### 3.4 テンプレート候補派生データテーブル
+
+```text
+Table<PageId, TemplateCandidateEntry>
+```
+
+- key: テンプレート候補の正本となる page_id
+- value: テンプレート候補の公開属性
+- 少なくとも `name`、`description`、`macro_expand` を保持する
+- テンプレート候補は `wiki.template` を持つページから再構成可能な派生データとする
+- 保存後の同期処理は、最新ページソースの `wiki.template` を再抽出して upsert / remove を行う
+- 一覧取得時は `PAGE_INDEX_TABLE` など既存のページ正本情報と合流して current path および削除状態を解決する
+- `template_root` 由来の legacy 候補は再構成時の入力としてのみ扱い、通常同期では正本としない
+
+---
+
+### 3.5 prompt候補派生データテーブル
+
+```text
+PROMPT_CANDIDATE_TABLE
+PageId => PromptCandidateEntry
+```
+
+- key: prompt候補の正本となるpage_id
+- value: prompt候補の一覧公開属性
+- `PromptCandidateEntry`は`name`、`description`、`system`、`arguments`を保持する
+- `arguments`は定義順を維持し、各要素は`name`、`description`、
+  `required: Option<bool>`を保持する
+- ページ本文、path、deleted、draft、latest revisionは保持しない
+- prompt候補は最新ページソースの`mcp.primitive = prompt`から再構成可能な
+  派生データとする
+- 保存後の同期処理は、最新ページソースから候補を再計算してupsert / removeを行う
+- 一覧取得時はページ正本情報と合流してcurrent pathと公開状態を解決する
+
+---
+
+### 3.6 MCP primitive共通名前索引テーブル
+
+```text
+MCP_PRIMITIVE_NAME_TABLE
+McpPrimitiveNameKey => PageId
+```
+
+- 概念上のkeyは`(primitive, name)`、valueは名前を所有するpage_idとする
+- redb上の物理キーは`[primitive識別子1byte][UTF-8 name]`とする
+- M3で使用するpromptのprimitive識別子は`0x01`とする
+- キーはcase-sensitiveなbyte列として比較し、trim、小文字化、
+  Unicode正規化を行わない
+- primitive内の名前一意性と、名前からpage_idへの逆引きを担う整合性索引とする
+- ページ正本の保存と同じwrite transactionで競合確認、旧名解放、
+  新名登録を行う
+- soft deleteでは名前予約を維持し、hard deleteで解放する
+- resourceはURIで識別するため、本索引の対象とせずM4で別途設計する
+
+構築状態は次のテーブルで管理する。
+
+```text
+MCP_PRIMITIVE_NAME_STATE_TABLE
+u8 => u8
+```
+
+- key `0`に構築済みversionを保存する
+- M3の対応済みversionは`1`とする
+- 状態マーカーなし、または未知versionの場合は構築済みと扱わない
+- version 1の状態で初期化を再実行した場合は索引を変更せず冪等に成功する
+
+---
+
+### 3.7 RenameInfo（リネーム履歴情報）
 
 ```rust
 struct RenameInfo {
@@ -197,6 +265,50 @@ struct RenameInfo {
   - rename
   - GC
   - ハードリムーブ
+- create、put、amend、append、rollbackでは、保存予定のlatest sourceから
+  MCP primitive名前キーを生成し、ページ正本と同じwrite transactionで
+  一意性確認、旧名解放、新名登録を行う
+- prompt指定解除、名前変更、別primitiveへの変更では、ページ正本と同じ
+  write transactionで旧prompt名を解放する
+- hard deleteでは、ページ正本を削除するwrite transaction内で対象ページ群の
+  MCP primitive名を解放する
+- prompt候補はページ正本のcommit成功後に別transactionで同期する
+- prompt候補同期が失敗しても、保存済みのページ正本と名前索引は巻き戻さない
+- hard delete後のprompt候補除去も、正本削除のcommit後に別transactionで行う
+- rename、soft delete、undeleteではprompt候補を更新せず、公開時に最新の
+  ページ状態と合流する
+
+### 4.1 MCP primitive名前索引の初期構築
+
+- 名前索引の構築状態が未登録の場合は、DB初期化と同じwrite transactionで
+  primitive名前索引を初期構築する
+- `PAGE_INDEX_TABLE`の非draftページを走査し、latest sourceからprompt名を抽出する
+- soft deleteページも名前予約の構築対象に含める
+- 全ページの解析とprimitive内の名前重複検査に成功した後で、
+  名前索引を置換し、構築済みversion 1を登録する
+- latest source欠落、front matter解析失敗、名前重複、DB操作失敗時は
+  索引と状態マーカーを部分commitせず、DBオープンを失敗させる
+
+### 4.2 front matter由来派生データの再構成
+
+- `derived rebuild --target prompts`は、最新ページソースからprompt候補、
+  prompt用primitive名前索引、名前索引の構築状態を同一write transactionで
+  再構成する
+- prompt再構成では、全候補の収集、front matter解析、latest source確認、
+  名前重複検査に成功した後で既存テーブルを置換する
+- soft delete済みpromptは再構成対象に含め、draft、通常ページ、
+  templateページ、resourceページはprompt候補に含めない
+- template単独再構成も、候補の収集・検証とテーブル置換を分離し、
+  単一write transactionで実行する
+- `derived rebuild --target all`は共通オーケストレーターが単一write transactionを
+  所有し、M3時点ではtemplatesとpromptsを同時に再構成する
+- `all`ではtemplate候補を収集・検証した後にprompt候補と名前索引を
+  収集・検証し、全対象の検証成功後に各テーブルを置換してcommitする
+- いずれかの対象で失敗した場合はcommitせず、既存の全対象テーブルを維持する
+- `template_root`はtemplateのlegacy fallbackにだけ使用し、promptには使用しない
+- `all`はfront matter由来のredb内派生データを対象とし、
+  Tantivyなどredb外の派生データを含めない
+- 同じページ正本状態に対する再構成は冪等とする
 
 ---
 
@@ -435,7 +547,7 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
 
   - URL 表現 /wiki/{page_path} により相対リンクの自然な解決を実現
   - Markdown レンダリングの拡張（asset マクロ等）をフロントで柔軟に対応できる
-  - サーバ側は REST API に責務を限定でき、テンプレート処理を持たない
+  - サーバ側はテンプレート候補派生データの公開・再構成を担い、閲覧時のテンプレート適用処理はフロント側に残す
   - ブラウザの「戻る」「ブックマーク」「URL共有」が自然に機能する
   - ローカル運用においても SPA 型 UI に近い軽量実装を維持できる
 

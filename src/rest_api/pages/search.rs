@@ -204,6 +204,7 @@ fn parse_target_param(
     let mut headings = false;
     let mut body = false;
     let mut code = false;
+    let mut front_matter = false;
     for item in raw.split(',') {
         let item = item.trim();
         if item.is_empty() {
@@ -217,6 +218,7 @@ fn parse_target_param(
             "headings" => headings = true,
             "body" => body = true,
             "code" => code = true,
+            "front_matter" => front_matter = true,
             _ => {
                 return Err(resp_error_json(
                     StatusCode::BAD_REQUEST,
@@ -226,7 +228,7 @@ fn parse_target_param(
         }
     }
 
-    if !headings && !body && !code {
+    if !headings && !body && !code && !front_matter {
         return Err(resp_error_json(
             StatusCode::BAD_REQUEST,
             "invalid query parameter: target",
@@ -242,6 +244,9 @@ fn parse_target_param(
     }
     if code {
         targets.push(FtsSearchTarget::Code);
+    }
+    if front_matter {
+        targets.push(FtsSearchTarget::FrontMatter);
     }
 
     Ok(targets)

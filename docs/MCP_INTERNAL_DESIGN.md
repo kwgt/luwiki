@@ -14,6 +14,10 @@ MCP機能の責務配置、公開面、認証・認可、監査ログ、path ベ
 
 - `docs/MCP_TOOL_SPECS.md`
   - MCPクライアント向けの正式なツール仕様、入力、出力、エラー契約
+- `docs/MCP_PROMPT_SPECS.md`
+  - MCP標準prompts操作の外部契約
+- `docs/MCP_RESOURCE_SPECS.md`
+  - MCP標準resources操作の外部契約
 - `docs/MCP_ARCHITECTURE_DESIGN.md`
   - 責務配置、モジュール構成、既存 REST API 層との共通化方針
 - `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`
@@ -51,6 +55,8 @@ MCP 実装設計の文書配置は、
   - 対象範囲、設計前提、全体構成、責務分割、横断責務、関連仕様への参照入口を保持する
 - 分冊
   - `docs/MCP_TOOL_SPECS.md`
+  - `docs/MCP_PROMPT_SPECS.md`
+  - `docs/MCP_RESOURCE_SPECS.md`
   - `docs/MCP_ARCHITECTURE_DESIGN.md`
   - `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`
   - `docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`
@@ -575,9 +581,12 @@ MCP の path ベース認可では、
   - prefix 指定なしの場合
     - 検索結果の各 current path を後段フィルタ対象とする
     - required scope は `read` とする
+    - 検索対象 `target` は必須とし、暗黙の全対象検索は行わない
   - prefix 指定ありの場合
     - 入力された要求 prefix 自体を先に path prefix 制約で判定する
     - その後、検索結果の各 current path を後段フィルタする
+  - `target` は `headings` / `body` / `code` / `front_matter` を明示指定可能とする
+  - 受け取った `target` 群だけを FTS へ流し、複数指定時のみスコアマージを行う
 
 list / search における「要求 prefix 自体の判定」と
 「結果 path の後段フィルタ」は、役割が異なるため両方を行う。
@@ -898,6 +907,25 @@ Streamable HTTP 前提の transport adapter 責務は、
 [MCP_INTERFACE_AND_ERROR_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_INTERFACE_AND_ERROR_DESIGN.md)
 を参照する。
 
+MCP promptsはpathベースtoolsとは独立した標準primitiveとして扱い、
+`prompts/list`と`prompts/get`を`tools/call`経由ではなく標準routingで公開する。
+promptはpathやpage IDではなく`mcp.name`で識別し、Bearerのread scopeを要求するが、
+ページ用path prefix制約は適用しない。
+
+promptsの外部契約は
+[MCP_PROMPT_SPECS.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_PROMPT_SPECS.md)
+を参照する。
+
+MCP resourcesはpathベースtoolsとは独立した標準primitiveとして扱い、
+`resources/list`と`resources/read`を`tools/call`経由ではなく標準routingで公開する。
+固定組み込みresourceはページpathに依存しない読み取り専用resourceとして扱い、
+ページ由来resourceは`mcp.primitive = resource`のfront matterから公開する。
+ページ由来resourceはBearerのread scopeとページ用path prefix制約を要求する。
+
+resourcesの外部契約は
+[MCP_RESOURCE_SPECS.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_RESOURCE_SPECS.md)
+を参照する。
+
 ## 16. MCP の入出力データモデル
 
 path ベースの共通入力モデル、ツール別入出力、
@@ -911,3 +939,59 @@ path ベースの共通入力モデル、ツール別入出力、
 ツール実行エラーの切り分けは、
 [MCP_INTERFACE_AND_ERROR_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_INTERFACE_AND_ERROR_DESIGN.md)
 を参照する。
+
+## 18. MCP promptsの内部位置付け
+
+MCP promptsは次の責務境界で実装する。
+
+1. Markdown解析層
+   - 共通front matter解析結果からprompt用途と属性を抽出する
+2. database層
+   - prompt候補、primitive名前索引、latest source取得を提供する
+3. `McpService`
+   - read scope、公開状態、cursor、引数、placeholder、message生成を処理する
+4. `McpHandler`
+   - service呼出しとprompts専用監査ログを処理する
+5. `LuwikiMcpServer`
+   - rmcp標準handlerへ接続し、rmcp公開型へ最終変換する
+
+database永続化型、LuWiki内部モデル、rmcp公開型は分離する。
+rmcpの`Prompt`、`PromptArgument`、`PromptMessage`、`ListPromptsResult`、
+`GetPromptResult`はdatabase層へ持ち込まない。
+
+prompt候補、名前索引、保存後同期、初期構築、再構成は
+`MCP_SERVICE_AND_STORAGE_DESIGN.md`を参照する。capability、標準handler、
+transport、通知非対応は`MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`を参照する。
+公開field、cursor、message、protocol errorは`MCP_PROMPT_SPECS.md`を正本とし、
+内部変換は`MCP_INTERFACE_AND_ERROR_DESIGN.md`を参照する。
+
+## 19. MCP resourcesの内部位置付け
+
+MCP resourcesは次の責務境界で実装する。
+
+1. Markdown解析層
+   - 共通front matter解析結果からresource用途と属性を抽出する
+   - `resource_id`、`name`、`description`、`mime_type`を読み取り専用モデルとして公開する
+2. database層
+   - resource候補、resource URI逆引き索引、latest source取得を提供する
+   - resource URI索引readinessを保持し、capability公開条件へ接続する
+3. `McpService`
+   - read scope、path prefix、URI検証、固定組み込みresource分岐、cursor、本文取得を処理する
+   - ページ由来resourceではlatest sourceのfront matterを再検証し、front matter除去後本文を返す
+   - MIME type未指定時に`text/markdown`を補完する
+4. `McpHandler`
+   - service呼出しとresources専用監査ログを処理する
+5. `LuwikiMcpServer`
+   - rmcp標準handlerへ接続し、rmcp公開型へ最終変換する
+
+database永続化型、LuWiki内部モデル、rmcp公開型は分離する。
+rmcpの`Resource`、`ResourceContents`、`ListResourcesResult`、
+`ReadResourceResult`はdatabase層へ持ち込まない。
+
+resource候補、URI逆引き索引、保存後同期、初期構築、再構成は
+`MCP_SERVICE_AND_STORAGE_DESIGN.md`を参照する。capability、標準handler、
+transport、通知非対応は`MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`を参照する。
+公開URI、field、cursor、contents、protocol errorは`MCP_RESOURCE_SPECS.md`を正本とし、
+内部変換は`MCP_INTERFACE_AND_ERROR_DESIGN.md`を参照する。
+
+M4ではtagsの内部設計を先行確定しない。

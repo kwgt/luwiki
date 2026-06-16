@@ -2,7 +2,7 @@ import { computed, ref, watch } from 'vue';
 import { searchPages, type SearchResult } from '../api/pages';
 import { toErrorMessage } from '../lib/pageCommon';
 
-type SearchTarget = 'headings' | 'body' | 'code';
+type SearchTarget = 'headings' | 'body' | 'code' | 'front_matter';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -11,6 +11,7 @@ export function usePageSearch() {
   const targetHeadings = ref(false);
   const targetBody = ref(true);
   const targetCode = ref(false);
+  const targetFrontMatter = ref(false);
   const withDeleted = ref(false);
   const latestOnly = ref(true);
   const results = ref<SearchResult[]>([]);
@@ -27,6 +28,9 @@ export function usePageSearch() {
     }
     if (targetCode.value) {
       list.push('code');
+    }
+    if (targetFrontMatter.value) {
+      list.push('front_matter');
     }
     return list;
   });
@@ -82,14 +86,22 @@ export function usePageSearch() {
     }
   }
 
-  watch([targetHeadings, targetBody, targetCode], () => {
+  watch([targetHeadings, targetBody, targetCode, targetFrontMatter], () => {
     if (targets.value.length === 0) {
       targetBody.value = true;
     }
   });
 
   watch(
-    [query, targetHeadings, targetBody, targetCode, withDeleted, latestOnly],
+    [
+      query,
+      targetHeadings,
+      targetBody,
+      targetCode,
+      targetFrontMatter,
+      withDeleted,
+      latestOnly,
+    ],
     () => {
       scheduleSearch();
     },
@@ -100,6 +112,7 @@ export function usePageSearch() {
     targetHeadings,
     targetBody,
     targetCode,
+    targetFrontMatter,
     withDeleted,
     latestOnly,
     results,

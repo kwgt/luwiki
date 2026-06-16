@@ -141,22 +141,84 @@ where
             let elapsed = start.elapsed().as_secs_f64();
 
             info!(
-                "{} {} \"{} {} {}\" {} {} \"{}\" \"{}\" {:.6}",
-                addr,
-                user,
-                method,
-                path,
-                version,
-                status,
-                size,
-                referer,
-                user_agent,
-                elapsed,
+                "{}",
+                access_log_line(AccessLogFields {
+                    addr: &addr,
+                    user: &user,
+                    method,
+                    path,
+                    version,
+                    status,
+                    size,
+                    referer: &referer,
+                    user_agent: &user_agent,
+                    elapsed,
+                }),
             );
 
             Ok(res)
         })
     }
+}
+
+///
+/// HTTPアクセスログ1行分の構成要素
+///
+struct AccessLogFields<'a> {
+    /// peer address
+    addr: &'a str,
+
+    /// ユーザ表示
+    user: &'a str,
+
+    /// HTTP method
+    method: &'a str,
+
+    /// path/query
+    path: &'a str,
+
+    /// HTTP version
+    version: &'a str,
+
+    /// HTTP status
+    status: u16,
+
+    /// response body size
+    size: usize,
+
+    /// Referer
+    referer: &'a str,
+
+    /// User-Agent
+    user_agent: &'a str,
+
+    /// elapsed seconds
+    elapsed: f64,
+}
+
+///
+/// HTTPアクセスログ1行分を生成する
+///
+/// # 引数
+/// * `fields` - ログ出力対象の値
+///
+/// # 戻り値
+/// ログ出力用文字列を返す。
+///
+fn access_log_line(fields: AccessLogFields<'_>) -> String {
+    format!(
+        "{} {} \"{} {} {}\" {} {} \"{}\" \"{}\" {:.6}",
+        fields.addr,
+        fields.user,
+        fields.method,
+        fields.path,
+        fields.version,
+        fields.status,
+        fields.size,
+        fields.referer,
+        fields.user_agent,
+        fields.elapsed,
+    )
 }
 
 ///
@@ -270,5 +332,36 @@ mod tests {
         let req = TestRequest::default().to_http_request();
 
         assert_eq!(extract_user(&req), "@-");
+    }
+
+    ///
+    /// アクセスログ行にAuthorization headerや
+    /// request bodyが含まれないことを確認する。
+    ///
+    #[test]
+    fn access_log_line_does_not_include_authorization_or_request_body() {
+        let token = "secret-bearer-token";
+        let request_body = "secret request body";
+        let req = TestRequest::default()
+            .insert_header((header::AUTHORIZATION, format!("Bearer {}", token)))
+            .set_payload(request_body)
+            .to_http_request();
+
+        let line = access_log_line(AccessLogFields {
+            addr: "127.0.0.1",
+            user: &extract_user(&req),
+            method: req.method().as_str(),
+            path: req.path(),
+            version: http_version(req.version()),
+            status: 200,
+            size: 0,
+            referer: &header_value(&req, header::REFERER),
+            user_agent: &header_value(&req, header::USER_AGENT),
+            elapsed: 0.001,
+        });
+
+        assert!(!line.contains(token));
+        assert!(!line.contains("Authorization"));
+        assert!(!line.contains(request_body));
     }
 }

@@ -22,6 +22,8 @@ pub(crate) mod update_page;
 use rmcp::schemars;
 use serde::Deserialize;
 
+use crate::fts::FtsSearchTarget;
+
 ///
 /// 初期実装で扱うMCPツール名
 ///
@@ -125,9 +127,45 @@ pub(crate) struct ListPagesToolArgs {
 /// `search_pages` 用の tool 引数
 ///
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SearchPagesTargetArg {
+    /// 見出し
+    Headings,
+
+    /// 本文
+    Body,
+
+    /// コードブロック
+    Code,
+
+    /// front matter
+    FrontMatter,
+}
+
+impl SearchPagesTargetArg {
+    ///
+    /// FTS 検索対象へ変換する
+    ///
+    /// # 戻り値
+    /// 対応する FTS 検索対象
+    ///
+    pub(crate) fn to_fts_search_target(&self) -> FtsSearchTarget {
+        match self {
+            Self::Headings => FtsSearchTarget::Headings,
+            Self::Body => FtsSearchTarget::Body,
+            Self::Code => FtsSearchTarget::Code,
+            Self::FrontMatter => FtsSearchTarget::FrontMatter,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SearchPagesToolArgs {
     /// 全文検索式
     pub(crate) query: String,
+
+    /// 検索対象
+    pub(crate) target: Vec<SearchPagesTargetArg>,
 
     /// 検索対象 prefix
     pub(crate) prefix: Option<String>,

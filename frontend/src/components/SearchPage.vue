@@ -12,6 +12,7 @@ const {
   targetHeadings,
   targetBody,
   targetCode,
+  targetFrontMatter,
   withDeleted,
   latestOnly,
   results,
@@ -116,6 +117,10 @@ onMounted(async () => {
             <label class="flex items-center gap-1">
               <input v-model="targetCode" class="checkbox checkbox-xs" type="checkbox" />
               <span>コードブロックを検索する</span>
+            </label>
+            <label class="flex items-center gap-1">
+              <input v-model="targetFrontMatter" class="checkbox checkbox-xs" type="checkbox" />
+              <span>front matter を検索する</span>
             </label>
           </div>
           <div class="space-y-1 text-sm">

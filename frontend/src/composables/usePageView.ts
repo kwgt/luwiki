@@ -30,7 +30,7 @@ import {
   resolvePagePath,
   toErrorMessage,
 } from '../lib/pageCommon';
-import { stripLeadingTitleHeading } from '../lib/pageContent';
+import { stripFrontMatter, stripLeadingTitleHeading } from '../lib/pageContent';
 import { tryBuildLockTokenKey } from '../lib/lockToken';
 import { buildAmendRefreshKey } from '../lib/amendRefresh';
 import { expandRenderMacros } from '../lib/macroEngine';
@@ -114,8 +114,11 @@ export function usePageView() {
   const pageCreateGuide = ref('');
   const errorMessage = ref('');
 
-  const pageTitle = computed(() => extractTitle(source.value, pagePath.value));
-  const tocEntries = computed(() => extractToc(source.value));
+  const sourceWithoutFrontMatter = computed(() => stripFrontMatter(source.value));
+  const pageTitle = computed(() =>
+    extractTitle(sourceWithoutFrontMatter.value, pagePath.value),
+  );
+  const tocEntries = computed(() => extractToc(sourceWithoutFrontMatter.value));
   const wikiUrl = computed(() => {
     if (!pagePath.value) {
       return '/wiki/';
@@ -254,7 +257,8 @@ export function usePageView() {
 
     const seq = ++renderMacroSeq;
     const md = createMarkdownRenderer(pagePath.value, '/wiki');
-    const expanded = await expandRenderMacros(source.value, {
+    const sourceBody = stripFrontMatter(source.value);
+    const expanded = await expandRenderMacros(sourceBody, {
       pagePath: pagePath.value,
       pageId: pageId.value,
     });

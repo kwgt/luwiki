@@ -35,7 +35,9 @@
 - エクスポートデータの仕様は `EXPORT_DATA_SPEC.md` に記載されています。
 - エクスポート／インポートの設計内容は `EXPORT_IMPORT_DESIGN.md` に記載されています。
 - Bearer認証の設計内容は `BEARER_AUTH_DESIGN.md` に記載されています。
-- MCPツール仕様については `MCP_TOOL_SPECS.md` に記載されています(※作成中)。
+- MCPツール仕様については `MCP_TOOL_SPECS.md` に記載されています。
+- MCP prompts仕様については `MCP_PROMPT_SPECS.md` に記載されています。
+- MCP resources仕様については `MCP_RESOURCE_SPECS.md` に記載されています。
 - MCPサーバ機能の設計内容は以下に記載されています。
     - 全体・共通設計 : `MCP_INTERNAL_DESIGN.md `
     - アーキテクチャ設計 : `MCP_ARCHITECTURE_DESIGN.md `

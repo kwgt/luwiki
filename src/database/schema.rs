@@ -16,9 +16,14 @@ use crate::database::types::{
     BearerTokenInfo,
     LockInfo,
     LockToken,
+    McpPrimitiveKind,
+    McpPrimitiveNameKey,
     PageId,
     PageIndex,
     PageSource,
+    PromptCandidateEntry,
+    ResourceCandidateEntry,
+    TemplateCandidateEntry,
     TokenId,
     TokenHash,
     UserId,
@@ -43,6 +48,41 @@ pub(in crate::database) static PAGE_INDEX_TABLE:
 pub(in crate::database) static PAGE_SOURCE_TABLE:
     TableDefinition<(PageId, u64), PageSource> =
         TableDefinition::new("page_source_table");
+
+/// テンプレート候補テーブル (ページID => テンプレート候補派生データ)
+pub(in crate::database) static TEMPLATE_CANDIDATE_TABLE:
+    TableDefinition<PageId, TemplateCandidateEntry> =
+        TableDefinition::new("template_candidate_table");
+
+/// prompt候補テーブル (ページID => prompt候補派生データ)
+pub(in crate::database) static PROMPT_CANDIDATE_TABLE:
+    TableDefinition<PageId, PromptCandidateEntry> =
+        TableDefinition::new("prompt_candidate_table");
+
+/// resource候補テーブル (ページID => resource候補派生データ)
+pub(in crate::database) static RESOURCE_CANDIDATE_TABLE:
+    TableDefinition<PageId, ResourceCandidateEntry> =
+        TableDefinition::new("resource_candidate_table");
+
+/// MCP primitive共通名前索引テーブル ((primitive, name) => ページID)
+pub(in crate::database) static MCP_PRIMITIVE_NAME_TABLE:
+    TableDefinition<McpPrimitiveNameKey, PageId> =
+        TableDefinition::new("mcp_primitive_name_table");
+
+/// MCP primitive名前索引構築状態テーブル
+pub(in crate::database) static MCP_PRIMITIVE_NAME_STATE_TABLE:
+    TableDefinition<u8, u8> =
+        TableDefinition::new("mcp_primitive_name_state_table");
+
+/// resource URI逆引き索引テーブル (resource_id => ページID)
+pub(in crate::database) static RESOURCE_URI_INDEX_TABLE:
+    TableDefinition<String, PageId> =
+        TableDefinition::new("resource_uri_index_table");
+
+/// resource URI逆引き索引構築状態テーブル
+pub(in crate::database) static RESOURCE_URI_INDEX_STATE_TABLE:
+    TableDefinition<u8, u8> =
+        TableDefinition::new("resource_uri_index_state_table");
 
 /// ロック情報テーブル (ロック解除トークン => ロック情報)
 pub(in crate::database) static LOCK_INFO_TABLE:
@@ -182,6 +222,17 @@ pub(crate) enum DbError {
 
     /// 移動先パスが不正
     InvalidMoveDestination,
+
+    /// MCP primitive名が別ページと競合した
+    McpPrimitiveNameAlreadyExists {
+        primitive: McpPrimitiveKind,
+        name: String,
+    },
+
+    /// resource URIが別ページと競合した
+    ResourceUriAlreadyExists {
+        resource_id: String,
+    },
 }
 
 impl std::fmt::Display for DbError {
@@ -212,6 +263,22 @@ impl std::fmt::Display for DbError {
             DbError::InvalidMoveDestination => {
                 write!(f, "invalid move destination")
             }
+            DbError::McpPrimitiveNameAlreadyExists {
+                primitive,
+                name,
+            } => write!(
+                f,
+                "MCP primitive name already exists: primitive={} name={}",
+                primitive.as_str(),
+                name,
+            ),
+            DbError::ResourceUriAlreadyExists {
+                resource_id,
+            } => write!(
+                f,
+                "resource URI already exists: resource_id={}",
+                resource_id,
+            ),
         }
     }
 }

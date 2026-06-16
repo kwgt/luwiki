@@ -8,6 +8,7 @@
 //! 全文検索関連処理をまとめたモジュール
 //!
 
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,11 +47,38 @@ use tantivy::{doc, Index, Score, TantivyDocument, Term};
 
 use crate::database::DatabaseManager;
 use crate::database::types::PageId;
+use crate::markdown_source::front_matter::extract_front_matter;
+
+///
+/// 全文検索インデックス固有エラー
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FtsError {
+    /// FTS index schema が現行実装と互換でない
+    IndexSchemaOutdated {
+        /// 欠落している field 名
+        missing_field: String,
+    },
+}
+
+impl fmt::Display for FtsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IndexSchemaOutdated { missing_field } => write!(
+                f,
+                "FTS index schema is outdated: missing field `{}`; run `luwiki fts rebuild`",
+                missing_field,
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FtsError {}
 
 ///
 /// 全文検索の検索対象
 ///
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[clap(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FtsSearchTarget {
@@ -62,6 +90,9 @@ pub(crate) enum FtsSearchTarget {
 
     /// コードブロック
     Code,
+
+    /// front matter
+    FrontMatter,
 }
 
 ///
@@ -135,6 +166,7 @@ pub(crate) struct FtsDocument {
     headings: String,
     body: String,
     code: String,
+    front_matter: String,
 }
 
 impl FtsDocument {
@@ -149,6 +181,7 @@ impl FtsDocument {
     /// * `headings` - 見出しテキスト
     /// * `body` - 本文テキスト
     /// * `code` - コードブロックテキスト
+    /// * `front_matter` - front matter テキスト
     ///
     /// # 戻り値
     /// 生成した文書情報
@@ -161,6 +194,7 @@ impl FtsDocument {
         headings: String,
         body: String,
         code: String,
+        front_matter: String,
     ) -> Self {
         /*
          * 文書情報を構築する
@@ -173,6 +207,7 @@ impl FtsDocument {
             headings,
             body,
             code,
+            front_matter,
         }
     }
 }
@@ -378,6 +413,24 @@ fn push_break(target: &mut String) {
 }
 
 ///
+/// front matter 検索用テキストを整形する
+///
+/// # 引数
+/// * `front_matter` - front matter YAML 本文
+///
+/// # 戻り値
+/// 検索用に整形した文字列
+///
+fn normalize_front_matter_text(front_matter: &str) -> String {
+    front_matter
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+///
 /// tantivy向けlinderaトークナイザ
 ///
 #[derive(Clone)]
@@ -528,6 +581,7 @@ struct FtsSchema {
     headings: Field,
     body: Field,
     code: Field,
+    front_matter: Field,
 }
 
 impl FtsSchema {
@@ -568,7 +622,9 @@ impl FtsSchema {
         let is_latest = builder.add_bool_field("is_latest", INDEXED | STORED);
         let headings = builder.add_text_field("headings", text_options.clone());
         let body = builder.add_text_field("body", text_options.clone());
-        let code = builder.add_text_field("code", text_options);
+        let code = builder.add_text_field("code", text_options.clone());
+        let front_matter =
+            builder.add_text_field("front_matter", text_options);
 
         let schema = builder.build();
 
@@ -584,6 +640,7 @@ impl FtsSchema {
             headings,
             body,
             code,
+            front_matter,
         })
     }
 
@@ -605,27 +662,15 @@ impl FtsSchema {
          * スキーマの取得と検証
          */
         let schema = index.schema();
-        let page_id = schema
-            .get_field("page_id")
-            .with_context(|| "page_id field missing")?;
-        let revision = schema
-            .get_field("revision")
-            .with_context(|| "revision field missing")?;
-        let deleted = schema
-            .get_field("deleted")
-            .with_context(|| "deleted field missing")?;
-        let is_latest = schema
-            .get_field("is_latest")
-            .with_context(|| "is_latest field missing")?;
-        let headings = schema
-            .get_field("headings")
-            .with_context(|| "headings field missing")?;
-        let body = schema
-            .get_field("body")
-            .with_context(|| "body field missing")?;
-        let code = schema
-            .get_field("code")
-            .with_context(|| "code field missing")?;
+        let page_id = required_schema_field(&schema, "page_id")?;
+        let revision = required_schema_field(&schema, "revision")?;
+        let deleted = required_schema_field(&schema, "deleted")?;
+        let is_latest = required_schema_field(&schema, "is_latest")?;
+        let headings = required_schema_field(&schema, "headings")?;
+        let body = required_schema_field(&schema, "body")?;
+        let code = required_schema_field(&schema, "code")?;
+        let front_matter =
+            required_schema_field(&schema, "front_matter")?;
 
         /*
          * スキーマの返却
@@ -639,8 +684,27 @@ impl FtsSchema {
             headings,
             body,
             code,
+            front_matter,
         })
     }
+}
+
+///
+/// 必須 schema field を取得する
+///
+/// # 引数
+/// * `schema` - 取得元 schema
+/// * `name` - field 名
+///
+/// # 戻り値
+/// field が存在する場合は `Field`
+///
+fn required_schema_field(schema: &Schema, name: &str) -> Result<Field> {
+    schema.get_field(name).map_err(|_| {
+        anyhow!(FtsError::IndexSchemaOutdated {
+            missing_field: name.to_string(),
+        })
+    })
 }
 
 ///
@@ -758,6 +822,7 @@ impl FtsIndexManager {
                 self.schema.headings => item.headings.clone(),
                 self.schema.body => item.body.clone(),
                 self.schema.code => item.code.clone(),
+                self.schema.front_matter => item.front_matter.clone(),
             );
             writer.add_document(doc)?;
         }
@@ -798,6 +863,7 @@ impl FtsIndexManager {
             FtsSearchTarget::Headings => self.schema.headings,
             FtsSearchTarget::Body => self.schema.body,
             FtsSearchTarget::Code => self.schema.code,
+            FtsSearchTarget::FrontMatter => self.schema.front_matter,
         };
 
         /*
@@ -933,8 +999,63 @@ impl FtsIndexManager {
                 self.schema.headings => item.headings.clone(),
                 self.schema.body => item.body.clone(),
                 self.schema.code => item.code.clone(),
+                self.schema.front_matter => item.front_matter.clone(),
             );
             writer.add_document(doc)?;
+        }
+
+        /*
+         * コミット
+         */
+        writer.commit()?;
+        Ok(())
+    }
+
+    ///
+    /// 複数ページの文書を置き換える
+    ///
+    /// # 概要
+    /// ページIDごとに既存文書を削除し、
+    /// 新しい文書群をまとめて登録する。
+    ///
+    /// # 引数
+    /// * `entries` - ページIDと登録文書一覧の組
+    ///
+    /// # 戻り値
+    /// 処理に成功した場合は`Ok(())`
+    ///
+    fn replace_pages_docs(
+        &self,
+        entries: &[(PageId, Vec<FtsDocument>)],
+    ) -> Result<()> {
+        /*
+         * ライタの準備
+         */
+        let mut writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+
+        /*
+         * 既存文書の削除と文書の追加
+         */
+        for (page_id, docs) in entries {
+            let term = Term::from_field_text(
+                self.schema.page_id,
+                &page_id.to_string(),
+            );
+            writer.delete_term(term);
+
+            for item in docs {
+                let doc = doc!(
+                    self.schema.page_id => item.page_id.to_string(),
+                    self.schema.revision => item.revision,
+                    self.schema.deleted => item.deleted,
+                    self.schema.is_latest => item.is_latest,
+                    self.schema.headings => item.headings.clone(),
+                    self.schema.body => item.body.clone(),
+                    self.schema.code => item.code.clone(),
+                    self.schema.front_matter => item.front_matter.clone(),
+                );
+                writer.add_document(doc)?;
+            }
         }
 
         /*
@@ -967,6 +1088,39 @@ impl FtsIndexManager {
             &page_id.to_string(),
         );
         writer.delete_term(term);
+
+        /*
+         * コミット
+         */
+        writer.commit()?;
+        Ok(())
+    }
+
+    ///
+    /// 複数ページの文書を削除する
+    ///
+    /// # 引数
+    /// * `page_ids` - 対象ページID一覧
+    ///
+    /// # 戻り値
+    /// 処理に成功した場合は`Ok(())`
+    ///
+    fn delete_pages_docs(&self, page_ids: &[PageId]) -> Result<()> {
+        /*
+         * ライタの準備
+         */
+        let mut writer = self.index.writer::<TantivyDocument>(50_000_000)?;
+
+        /*
+         * 文書の削除
+         */
+        for page_id in page_ids {
+            let term = Term::from_field_text(
+                self.schema.page_id,
+                &page_id.to_string(),
+            );
+            writer.delete_term(term);
+        }
 
         /*
          * コミット
@@ -1139,14 +1293,24 @@ pub(crate) fn update_pages_index(
     page_ids: &[PageId],
     deleted: bool,
 ) -> Result<()> {
+    if page_ids.is_empty() {
+        return Ok(());
+    }
+
+    /*
+     * 登録文書の構築
+     */
+    let mut entries = Vec::new();
+    for page_id in page_ids {
+        let docs = build_documents_for_page(manager, page_id, deleted)?;
+        entries.push((page_id.clone(), docs));
+    }
+
     /*
      * インデックス更新の実行
      */
-    for page_id in page_ids {
-        reindex_page(config, manager, page_id, deleted)?;
-    }
-
-    Ok(())
+    let index_manager = FtsIndexManager::open(config)?;
+    index_manager.replace_pages_docs(&entries)
 }
 
 ///
@@ -1163,14 +1327,15 @@ pub(crate) fn delete_pages_index(
     config: &FtsIndexConfig,
     page_ids: &[PageId],
 ) -> Result<()> {
+    if page_ids.is_empty() {
+        return Ok(());
+    }
+
     /*
      * インデックス削除の実行
      */
-    for page_id in page_ids {
-        delete_page_index(config, page_id)?;
-    }
-
-    Ok(())
+    let index_manager = FtsIndexManager::open(config)?;
+    index_manager.delete_pages_docs(page_ids)
 }
 
 ///
@@ -1234,6 +1399,53 @@ pub(crate) fn merge_index(config: &FtsIndexConfig) -> Result<()> {
 }
 
 ///
+/// ページソースから登録文書を構築する
+///
+/// # 引数
+/// * `page_id` - ページID
+/// * `revision` - リビジョン番号
+/// * `deleted` - 削除済みフラグ
+/// * `is_latest` - 最新リビジョン判定フラグ
+/// * `source` - ページソース
+///
+/// # 戻り値
+/// 登録対象の文書
+///
+pub(crate) fn build_document_from_source(
+    page_id: PageId,
+    revision: u64,
+    deleted: bool,
+    is_latest: bool,
+    source: &str,
+) -> Result<FtsDocument> {
+    let (front_matter, markdown_body) = match extract_front_matter(source)
+        .with_context(|| {
+            format!(
+                "extract front matter for page {} revision {}",
+                page_id, revision,
+            )
+        })? {
+        Some(extracted) => (
+            normalize_front_matter_text(extracted.front_matter()),
+            extracted.body(),
+        ),
+        None => (String::new(), source),
+    };
+    let sections = extract_markdown_sections(markdown_body);
+
+    Ok(FtsDocument::new(
+        page_id,
+        revision,
+        deleted,
+        is_latest,
+        sections.headings,
+        sections.body,
+        sections.code,
+        front_matter,
+    ))
+}
+
+///
 /// ページ単位の登録文書を構築する
 ///
 /// # 概要
@@ -1271,19 +1483,427 @@ fn build_documents_for_page(
     let latest = index.latest();
     let mut docs = Vec::new();
     for entry in manager.list_page_source_entries_by_id(page_id)? {
-        let source = entry.source().source();
-        let sections = extract_markdown_sections(&source);
         let is_latest = entry.revision() == latest;
-        docs.push(FtsDocument::new(
+        docs.push(build_document_from_source(
             entry.page_id(),
             entry.revision(),
             deleted,
             is_latest,
-            sections.headings,
-            sections.body,
-            sections.code,
-        ));
+            &entry.source().source(),
+        )?);
     }
 
     Ok(docs)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{
+        FtsIndexConfig,
+        FtsIndexManager,
+        FtsError,
+        FtsSearchTarget,
+        FtsDocument,
+        build_document_from_source,
+        delete_pages_index,
+        extract_markdown_sections,
+        normalize_front_matter_text,
+        rebuild_index,
+        search_index,
+        update_pages_index,
+    };
+    use crate::database::DatabaseManager;
+    use crate::database::types::PageId;
+    use crate::markdown_source::front_matter::extract_front_matter;
+    use tantivy::Index;
+    use tantivy::schema::{
+        INDEXED,
+        IndexRecordOption,
+        STORED,
+        STRING,
+        Schema,
+        TextFieldIndexing,
+        TextOptions,
+    };
+    use tempfile::tempdir;
+
+    #[test]
+    fn normalize_front_matter_text_keeps_custom_meta_keys_and_values() {
+        let text = normalize_front_matter_text(
+            "wiki:\n  tags:\n    - rust\ncustom_meta:\n  project: alpha\n  flags:\n    reviewed: true\n",
+        );
+
+        assert!(text.contains("custom_meta:"));
+        assert!(text.contains("project: alpha"));
+        assert!(text.contains("reviewed: true"));
+    }
+
+    #[test]
+    fn extract_markdown_sections_uses_body_without_front_matter() {
+        let source = "---\ncustom_meta:\n  project: alpha\n---\n# Heading\nbody text\n";
+        let extracted = extract_front_matter(source)
+            .expect("extract failed")
+            .expect("front matter missing");
+
+        let sections = extract_markdown_sections(extracted.body());
+
+        assert_eq!(sections.headings.trim(), "Heading");
+        assert_eq!(sections.body.trim(), "body text");
+        assert!(!sections.body.contains("project"));
+    }
+
+    #[test]
+    fn fts_document_new_stores_front_matter_text() {
+        let doc = FtsDocument::new(
+            PageId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                .expect("page id"),
+            1,
+            false,
+            true,
+            "heading".to_string(),
+            "body".to_string(),
+            "code".to_string(),
+            "custom_meta:\nproject: alpha".to_string(),
+        );
+
+        assert_eq!(doc.front_matter, "custom_meta:\nproject: alpha");
+    }
+
+    #[test]
+    fn front_matter_search_returns_snippet_from_front_matter() {
+        let dir = tempdir().expect("tempdir failed");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let docs = vec![build_document_from_source(
+            PageId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                .expect("page id"),
+            1,
+            false,
+            true,
+            "---\ncustom_meta:\n  project: alpha\n---\nbody text\n",
+        )
+        .expect("document build failed")];
+
+        rebuild_index(&config, &docs).expect("rebuild failed");
+        let results = search_index(
+            &config,
+            FtsSearchTarget::FrontMatter,
+            "alpha",
+            false,
+            false,
+        )
+        .expect("search failed");
+
+        assert_eq!(results.len(), 1);
+        let snippet = results[0].snippet();
+        assert!(snippet.contains("alpha"));
+        assert!(snippet.contains("project"));
+    }
+
+    #[test]
+    fn rebuild_index_restores_front_matter_search_target() {
+        let dir = tempdir().expect("tempdir failed");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let docs = vec![build_document_from_source(
+            PageId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FB0")
+                .expect("page id"),
+            2,
+            false,
+            true,
+            "---\nwiki:\n  tags:\n    - rust\ncustom_meta:\n  team: platform\n---\nbody text\n",
+        )
+        .expect("document build failed")];
+
+        rebuild_index(&config, &docs).expect("rebuild failed");
+        let results = search_index(
+            &config,
+            FtsSearchTarget::FrontMatter,
+            "platform",
+            false,
+            false,
+        )
+        .expect("search failed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].page_id(), docs[0].page_id.clone());
+    }
+
+    #[test]
+    fn rebuild_index_restores_front_matter_search_for_custom_meta_only_token() {
+        let dir = tempdir().expect("tempdir failed");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let docs = vec![build_document_from_source(
+            PageId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FB2")
+                .expect("page id"),
+            4,
+            false,
+            true,
+            "---\ncustom_meta:\n  search_note: rebuildfrontmattertoken\n---\nbody text\n",
+        )
+        .expect("document build failed")];
+
+        rebuild_index(&config, &docs).expect("rebuild failed");
+        let front_matter_results = search_index(
+            &config,
+            FtsSearchTarget::FrontMatter,
+            "rebuildfrontmattertoken",
+            false,
+            false,
+        )
+        .expect("front matter search failed");
+        let body_results = search_index(
+            &config,
+            FtsSearchTarget::Body,
+            "rebuildfrontmattertoken",
+            false,
+            false,
+        )
+        .expect("body search failed");
+
+        assert_eq!(front_matter_results.len(), 1);
+        assert_eq!(front_matter_results[0].page_id(), docs[0].page_id.clone());
+        assert!(body_results.is_empty());
+    }
+
+    #[test]
+    fn existing_search_targets_keep_working_after_front_matter_addition() {
+        let dir = tempdir().expect("tempdir failed");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let docs = vec![build_document_from_source(
+            PageId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FB1")
+                .expect("page id"),
+            3,
+            false,
+            true,
+            "---\ncustom_meta:\n  note: delta\n---\n# headingalpha\nbodybeta\n\n```txt\ncodegamma\n```\n",
+        )
+        .expect("document build failed")];
+
+        rebuild_index(&config, &docs).expect("rebuild failed");
+
+        let heading_results = search_index(
+            &config,
+            FtsSearchTarget::Headings,
+            "headingalpha",
+            false,
+            false,
+        )
+        .expect("heading search failed");
+        let body_results = search_index(
+            &config,
+            FtsSearchTarget::Body,
+            "bodybeta",
+            false,
+            false,
+        )
+        .expect("body search failed");
+        let code_results = search_index(
+            &config,
+            FtsSearchTarget::Code,
+            "codegamma",
+            false,
+            false,
+        )
+        .expect("code search failed");
+        let body_exclusion_results = search_index(
+            &config,
+            FtsSearchTarget::Body,
+            "delta",
+            false,
+            false,
+        )
+        .expect("body exclusion search failed");
+
+        assert_eq!(heading_results.len(), 1);
+        assert_eq!(body_results.len(), 1);
+        assert_eq!(code_results.len(), 1);
+        assert!(body_exclusion_results.is_empty());
+    }
+
+    #[test]
+    fn update_pages_index_indexes_multiple_pages_in_one_call() {
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("database.redb");
+        let asset_path = dir.path().join("assets");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("database open failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+
+        let first_id = manager
+            .create_page(
+                "/fts-batch/first",
+                "user",
+                "---\ncustom_meta:\n  marker: batchalpha\n---\n# first\nbodyalpha\n".to_string(),
+            )
+            .expect("first page create failed");
+        let second_id = manager
+            .create_page(
+                "/fts-batch/second",
+                "user",
+                "---\ncustom_meta:\n  marker: batchbeta\n---\n# second\nbodybeta\n".to_string(),
+            )
+            .expect("second page create failed");
+        let page_ids = vec![first_id.clone(), second_id.clone()];
+
+        update_pages_index(&config, &manager, &page_ids, false)
+            .expect("batch update failed");
+
+        let first_results = search_index(
+            &config,
+            FtsSearchTarget::Body,
+            "bodyalpha",
+            false,
+            false,
+        )
+        .expect("first body search failed");
+        let second_results = search_index(
+            &config,
+            FtsSearchTarget::FrontMatter,
+            "batchbeta",
+            false,
+            false,
+        )
+        .expect("second front matter search failed");
+
+        assert_eq!(first_results.len(), 1);
+        assert_eq!(first_results[0].page_id(), first_id);
+        assert_eq!(second_results.len(), 1);
+        assert_eq!(second_results[0].page_id(), second_id);
+    }
+
+    #[test]
+    fn delete_pages_index_removes_multiple_pages_in_one_call() {
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("database.redb");
+        let asset_path = dir.path().join("assets");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("database open failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+
+        let first_id = manager
+            .create_page(
+                "/fts-delete/first",
+                "user",
+                "# first\nbatchdeletealpha\n".to_string(),
+            )
+            .expect("first page create failed");
+        let second_id = manager
+            .create_page(
+                "/fts-delete/second",
+                "user",
+                "# second\nbatchdeletebeta\n".to_string(),
+            )
+            .expect("second page create failed");
+        let page_ids = vec![first_id, second_id];
+
+        update_pages_index(&config, &manager, &page_ids, false)
+            .expect("batch update failed");
+        delete_pages_index(&config, &page_ids).expect("batch delete failed");
+
+        let first_results = search_index(
+            &config,
+            FtsSearchTarget::Body,
+            "batchdeletealpha",
+            true,
+            false,
+        )
+        .expect("first body search failed");
+        let second_results = search_index(
+            &config,
+            FtsSearchTarget::Body,
+            "batchdeletebeta",
+            true,
+            false,
+        )
+        .expect("second body search failed");
+
+        assert!(first_results.is_empty());
+        assert!(second_results.is_empty());
+    }
+
+    #[test]
+    fn open_index_reports_outdated_schema_when_front_matter_field_is_missing() {
+        let dir = tempdir().expect("tempdir failed");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let schema = build_legacy_schema_without_front_matter();
+        fs::create_dir_all(config.index_path())
+            .expect("index directory create failed");
+        Index::create_in_dir(config.index_path(), schema)
+            .expect("legacy index create failed");
+
+        let err = match FtsIndexManager::open(&config) {
+            Ok(_) => panic!("legacy schema must fail"),
+            Err(err) => err,
+        };
+        let fts_error = err
+            .downcast_ref::<FtsError>()
+            .expect("fts error missing");
+
+        assert_eq!(
+            fts_error,
+            &FtsError::IndexSchemaOutdated {
+                missing_field: "front_matter".to_string(),
+            },
+        );
+        assert!(err.to_string().contains("luwiki fts rebuild"));
+    }
+
+    #[test]
+    fn rebuild_index_recovers_from_legacy_schema_without_front_matter() {
+        let dir = tempdir().expect("tempdir failed");
+        let config = FtsIndexConfig::new(dir.path().join("fts-index"));
+        let schema = build_legacy_schema_without_front_matter();
+        fs::create_dir_all(config.index_path())
+            .expect("index directory create failed");
+        Index::create_in_dir(config.index_path(), schema)
+            .expect("legacy index create failed");
+        let docs = vec![build_document_from_source(
+            PageId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FC0")
+                .expect("page id"),
+            1,
+            false,
+            true,
+            "---\ncustom_meta:\n  marker: rebuildschema\n---\nbody text\n",
+        )
+        .expect("document build failed")];
+
+        rebuild_index(&config, &docs).expect("rebuild failed");
+        let results = search_index(
+            &config,
+            FtsSearchTarget::FrontMatter,
+            "rebuildschema",
+            false,
+            false,
+        )
+        .expect("front matter search failed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].page_id(), docs[0].page_id.clone());
+    }
+
+    fn build_legacy_schema_without_front_matter() -> Schema {
+        let mut builder = Schema::builder();
+        let text_indexing = TextFieldIndexing::default()
+            .set_tokenizer("lindera_ipadic")
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+        let text_options = TextOptions::default()
+            .set_indexing_options(text_indexing)
+            .set_stored();
+
+        builder.add_text_field("page_id", STRING | STORED);
+        builder.add_u64_field("revision", INDEXED | STORED);
+        builder.add_bool_field("deleted", INDEXED | STORED);
+        builder.add_bool_field("is_latest", INDEXED | STORED);
+        builder.add_text_field("headings", text_options.clone());
+        builder.add_text_field("body", text_options.clone());
+        builder.add_text_field("code", text_options);
+        builder.build()
+    }
 }

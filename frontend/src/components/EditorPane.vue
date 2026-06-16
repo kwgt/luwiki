@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Compartment, EditorSelection, EditorState } from '@codemirror/state';
+import { foldEffect } from '@codemirror/language';
 import { EditorView, placeholder } from '@codemirror/view';
 import {
   buildBaseExtensions,
@@ -10,6 +11,7 @@ import {
   type EditorKeymap,
   type EditorTheme,
 } from '../lib/editorExtensions';
+import { getInitialFrontMatterFoldRange } from '../lib/frontMatterFold';
 import { collectImmediateMacroChanges } from '../lib/macroEngine';
 
 const props = defineProps<{
@@ -22,6 +24,7 @@ const props = defineProps<{
   macroUserId?: string;
   macroUserDisplayName?: string;
   readOnly?: boolean;
+  foldFrontMatterByDefault?: boolean;
   placeholder?: string;
   editorStyle?: Record<string, string>;
 }>();
@@ -36,6 +39,8 @@ const themeCompartment = new Compartment();
 const keymapCompartment = new Compartment();
 const lineNumberCompartment = new Compartment();
 const applyingImmediateMacro = ref(false);
+const syncingExternalValue = ref(false);
+const userInteracted = ref(false);
 
 function buildEditorState(): EditorState {
   const placeholderExtension = props.placeholder
@@ -58,7 +63,11 @@ function buildEditorState(): EditorState {
         if (!update.docChanged) {
           return;
         }
-        if (!props.readOnly && !applyingImmediateMacro.value) {
+        if (
+          !props.readOnly
+          && !applyingImmediateMacro.value
+          && !syncingExternalValue.value
+        ) {
           const fullText = update.state.doc.toString();
           const changes = collectImmediateMacroChanges(fullText, {
             pagePath: props.macroPagePath ?? '/',
@@ -87,6 +96,21 @@ function buildEditorState(): EditorState {
   });
 }
 
+function foldInitialFrontMatter(view: EditorView): void {
+  if (!props.foldFrontMatterByDefault) {
+    return;
+  }
+
+  const range = getInitialFrontMatterFoldRange(view.state);
+  if (!range) {
+    return;
+  }
+
+  view.dispatch({
+    effects: foldEffect.of(range),
+  });
+}
+
 onMounted(() => {
   if (!hostRef.value) {
     return;
@@ -95,9 +119,18 @@ onMounted(() => {
     state: buildEditorState(),
     parent: hostRef.value,
   });
+  foldInitialFrontMatter(viewRef.value);
+  hostRef.value.addEventListener('pointerdown', markUserInteracted, true);
+  hostRef.value.addEventListener('keydown', markUserInteracted, true);
+  hostRef.value.addEventListener('focusin', markUserInteracted, true);
 });
 
 onBeforeUnmount(() => {
+  if (hostRef.value) {
+    hostRef.value.removeEventListener('pointerdown', markUserInteracted, true);
+    hostRef.value.removeEventListener('keydown', markUserInteracted, true);
+    hostRef.value.removeEventListener('focusin', markUserInteracted, true);
+  }
   viewRef.value?.destroy();
   viewRef.value = null;
 });
@@ -113,9 +146,12 @@ watch(
     if (value === current) {
       return;
     }
+    syncingExternalValue.value = true;
     view.dispatch({
       changes: { from: 0, to: current.length, insert: value },
     });
+    foldInitialFrontMatter(view);
+    syncingExternalValue.value = false;
   },
 );
 
@@ -160,7 +196,7 @@ watch(
 
 function focusToStart(): void {
   const view = viewRef.value;
-  if (!view) {
+  if (!view || userInteracted.value) {
     return;
   }
   view.dispatch({
@@ -168,6 +204,10 @@ function focusToStart(): void {
     scrollIntoView: true,
   });
   view.focus();
+}
+
+function markUserInteracted(): void {
+  userInteracted.value = true;
 }
 
 defineExpose({ focusToStart });

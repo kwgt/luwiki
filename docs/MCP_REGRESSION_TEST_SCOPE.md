@@ -28,10 +28,22 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
   - `run`
   - `token` 系
   - `user` 系
+  - `derived rebuild --target resources`
+  - `derived rebuild --target all`
 - `docs/REST_API_SPECS.md`
   - 認証
   - 認可
   - Bearer スコープ
+- `docs/FRONT_MATTER_SPECS.md`
+  - `mcp.primitive = resource`
+  - resource front matter の値制約
+- `docs/MCP_RESOURCE_SPECS.md`
+  - resources 外部契約
+  - 公開条件
+  - capability
+  - 通知非対応
+  - 監査
+  - 再構成導線
 
 ## 2. 回帰確認の使い方
 
@@ -169,6 +181,11 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 5. `user add` / `user edit` / `user list` の既存運用
 6. `luwiki run` の MCP 無効起動
 7. MCP 無効時に `/mcp` 非公開で既存サーバ機能が維持されること
+8. resources capability が readiness に応じて公開・非公開になること
+9. `resources/list` / `resources/read` と既存 tools / prompts が同じ session 上で共存すること
+10. ページ由来 resource の path prefix 制約と固定組み込み resource の非適用境界
+11. `derived rebuild --target resources` / `all` 後に resources 候補と URI 索引を復元できること
+12. `resources.listChanged` を宣言せず通知しないこと
 
 ## 12. 4.9.5 の整理結果
 
@@ -180,3 +197,124 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 - トークン管理の回帰範囲を、`token create --scope write`、既存 token 系コマンド、旧データ表示導出まで含めて定義した
 - `run` 起動経路と HTTP サーバ統合の回帰範囲を、MCP 無効時の非公開維持と既存ルーティング維持まで含めて定義した
 - MCP 応答モデル変更の回帰範囲を、`instance_id` 追加の影響と REST API 非影響まで含めて定義した
+
+## 13. MCP prompts導入時の回帰範囲
+
+### 13.1 capabilityとrouting
+
+1. primitive名前索引readinessの真偽にかかわらずtools capabilityを維持すること
+2. readiness version 1ではtoolsとprompts capabilityが共存すること
+3. readinessなし・未知versionではpromptsだけを非公開とすること
+4. 同じhandshake済みsession上で`tools/list`、`prompts/list`、
+   `tools/call(get_page)`、`prompts/get`を交互に利用できること
+5. tools標準method、prompts標準method、LuWiki tool callのroutingが
+   混線しないこと
+6. `get_page`のtool resultと`prompts/get`の標準`GetPromptResult`を
+   混同しないこと
+
+### 13.2 認証とsession
+
+1. prompts追加後もAuthorization headerをrmcpへ転送しないこと
+2. request bodyとAuthorization headerを通常ログへ出力しないこと
+3. session期限切れPOSTがHTTP 401となること
+4. session上限超過時に最古sessionをevictionすること
+5. DELETEによるsession終了が成功すること
+6. readinessなしでも既存tools、Bearer認証、session管理を利用できること
+
+### 13.3 front matter・template・FTS
+
+1. prompt追加後も既存front matter検証を維持すること
+2. template候補の保存後同期を維持すること
+3. template単独再構成、legacy fallback、front matter優先規則を維持すること
+4. `derived rebuild --target all`のprompt側失敗時に、
+   template候補を含む全対象の既存状態を維持すること
+5. prompt再構成後に候補、名前索引、readinessを復元し、
+   同じ`prompts/list`経路から利用できること
+6. 既存FTSとfront matter検索の対象・結果を変更しないこと
+
+### 13.4 prompts公開面
+
+1. read scopeとReadOnly利用を維持すること
+2. promptsへページ用path prefix制約を適用しないこと
+3. pathベースtoolsには従来のprefix制約を維持すること
+4. draft、soft delete、hard delete、orphan候補の公開制御を維持すること
+5. case-sensitive順序、50件、cursor、空一覧を維持すること
+6. 固定protocol errorと秘匿情報非公開を維持すること
+7. `list_prompts`、`get_prompt`の監査ログを維持すること
+8. `prompts.listChanged`を宣言せず、保存・削除・再構成から通知しないこと
+
+### 13.5 REST API
+
+1. prompt定義不正を既存front matter HTTP 400構造で返すこと
+2. primitive名前重複時にページ正本を変更しないこと
+3. primitive名前重複応答へprompt名、path、page IDを公開しないこと
+4. 保存後候補同期失敗時にページ正本と名前索引を維持すること
+5. 保存後候補同期失敗から共通再構成で復旧できること
+6. REST APIの既存レスポンス形式とMCP標準応答を混同しないこと
+
+## 14. MCP resources導入時の回帰範囲
+
+### 14.1 capabilityとrouting
+
+1. resource URI索引readinessの真偽にかかわらずtools capabilityを維持すること
+2. resources readiness version 1ではtools、prompts、resources capabilityが共存すること
+3. readinessなし・未知versionではresourcesだけを非公開とし、
+   tools / promptsを巻き込まないこと
+4. 同じhandshake済みsession上で`tools/list`、`tools/call(get_page)`、
+   `prompts/list`、`prompts/get`、`resources/list`、`resources/read`を
+   交互に利用できること
+5. tools標準method、prompts標準method、resources標準method、
+   LuWiki tool callのroutingが混線しないこと
+6. `Resource` / `ResourceContents`とLuWiki tool result / prompt resultを
+   混同しないこと
+
+### 14.2 認証とsession
+
+1. resources追加後もAuthorization headerをrmcpへ転送しないこと
+2. request bodyとAuthorization headerを通常ログへ出力しないこと
+3. resources標準methodでも既存session管理を維持すること
+4. session期限切れPOSTがHTTP 401となること
+5. session上限超過時に最古sessionをevictionすること
+6. DELETEによるsession終了が成功すること
+7. resources readinessなしでも既存tools、prompts、Bearer認証、
+   session管理を利用できること
+
+### 14.3 front matter・template・prompt・FTS
+
+1. resource追加後も既存front matter検証を維持すること
+2. template候補の保存後同期を維持すること
+3. prompt候補の保存後同期を維持すること
+4. template単独再構成、legacy fallback、front matter優先規則を維持すること
+5. prompt単独再構成、名前索引、readinessを維持すること
+6. resource再構成後に候補、URI逆引き索引、readinessを復元し、
+   同じ`resources/list` / `resources/read`経路から利用できること
+7. `derived rebuild --target all`のtemplates / prompts / resourcesの
+   いずれかが失敗した場合に、全対象の既存状態を維持すること
+8. promptとresourcesの索引責務が独立していること
+9. 既存FTSとfront matter検索の対象・結果を変更しないこと
+
+### 14.4 resources公開面
+
+1. 固定組み込みresourceとページ由来resourceを同じ`resources/list`へ合流できること
+2. 固定組み込みresourceにページ用path prefix制約を適用しないこと
+3. ページ由来resourceにread scopeとpath prefix制約を適用すること
+4. path prefix範囲外のページ由来resourceは一覧から除外し、
+   取得ではnot foundとして秘匿すること
+5. draft、soft delete、hard delete、orphan候補、
+   URI索引不整合の公開制御を維持すること
+6. URI昇順、50件、cursor、空一覧を維持すること
+7. 固定protocol errorと秘匿情報非公開を維持すること
+8. `list_resources`、`read_resource`の監査ログを維持すること
+9. `resources.listChanged`を宣言せず、保存・削除・rename・import・
+   rollback・amend・再構成から通知しないこと
+
+### 14.5 REST APIと既存MCP tools/prompts
+
+1. resource定義不正を既存front matter HTTP 400構造で返すこと
+2. resource URI重複時にページ正本を変更しないこと
+3. resource URI重複応答へpage ID、DB内部エラー、Bearer tokenを公開しないこと
+4. 保存後候補同期失敗時にページ正本とURI逆引き索引を維持すること
+5. 保存後候補同期失敗から共通再構成で復旧できること
+6. pathベースtoolsには従来のprefix制約を維持すること
+7. promptsには引き続きページ用path prefix制約を適用しないこと
+8. REST APIの既存レスポンス形式とMCP標準resources応答を混同しないこと

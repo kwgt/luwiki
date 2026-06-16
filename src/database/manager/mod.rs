@@ -9,6 +9,8 @@
 //!
 
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use redb::{Database, ReadableDatabase};
@@ -29,10 +31,14 @@ use super::types::{AssetId, PageId};
 
 pub(crate) mod assets;
 pub(crate) mod bearer_tokens;
+pub(crate) mod derived_rebuild;
 pub(crate) mod export_import;
 pub(crate) mod locks;
 pub(crate) mod pages_read;
 pub(crate) mod pages_write;
+pub(crate) mod prompt_candidates;
+pub(crate) mod resource_candidates;
+pub(crate) mod template_candidates;
 pub(crate) mod users;
 
 ///
@@ -45,6 +51,10 @@ pub(crate) struct DatabaseManager {
     /// アセットデータ格納ディレクトリへのパス
     #[allow(dead_code)]
     asset_path: PathBuf,
+
+    /// テスト用resource候補同期失敗フラグ
+    #[cfg(test)]
+    fail_resource_candidate_sync_for_test: AtomicBool,
 }
 
 impl DatabaseManager {
@@ -78,7 +88,96 @@ impl DatabaseManager {
         Ok(Self {
             db,
             asset_path: asset_path.as_ref().into(),
+            #[cfg(test)]
+            fail_resource_candidate_sync_for_test: AtomicBool::new(false),
         })
+    }
+
+    ///
+    /// テスト用にresource候補同期の失敗を設定する
+    ///
+    /// # 引数
+    /// * `enabled` - `true` の場合、次回以降のresource候補同期を失敗させる
+    ///
+    #[cfg(test)]
+    pub(crate) fn set_resource_candidate_sync_failure_for_test(
+        &self,
+        enabled: bool,
+    ) {
+        self.fail_resource_candidate_sync_for_test
+            .store(enabled, Ordering::SeqCst);
+    }
+
+    ///
+    /// テスト用resource候補同期失敗フラグを取得する
+    ///
+    /// # 戻り値
+    /// 失敗注入が有効な場合は `true` を返す。
+    ///
+    #[cfg(test)]
+    pub(in crate::database) fn resource_candidate_sync_failure_for_test(
+        &self,
+    ) -> bool {
+        self.fail_resource_candidate_sync_for_test
+            .load(Ordering::SeqCst)
+    }
+
+    ///
+    /// テスト用にresource_idの所有ページIDを取得する
+    ///
+    /// # 引数
+    /// * `resource_id` - 取得対象resource_id
+    ///
+    /// # 戻り値
+    /// 所有ページIDが存在する場合は`Some(PageId)`を返す。
+    ///
+    #[cfg(test)]
+    pub(crate) fn get_resource_uri_owner_for_test(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<PageId>> {
+        let txn = self.db.begin_read()?;
+        let table =
+            txn.open_table(super::schema::RESOURCE_URI_INDEX_TABLE)?;
+
+        Ok(match table.get(resource_id.to_string())? {
+            Some(owner) => Some(owner.value()),
+            None => None,
+        })
+    }
+
+    ///
+    /// テスト用にresource URI逆引き索引の所有者を変更する
+    ///
+    /// # 引数
+    /// * `resource_id` - 更新対象resource_id
+    /// * `owner` - 設定する所有ページID。`None`の場合は削除する。
+    ///
+    /// # 戻り値
+    /// 更新に成功した場合は`Ok(())`を返す。
+    ///
+    #[cfg(test)]
+    pub(crate) fn set_resource_uri_owner_for_test(
+        &self,
+        resource_id: &str,
+        owner: Option<&PageId>,
+    ) -> Result<()> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table =
+                txn.open_table(super::schema::RESOURCE_URI_INDEX_TABLE)?;
+            match owner {
+                Some(page_id) => {
+                    table.insert(resource_id.to_string(), page_id.clone())?;
+                }
+                None => {
+                    let _ = table.remove(resource_id.to_string())?;
+                }
+            }
+        }
+        txn.commit()?;
+
+        Ok(())
     }
 
     ///

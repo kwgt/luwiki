@@ -27,6 +27,16 @@
 - `migrate` では rename リビジョン自体は保持するが、有効な rename 情報は保持しない
 - `migrate` の `revisions.jsonl.rename` は、必要に応じて `"removed_by_migrate"` を格納する
 - `migrate` の `pages.jsonl.rename_revisions` は出力しない
+- MCP prompt定義の正本は、`revisions.jsonl`内のページソースに含まれる
+  front matterと本文とする
+- prompt専用のファイルは追加しない
+- prompt候補、MCP primitive名前索引、primitive名前索引readinessは、
+  ページソースから復元可能な内部データであるためエクスポートデータに含めない
+- これらの内部データは、import後の対象page ID群の同期または共通再構成で復元する
+- M3のMCP prompts対応では、manifest version、既存JSON / JSONLのスキーマ、
+  manifestの件数フィールドを変更しない
+- export archive内に派生データ相当の独自エントリが存在しても、
+  import入力として扱わない
 
 ## 検証ルール
 
@@ -37,6 +47,12 @@
 - アセットについては、`assets.jsonl` の件数と実体ファイル数の一致も検証する
 - インポート時は、エクスポートデータ中のIDおよびインポート先の同種IDとの重複を検出した場合はエラーとする
 - インポート時はエクスポートデータ内の参照整合性を検証し、少なくともJSONL間の参照切れ、アセット実体ファイルの欠落、アセットサイズ不一致を検出対象に含める
+- インポート時は全リビジョンのページソースについてfront matterを検証する
+- インポート時は各ページのlatest sourceからMCP primitive名前を抽出し、
+  import対象内および既存ページとの同一primitive内名前重複を拒否する
+- soft delete済み既存ページが予約しているprompt名も重複検出対象とする
+- primitive名前重複時はページ正本と名前索引を部分反映せず、
+  importのDB transaction全体を失敗させる
 - `migrate` の `strict-mode` では、少なくともツリー外のページへのリンクおよび絶対パスによるページリンクをエラー対象に含める
 - 非`strict-mode`では、上記リンクは未解決リンクとして扱う
 - `migrate` インポート時に有効な rename 情報が含まれていた場合、通常モードでは警告を出し、rename 情報を `"removed_by_migrate"` 相当へ正規化して継続する

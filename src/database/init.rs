@@ -19,12 +19,20 @@ use super::schema::{
     BEARER_TOKEN_TABLE,
     DELETED_PAGE_PATH_TABLE,
     LOCK_INFO_TABLE,
+    MCP_PRIMITIVE_NAME_STATE_TABLE,
+    MCP_PRIMITIVE_NAME_TABLE,
     PAGE_INDEX_TABLE,
     PAGE_PATH_TABLE,
     PAGE_SOURCE_TABLE,
+    PROMPT_CANDIDATE_TABLE,
+    RESOURCE_CANDIDATE_TABLE,
+    RESOURCE_URI_INDEX_STATE_TABLE,
+    RESOURCE_URI_INDEX_TABLE,
+    TEMPLATE_CANDIDATE_TABLE,
     USER_ID_TABLE,
     USER_INFO_TABLE,
 };
+use super::primitive_names::initialize_mcp_primitive_names_in_txn;
 
 ///
 /// データベースのイニシャライズ
@@ -43,6 +51,13 @@ use super::schema::{
 ///  - DELETED_PAGE_PATH_TABLE: 削除済みページパスインデックステーブル
 ///  - PAGE_INDEX_TABLE: ページインデックステーブル
 ///  - PAGE_SOURCE_TABLE: ページソーステーブル
+///  - TEMPLATE_CANDIDATE_TABLE: テンプレート候補テーブル
+///  - PROMPT_CANDIDATE_TABLE: prompt候補テーブル
+///  - RESOURCE_CANDIDATE_TABLE: resource候補テーブル
+///  - MCP_PRIMITIVE_NAME_TABLE: MCP primitive共通名前索引テーブル
+///  - MCP_PRIMITIVE_NAME_STATE_TABLE: MCP primitive名前索引構築状態
+///  - RESOURCE_URI_INDEX_TABLE: resource URI逆引き索引テーブル
+///  - RESOURCE_URI_INDEX_STATE_TABLE: resource URI逆引き索引構築状態
 ///  - ASSET_GROUP_TABLE: アセット情報テーブル
 ///  - ASSET_LOOKUP_TABLE: アセットID特定テーブル
 ///  - ASSET_GROUP_TABLE: ページ所属アセット群取得テーブル
@@ -83,6 +98,44 @@ pub(in crate::database) fn init_database(db: &mut Database) -> Result<()> {
         let _ = txn
             .open_table(PAGE_SOURCE_TABLE)
             .context("create PAGE_SOURCE_TABLE")?;
+
+        // テンプレート候補テーブル
+        let _ = txn
+            .open_table(TEMPLATE_CANDIDATE_TABLE)
+            .context("create TEMPLATE_CANDIDATE_TABLE")?;
+
+        // prompt候補テーブル
+        let _ = txn
+            .open_table(PROMPT_CANDIDATE_TABLE)
+            .context("create PROMPT_CANDIDATE_TABLE")?;
+
+        // resource候補テーブル
+        let _ = txn
+            .open_table(RESOURCE_CANDIDATE_TABLE)
+            .context("create RESOURCE_CANDIDATE_TABLE")?;
+
+        // MCP primitive共通名前索引テーブル
+        let _ = txn
+            .open_table(MCP_PRIMITIVE_NAME_TABLE)
+            .context("create MCP_PRIMITIVE_NAME_TABLE")?;
+
+        // MCP primitive名前索引構築状態テーブル
+        let _ = txn
+            .open_table(MCP_PRIMITIVE_NAME_STATE_TABLE)
+            .context("create MCP_PRIMITIVE_NAME_STATE_TABLE")?;
+
+        initialize_mcp_primitive_names_in_txn(&txn)
+            .context("initialize MCP primitive names")?;
+
+        // resource URI逆引き索引テーブル
+        let _ = txn
+            .open_table(RESOURCE_URI_INDEX_TABLE)
+            .context("create RESOURCE_URI_INDEX_TABLE")?;
+
+        // resource URI逆引き索引構築状態テーブル
+        let _ = txn
+            .open_table(RESOURCE_URI_INDEX_STATE_TABLE)
+            .context("create RESOURCE_URI_INDEX_STATE_TABLE")?;
 
         /*
          * ロック・アセット関連テーブル作成

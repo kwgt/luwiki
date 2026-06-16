@@ -16,6 +16,7 @@ pub(crate) mod asset_purge;
 pub(crate) mod asset_undelete;
 pub(crate) mod commands;
 pub(crate) mod common;
+pub(crate) mod derived_rebuild;
 pub(crate) mod export;
 pub(crate) mod fts_merge;
 pub(crate) mod fts_rebuild;

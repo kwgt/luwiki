@@ -26,63 +26,8 @@ use crate::rest_api::require_request_scope;
 struct TemplateEntry {
     page_id: String,
     name: String,
-}
-
-///
-/// テンプレートの候補判定
-///
-/// # 引数
-/// * `root` - テンプレートルート
-/// * `path` - ページパス
-///
-/// # 戻り値
-/// テンプレート候補の場合は`true`を返す。
-///
-fn is_direct_child(root: &str, path: &str) -> bool {
-    let normalized_root = if root.len() > 1 {
-        root.trim_end_matches('/')
-    } else {
-        root
-    };
-
-    /*
-     * ルート階層の判定
-     */
-    if normalized_root == "/" {
-        if !path.starts_with('/') || path == "/" {
-            return false;
-        }
-        let rest = &path[1..];
-        return !rest.is_empty() && !rest.contains('/');
-    }
-
-    /*
-     * 子ページ候補の判定
-     */
-    if !path.starts_with(normalized_root) {
-        return false;
-    }
-
-    let rest = &path[normalized_root.len()..];
-    if !rest.starts_with('/') {
-        return false;
-    }
-
-    let child = &rest[1..];
-    !child.is_empty() && !child.contains('/')
-}
-
-///
-/// テンプレート名の抽出
-///
-/// # 引数
-/// * `path` - ページパス
-///
-/// # 戻り値
-/// パス末尾の要素を返す。
-///
-fn extract_template_name(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or_default().to_string()
+    description: Option<String>,
+    macro_expand: Option<bool>,
 }
 
 ///
@@ -123,25 +68,8 @@ pub async fn get(
         }
     };
 
-    /*
-     * テンプレート機能の有効判定
-     */
-    let template_root = match state.template_root() {
-        Some(path) => path.to_string(),
-        None => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "template feature disabled",
-            ));
-        }
-    };
-
-    /*
-     * ページ一覧の収集
-     */
-    let mut entries: Vec<TemplateEntry> = Vec::new();
-    let pages = match state.db().list_pages() {
-        Ok(pages) => pages,
+    let candidates = match state.db().list_template_candidates() {
+        Ok(entries) => entries,
         Err(_) => {
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -150,24 +78,22 @@ pub async fn get(
         }
     };
 
-    for page in pages {
-        if page.deleted() || page.is_draft() {
-            continue;
-        }
-        let path = page.path();
-        if !is_direct_child(&template_root, &path) {
-            continue;
-        }
-        entries.push(TemplateEntry {
-            page_id: page.id().to_string(),
-            name: extract_template_name(&path),
-        });
-    }
+    let mut entries: Vec<TemplateEntry> = candidates
+        .into_iter()
+        .map(|candidate| TemplateEntry {
+            page_id: candidate.page_id().to_string(),
+            name: candidate.name().to_string(),
+            description: candidate.description().map(str::to_string),
+            macro_expand: candidate.macro_expand(),
+        })
+        .collect();
 
     /*
      * レスポンス生成
      */
-    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    entries.sort_by(|left, right| {
+        left.name.cmp(&right.name).then_with(|| left.page_id.cmp(&right.page_id))
+    });
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .insert_header((header::CACHE_CONTROL, "no-store"))
@@ -175,4 +101,270 @@ pub async fn get(
             serde_json::to_string(&entries)
                 .unwrap_or_else(|_| "[]".to_string()),
         ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, RwLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use actix_web::body::to_bytes;
+    use actix_web::http::{StatusCode, header};
+    use actix_web::http::header::TryIntoHeaderValue;
+    use actix_web::test;
+    use actix_web_httpauth::headers::authorization::Basic;
+    use serde_json::Value;
+
+    use crate::cmd_args::FrontendConfig;
+    use crate::database::DatabaseManager;
+    use crate::database::types::PageId;
+    use crate::fts::FtsIndexConfig;
+    use crate::http_server::app_state::AppState;
+    use crate::rest_api::create_api_scope;
+
+    #[actix_web::test]
+    async fn template_endpoint_lists_front_matter_candidates() {
+        let app_state = build_test_app_state().expect("build app state failed");
+        let visible = create_template_page(
+            app_state.db(),
+            "/templates/visible",
+            "議事録B",
+            Some("visible description"),
+            Some(true),
+        )
+        .expect("create visible template failed");
+        let hidden = create_template_page(
+            app_state.db(),
+            "/templates/hidden",
+            "議事録A",
+            Some("hidden description"),
+            Some(false),
+        )
+        .expect("create hidden template failed");
+        create_normal_page(app_state.db(), "/templates/normal")
+            .expect("create normal page failed");
+
+        app_state
+            .db()
+            .rename_page("/templates/visible", "/moved/visible-template")
+            .expect("rename template failed");
+        app_state
+            .db()
+            .delete_page_by_id(&hidden)
+            .expect("delete template failed");
+
+        let app = test::init_service(
+            actix_web::App::new()
+                .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
+                    app_state,
+                ))))
+                .service(create_api_scope(1024 * 1024)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            build_get_request("/api/pages/template").to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-store")),
+        );
+
+        let body = to_bytes(response.into_body())
+            .await
+            .expect("read body failed");
+        let json: Value =
+            serde_json::from_slice(&body).expect("parse json failed");
+        let array = json.as_array().expect("entries should be array");
+        assert_eq!(array.len(), 1);
+        assert_eq!(array[0]["page_id"], visible.to_string());
+        assert_eq!(array[0]["name"], "議事録B");
+        assert_eq!(array[0]["description"], "visible description");
+        assert_eq!(array[0]["macro_expand"], true);
+    }
+
+    #[actix_web::test]
+    async fn template_endpoint_returns_empty_array_without_template_root() {
+        let app_state = build_test_app_state().expect("build app state failed");
+
+        let app = test::init_service(
+            actix_web::App::new()
+                .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
+                    app_state,
+                ))))
+                .service(create_api_scope(1024 * 1024)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            build_get_request("/api/pages/template").to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body())
+            .await
+            .expect("read body failed");
+        assert_eq!(
+            std::str::from_utf8(&body).expect("decode body failed"),
+            "[]",
+        );
+    }
+
+    #[actix_web::test]
+    async fn template_endpoint_uses_rebuilt_candidates_after_legacy_import() {
+        let app_state = build_test_app_state().expect("build app state failed");
+        let front_matter_id = create_template_page(
+            app_state.db(),
+            "/templates/front-matter",
+            "front matter 優先",
+            Some("front matter description"),
+            Some(true),
+        )
+        .expect("create front matter template failed");
+        let legacy_id = create_normal_page(app_state.db(), "/templates/legacy-only")
+            .expect("create legacy-only page failed");
+        let outside_id = app_state
+            .db()
+            .create_page(
+                "/outside/front-matter",
+                "user",
+                "---\nwiki:\n  template:\n    name: ルート外\n---\n# outside\n".to_string(),
+            )
+            .expect("create outside template failed");
+
+        app_state
+            .db()
+            .remove_template_candidate_by_page_id(&front_matter_id)
+            .expect("remove front matter candidate failed");
+        app_state
+            .db()
+            .rebuild_template_candidates_with_legacy(Some("/templates"))
+            .expect("rebuild template candidates with legacy failed");
+
+        let app = test::init_service(
+            actix_web::App::new()
+                .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
+                    app_state,
+                ))))
+                .service(create_api_scope(1024 * 1024)),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            build_get_request("/api/pages/template").to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body())
+            .await
+            .expect("read body failed");
+        let json: Value =
+            serde_json::from_slice(&body).expect("parse json failed");
+        let array = json.as_array().expect("entries should be array");
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array[0]["name"], "front matter 優先");
+        assert_eq!(array[0]["page_id"], front_matter_id.to_string());
+        assert_eq!(array[0]["description"], "front matter description");
+        assert_eq!(array[0]["macro_expand"], true);
+        assert_eq!(array[1]["name"], "legacy-only");
+        assert_eq!(array[1]["page_id"], legacy_id.to_string());
+        assert_eq!(array[1]["description"], Value::Null);
+        assert_eq!(array[1]["macro_expand"], Value::Null);
+        assert_eq!(array[2]["name"], "ルート外");
+        assert_eq!(array[2]["page_id"], outside_id.to_string());
+        assert_eq!(array[2]["description"], Value::Null);
+        assert_eq!(array[2]["macro_expand"], Value::Null);
+    }
+
+    fn build_test_app_state() -> anyhow::Result<AppState> {
+        let (base_dir, db_path) = prepare_test_dirs();
+        let asset_path = base_dir.join("assets");
+
+        let manager = DatabaseManager::open(&db_path, &asset_path)?;
+        manager.add_user("user", "pass", None)?;
+        manager.ensure_default_root("user")?;
+
+        Ok(AppState::new(
+            manager,
+            FrontendConfig::default(),
+            FtsIndexConfig::new(base_dir.join("fts-index")),
+            None,
+            "LuWiki Test".to_string(),
+            None,
+            1024 * 1024,
+            None,
+        ))
+    }
+
+    fn create_template_page(
+        db: &DatabaseManager,
+        path: &str,
+        name: &str,
+        description: Option<&str>,
+        macro_expand: Option<bool>,
+    ) -> anyhow::Result<PageId> {
+        let description_block = match description {
+            Some(description) => format!("    description: {}\n", description),
+            None => String::new(),
+        };
+        let macro_expand_block = match macro_expand {
+            Some(value) => format!("    macro_expand: {}\n", value),
+            None => String::new(),
+        };
+        let page_id = db.create_page(
+            path,
+            "user",
+            format!(
+                "---\nwiki:\n  template:\n    name: {}\n{}{}---\n# {}\n",
+                name, description_block, macro_expand_block, name
+            ),
+        )?;
+        db.sync_template_candidate_for_page(&page_id)?;
+        Ok(page_id)
+    }
+
+    fn create_normal_page(
+        db: &DatabaseManager,
+        path: &str,
+    ) -> anyhow::Result<PageId> {
+        db.create_page(path, "user", format!("# {}", path))
+    }
+
+    fn prepare_test_dirs() -> (PathBuf, PathBuf) {
+        let base = Path::new("tests")
+            .join("tmp")
+            .join(unique_suffix());
+        fs::create_dir_all(&base).expect("create test dir failed");
+        (base.clone(), base.join("database.redb"))
+    }
+
+    fn unique_suffix() -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time error");
+        format!(
+            "rest-api-template-{}-{}",
+            std::process::id(),
+            now.as_nanos(),
+        )
+    }
+
+    fn build_get_request(uri: &str) -> test::TestRequest {
+        let basic = Basic::new("user", Some("pass"));
+        let header_value = basic.try_into_value().expect("basic header failed");
+
+        test::TestRequest::get()
+            .uri(uri)
+            .insert_header((header::AUTHORIZATION, header_value))
+    }
 }

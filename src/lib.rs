@@ -14,6 +14,7 @@ pub mod audit;
 pub mod cmd_args;
 pub mod command;
 pub mod http_server;
+pub mod markdown_source;
 pub mod mcp;
 pub mod fts;
 pub mod rest_api;

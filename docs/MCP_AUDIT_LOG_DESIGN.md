@@ -24,6 +24,8 @@
   - 公開ツール、エラー応答、監査対象操作の粒度を確認する場合に参照する
 - `docs/MCP_AUDIT_LOG_TEST_VIEWPOINTS.md`
   - 監査ログ基盤のテスト観点を確認する場合に参照する
+- `docs/MCP_RESOURCE_SPECS.md`
+  - MCP resourcesの監査対象操作、summary、秘匿情報を確認する場合に参照する
 
 本書は主として以下を定義する。
 
@@ -197,6 +199,10 @@ struct AuditRecord {
 - `Get`
 - `GetSection`
 - `List`
+- `ListPrompts`
+- `GetPrompt`
+- `ListResources`
+- `ReadResource`
 - `Search`
 - `Create`
 - `Update`
@@ -757,3 +763,143 @@ rotation / retention / shutdown flush の接続方針は以下とする。
 「監査基盤を非同期安全かつ診断可能に動かすための実行基盤」として用いる。
 一方で、監査対象判定、`append` 集約、JSONL 正本モデルは
 引き続き `src/audit/` の自前責務として維持する。
+
+## 8. MCP promptsの監査設計
+
+### 8.1 `list_prompts`
+
+`AuditOperation::ListPrompts`の永続化名は`list_prompts`とし、
+既存ページ一覧の`list`と区別する。
+
+成功時は次の内容を記録する。
+
+- `result = success`
+- `target_path = null`
+- `revision = null`
+- `summary = "count=<件数> has_more=<true|false>"`
+
+失敗時は次の結果分類を使用する。
+
+- scope不足: `scope_denied`
+- cursor不正: `invalid_input`
+- DB失敗または候補不整合: `internal_error`
+
+失敗時も`target_path = null`、`revision = null`とし、summaryには
+`operation is not allowed`、`cursor is invalid`、`internal error`の
+固定公開messageだけを記録する。
+
+cursor値、prompt名、prompt一覧は記録しない。
+
+### 8.2 `get_prompt`
+
+`AuditOperation::GetPrompt`の永続化名は`get_prompt`とし、
+既存ページ取得の`get`と区別する。
+
+成功時は次の内容を記録する。
+
+- `result = success`
+- `target_path = null`
+- `revision = latest revision`
+- 値制約を満たす要求prompt名だけを`name=<prompt名>`としてsummaryへ記録可能
+
+失敗時は次の結果分類を使用する。
+
+- prompt不存在・非公開: `not_found`
+- 引数不正: `invalid_input`
+- scope不足: `scope_denied`
+- DB失敗、front matter・名前索引不整合: `internal_error`
+
+失敗時は`target_path = null`、`revision = null`とする。
+不正な要求prompt名はsummaryへ記録しない。
+
+### 8.3 共通項目と記録禁止情報
+
+両操作とも、ユーザID、token ID、取得可能な入力元IP address、
+timestampを既存共通項目として記録する。
+
+監査書込みはbest-effortとし、sink lock、書込み、ユーザID解決の失敗によって
+prompts操作の成功・失敗結果を変更しない。
+
+次の情報は監査ログへ記録しない。
+
+- prompt本文、system、展開後message
+- 引数名と引数値
+- front matter全体
+- ページpath、page ID
+- cursor値、prompt一覧
+- DB内部エラー
+- Bearer token平文、Authorization header
+- serialize済みrequest body
+
+## 9. MCP resourcesの監査設計
+
+### 9.1 `list_resources`
+
+`AuditOperation::ListResources`の永続化名は`list_resources`とし、
+既存ページ一覧の`list`およびprompt一覧の`list_prompts`と区別する。
+
+成功時は次の内容を記録する。
+
+- `result = success`
+- `target_path = null`
+- `revision = null`
+- `summary = "count=<件数> has_more=<true|false>"`
+
+失敗時は次の結果分類を使用する。
+
+- scope不足: `scope_denied`
+- cursor不正: `invalid_input`
+- DB失敗または候補不整合: `internal_error`
+
+失敗時も`target_path = null`、`revision = null`とし、summaryには
+`operation is not allowed`、`cursor is invalid`、`internal error`の
+固定公開messageだけを記録する。
+
+cursor値、resource URI一覧、resource名一覧、ページpath、page IDは記録しない。
+path prefix範囲外により一覧から除外されたページ由来resourceは、
+個別の認可失敗監査レコードとして記録しない。
+
+### 9.2 `read_resource`
+
+`AuditOperation::ReadResource`の永続化名は`read_resource`とし、
+既存ページ取得の`get`およびprompt取得の`get_prompt`と区別する。
+
+成功時は次の内容を記録する。
+
+- `result = success`
+- `target_path = null`
+- 固定組み込みresourceでは`revision = null`
+- ページ由来resourceでは`revision = latest revision`
+- 値制約を満たす要求URIだけを`uri=<resource URI>`としてsummaryへ記録可能
+- resource種別を`kind=builtin`または`kind=page`としてsummaryへ記録可能
+
+失敗時は次の結果分類を使用する。
+
+- resource不存在・非公開: `not_found`
+- URI不正: `invalid_input`
+- scope不足: `scope_denied`
+- DB失敗、URI索引不整合、latest source欠落、front matter再検証失敗:
+  `internal_error`
+
+失敗時は`target_path = null`、`revision = null`とする。
+不正な要求URIはsummaryへ記録しない。
+path prefix範囲外であることを示す詳細はsummaryへ記録しない。
+
+### 9.3 共通項目と記録禁止情報
+
+両操作とも、ユーザID、token ID、取得可能な入力元IP address、
+timestampを既存共通項目として記録する。
+
+監査書込みはbest-effortとし、sink lock、書込み、ユーザID解決の失敗によって
+resources操作の成功・失敗結果を変更しない。
+
+次の情報は監査ログへ記録しない。
+
+- resource本文
+- front matter本文
+- ページpath、page ID
+- cursor値、resource URI一覧、resource名一覧
+- path prefix範囲外であることを示す詳細
+- DB内部エラー
+- Bearer token平文、Authorization header
+- serialize済みrequest body

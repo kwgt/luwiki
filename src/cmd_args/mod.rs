@@ -9,6 +9,7 @@
 //!
 
 mod config;
+mod derived;
 mod export;
 mod fts;
 mod asset;
@@ -32,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{
     asset_add, asset_delete, asset_list, asset_move_to, asset_purge,
-    asset_undelete, commands, export as export_command, fts_merge,
+    asset_undelete, commands, derived_rebuild, export as export_command, fts_merge,
     fts_rebuild, fts_search, help_all, import as import_command,
     lock_delete, lock_list, page_add, page_delete, page_list, page_move_to,
     page_undelete, page_unlock, run as run_command, token_add_path,
@@ -55,6 +56,12 @@ pub(crate) use asset::{
     AssetUndeleteOpts,
 };
 pub(crate) use config::FrontendConfig;
+pub(crate) use derived::{
+    DerivedCommand,
+    DerivedRebuildOpts,
+    DerivedRebuildTarget,
+    DerivedSubCommand,
+};
 pub(crate) use export::ExportOpts;
 pub(crate) use fts::{
     FtsCommand,
@@ -905,6 +912,10 @@ enum Command {
     #[command(name = "fts", alias = "f", alias = "index")]
     Fts(FtsCommand),
 
+    /// front matter 派生データ管理コマンド一覧の表示
+    #[command(name = "derived", alias = "d")]
+    Derived(DerivedCommand),
+
     /// Bearerトークン管理コマンド一覧の表示
     #[command(name = "token", alias = "t")]
     Token(TokenCommand),
@@ -955,6 +966,9 @@ impl Command {
             Self::Fts(fts) => match &mut fts.subcommand {
                 FtsSubCommand::Search(opts) => Some(opts),
                 _ => None,
+            },
+            Self::Derived(derived) => match &mut derived.subcommand {
+                DerivedSubCommand::Rebuild(opts) => Some(opts),
             },
             Self::Token(token) => match &mut token.subcommand {
                 TokenSubCommand::Create(opts) => Some(opts),
@@ -1009,6 +1023,9 @@ impl Command {
                 FtsSubCommand::Search(opts) => Some(opts),
                 _ => None,
             },
+            Self::Derived(derived) => match &mut derived.subcommand {
+                DerivedSubCommand::Rebuild(opts) => Some(opts),
+            },
             Self::Token(token) => match &mut token.subcommand {
                 TokenSubCommand::Create(opts) => Some(opts),
                 TokenSubCommand::AddPath(opts) => Some(opts),
@@ -1061,6 +1078,9 @@ impl Command {
             Self::Fts(fts) => match &fts.subcommand {
                 FtsSubCommand::Search(opts) => Some(opts),
                 _ => None,
+            },
+            Self::Derived(derived) => match &derived.subcommand {
+                DerivedSubCommand::Rebuild(opts) => Some(opts),
             },
             Self::Token(token) => match &token.subcommand {
                 TokenSubCommand::Create(opts) => Some(opts),
@@ -1154,6 +1174,11 @@ impl Command {
                 FtsSubCommand::Merge => fts_merge::build_context(opts),
                 FtsSubCommand::Search(sub_opts) => {
                     fts_search::build_context(opts, sub_opts)
+                }
+            },
+            Self::Derived(derived) => match &derived.subcommand {
+                DerivedSubCommand::Rebuild(sub_opts) => {
+                    derived_rebuild::build_context(opts, sub_opts)
                 }
             },
             Self::Token(token) => match &token.subcommand {
@@ -1251,6 +1276,7 @@ impl Command {
                     config.set_fts_search_all_revision(opts.all_revision());
                 }
             }
+            Self::Derived(_) => {}
             Self::Token(_) => {}
             Self::Export(_) => {}
             Self::Import(_) => {}
@@ -1747,6 +1773,755 @@ mod tests {
         assert_eq!(config.audit_path(), Some(audit_path));
         assert_eq!(config.audit_retention(), Some("72h".to_string()));
         assert_eq!(config.audit_rotate_size(), Some("512K".to_string()));
+    }
+
+    #[test]
+    fn parse_fts_search_front_matter_target() {
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "fts",
+            "search",
+            "--target",
+            "front_matter",
+            "token",
+        ])
+        .expect("parse failed");
+
+        let search_opts = match opts.command {
+            Some(Command::Fts(fts_opts)) => match fts_opts.subcommand {
+                FtsSubCommand::Search(search_opts) => search_opts,
+                _ => panic!("search options missing"),
+            },
+            _ => panic!("fts command missing"),
+        };
+
+        assert_eq!(search_opts.target(), FtsSearchTarget::FrontMatter);
+    }
+
+    #[test]
+    fn parse_derived_rebuild_templates_target() {
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "derived",
+            "rebuild",
+            "--target",
+            "templates",
+        ])
+        .expect("parse failed");
+
+        let rebuild_opts = match opts.command {
+            Some(Command::Derived(derived_opts)) => match derived_opts.subcommand {
+                DerivedSubCommand::Rebuild(rebuild_opts) => rebuild_opts,
+            },
+            _ => panic!("derived command missing"),
+        };
+
+        assert_eq!(
+            rebuild_opts.target(),
+            DerivedRebuildTarget::Templates,
+        );
+    }
+
+    ///
+    /// derived rebuildのall targetを解析できることを確認する。
+    ///
+    /// # 注記
+    /// `--target all`を指定し、対応する列挙値と比較する。
+    ///
+    #[test]
+    fn parse_derived_rebuild_all_target() {
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "derived",
+            "rebuild",
+            "--target",
+            "all",
+        ])
+        .expect("parse failed");
+
+        let rebuild_opts = match opts.command {
+            Some(Command::Derived(derived_opts)) => {
+                match derived_opts.subcommand {
+                    DerivedSubCommand::Rebuild(rebuild_opts) => {
+                        rebuild_opts
+                    }
+                }
+            }
+            _ => panic!("derived command missing"),
+        };
+
+        assert_eq!(
+            rebuild_opts.target(),
+            DerivedRebuildTarget::All,
+        );
+    }
+
+    ///
+    /// derived rebuildのprompts targetを
+    /// 解析できることを確認する。
+    ///
+    /// # 注記
+    /// `--target prompts`を指定し、対応する列挙値と比較する。
+    ///
+    #[test]
+    fn parse_derived_rebuild_prompts_target() {
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "derived",
+            "rebuild",
+            "--target",
+            "prompts",
+        ])
+        .expect("parse failed");
+
+        let rebuild_opts = match opts.command {
+            Some(Command::Derived(derived_opts)) => {
+                match derived_opts.subcommand {
+                    DerivedSubCommand::Rebuild(rebuild_opts) => {
+                        rebuild_opts
+                    }
+                }
+            }
+            _ => panic!("derived command missing"),
+        };
+
+        assert_eq!(
+            rebuild_opts.target(),
+            DerivedRebuildTarget::Prompts,
+        );
+    }
+
+    ///
+    /// derived rebuildのresources targetを
+    /// 解析できることを確認する。
+    ///
+    /// # 注記
+    /// `--target resources`を指定し、対応する列挙値と比較する。
+    ///
+    #[test]
+    fn parse_derived_rebuild_resources_target() {
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "derived",
+            "rebuild",
+            "--target",
+            "resources",
+        ])
+        .expect("parse failed");
+
+        let rebuild_opts = match opts.command {
+            Some(Command::Derived(derived_opts)) => {
+                match derived_opts.subcommand {
+                    DerivedSubCommand::Rebuild(rebuild_opts) => {
+                        rebuild_opts
+                    }
+                }
+            }
+            _ => panic!("derived command missing"),
+        };
+
+        assert_eq!(
+            rebuild_opts.target(),
+            DerivedRebuildTarget::Resources,
+        );
+    }
+
+    #[test]
+    fn derived_rebuild_templates_exec_rebuilds_template_candidates() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("database.redb");
+        let assets_path = dir.path().join("assets");
+        let db_arg = db_path.to_string_lossy().to_string();
+        let assets_arg = assets_path.to_string_lossy().to_string();
+
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("open manager failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let outside_id = manager
+            .create_page(
+                "/outside/front-matter",
+                "user",
+                "---\nwiki:\n  template:\n    name: ルート外\n---\n# outside".to_string(),
+            )
+            .expect("create outside template failed");
+        let legacy_id = manager
+            .create_page("/templates/legacy-only", "user", "# legacy".to_string())
+            .expect("create legacy page failed");
+        drop(manager);
+
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "--db-path",
+            &db_arg,
+            "--assets-path",
+            &assets_arg,
+            "--template-root",
+            "/templates",
+            "derived",
+            "rebuild",
+            "--target",
+            "templates",
+        ])
+        .expect("parse failed");
+
+        let context = opts.build_context().expect("build context failed");
+        context.exec().expect("exec failed");
+        drop(context);
+
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("reopen manager failed");
+        let outside = manager
+            .get_template_candidate_by_page_id(&outside_id)
+            .expect("get outside candidate failed")
+            .expect("outside candidate missing");
+        let legacy = manager
+            .get_template_candidate_by_page_id(&legacy_id)
+            .expect("get legacy candidate failed")
+            .expect("legacy candidate missing");
+
+        assert_eq!(outside.name(), "ルート外");
+        assert_eq!(
+            outside.source(),
+            &crate::database::types::TemplateCandidateSource::FrontMatter,
+        );
+        assert_eq!(legacy.name(), "legacy-only");
+        assert_eq!(
+            legacy.source(),
+            &crate::database::types::TemplateCandidateSource::LegacyTemplateRoot,
+        );
+    }
+
+    ///
+    /// derived rebuildのprompts targetが
+    /// prompt派生データを再構成することを確認する。
+    ///
+    /// # 注記
+    /// 候補と名前索引を除去した後にCLI contextを実行し、
+    /// latest sourceから復元されることを検証する。
+    ///
+    #[test]
+    fn derived_rebuild_prompts_exec_rebuilds_prompt_candidates() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("database.redb");
+        let assets_path = dir.path().join("assets");
+        let db_arg = db_path.to_string_lossy().to_string();
+        let assets_arg = assets_path.to_string_lossy().to_string();
+
+        /*
+         * 再構成元と欠損した派生データを準備する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("open manager failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/prompts/cli",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: cli-prompt\n",
+                    "  description: CLI再構成\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create prompt page failed");
+        manager
+            .remove_prompt_candidate_by_page_id(&page_id)
+            .expect("remove prompt candidate failed");
+        manager
+            .set_mcp_primitive_name_owner_for_test(
+                crate::database::types::McpPrimitiveKind::Prompt,
+                "cli-prompt",
+                None,
+            )
+            .expect("remove prompt name failed");
+        drop(manager);
+
+        /*
+         * prompts targetのCLI contextを実行する
+         */
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "--db-path",
+            &db_arg,
+            "--assets-path",
+            &assets_arg,
+            "derived",
+            "rebuild",
+            "--target",
+            "prompts",
+        ])
+        .expect("parse failed");
+        let context = opts.build_context().expect("build context failed");
+        context.exec().expect("exec failed");
+        drop(context);
+
+        /*
+         * 候補、名前索引、readinessの復元を確認する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("reopen manager failed");
+        let candidate = manager
+            .get_prompt_candidate_by_page_id(&page_id)
+            .expect("get prompt candidate failed")
+            .expect("prompt candidate missing");
+        assert_eq!(candidate.name(), "cli-prompt");
+        assert_eq!(candidate.description(), "CLI再構成");
+        assert_eq!(
+            manager
+                .get_mcp_primitive_name_owner_for_test(
+                    crate::database::types::McpPrimitiveKind::Prompt,
+                    "cli-prompt",
+                )
+                .expect("get prompt name owner failed"),
+            Some(page_id),
+        );
+        assert!(manager
+            .is_mcp_primitive_name_index_ready()
+            .expect("get primitive name readiness failed"));
+    }
+
+    ///
+    /// derived rebuildのresources targetが
+    /// resource派生データを再構成することを確認する。
+    ///
+    /// # 注記
+    /// 候補とURI索引を除去した後にCLI contextを実行し、
+    /// latest sourceから復元されることを検証する。
+    ///
+    #[test]
+    fn derived_rebuild_resources_exec_rebuilds_resource_candidates() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("database.redb");
+        let assets_path = dir.path().join("assets");
+        let db_arg = db_path.to_string_lossy().to_string();
+        let assets_arg = assets_path.to_string_lossy().to_string();
+
+        /*
+         * 再構成元と欠損した派生データを準備する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("open manager failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/resources/cli",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/cli-resource\n",
+                    "  name: cli-resource\n",
+                    "  description: CLI再構成\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create resource page failed");
+        manager
+            .remove_resource_candidate_by_page_id(&page_id)
+            .expect("remove resource candidate failed");
+        manager
+            .set_resource_uri_owner_for_test("docs/cli-resource", None)
+            .expect("remove resource URI failed");
+        drop(manager);
+
+        /*
+         * resources targetのCLI contextを実行する
+         */
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "--db-path",
+            &db_arg,
+            "--assets-path",
+            &assets_arg,
+            "derived",
+            "rebuild",
+            "--target",
+            "resources",
+        ])
+        .expect("parse failed");
+        let context = opts.build_context().expect("build context failed");
+        context.exec().expect("exec failed");
+        drop(context);
+
+        /*
+         * 候補、URI索引、readinessの復元を確認する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("reopen manager failed");
+        let candidate = manager
+            .get_resource_candidate_by_page_id(&page_id)
+            .expect("get resource candidate failed")
+            .expect("resource candidate missing");
+        assert_eq!(candidate.resource_id(), "docs/cli-resource");
+        assert_eq!(candidate.name(), "cli-resource");
+        assert_eq!(
+            manager
+                .get_resource_uri_owner_for_test("docs/cli-resource")
+                .expect("get resource URI owner failed"),
+            Some(page_id),
+        );
+        assert!(manager
+            .is_resource_uri_index_ready()
+            .expect("get resource URI readiness failed"));
+    }
+
+    ///
+    /// derived rebuildのall targetが全派生データを
+    /// 再構成することを確認する。
+    ///
+    /// # 注記
+    /// 各派生データを欠損させてCLI contextを実行し、
+    /// 同じ操作で復元されることを検証する。
+    ///
+    #[test]
+    fn derived_rebuild_all_exec_rebuilds_all_derived_data() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("database.redb");
+        let assets_path = dir.path().join("assets");
+        let db_arg = db_path.to_string_lossy().to_string();
+        let assets_arg = assets_path.to_string_lossy().to_string();
+
+        /*
+         * template、prompt、resourceの再構成元を準備する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("open manager failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let template_id = manager
+            .create_page(
+                "/outside/template",
+                "user",
+                concat!(
+                    "---\n",
+                    "wiki:\n",
+                    "  template:\n",
+                    "    name: all-template\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create template page failed");
+        let legacy_id = manager
+            .create_page(
+                "/templates/legacy",
+                "user",
+                "legacy本文".to_string(),
+            )
+            .expect("create legacy page failed");
+        let prompt_id = manager
+            .create_page(
+                "/prompts/all",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: all-prompt\n",
+                    "  description: all再構成\n",
+                    "---\n",
+                    "本文",
+            )
+            .to_string(),
+        )
+        .expect("create prompt page failed");
+        let resource_id = manager
+            .create_page(
+                "/resources/all",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/all-resource\n",
+                    "  name: all-resource\n",
+                    "  description: all再構成\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create resource page failed");
+        manager
+            .remove_template_candidate_by_page_id(&template_id)
+            .expect("remove template candidate failed");
+        manager
+            .remove_prompt_candidate_by_page_id(&prompt_id)
+            .expect("remove prompt candidate failed");
+        manager
+            .set_mcp_primitive_name_owner_for_test(
+                crate::database::types::McpPrimitiveKind::Prompt,
+                "all-prompt",
+                None,
+            )
+            .expect("remove prompt name failed");
+        manager
+            .remove_resource_candidate_by_page_id(&resource_id)
+            .expect("remove resource candidate failed");
+        manager
+            .set_resource_uri_owner_for_test("docs/all-resource", None)
+            .expect("remove resource URI failed");
+        drop(manager);
+
+        /*
+         * all targetのCLI contextを実行する
+         */
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "--db-path",
+            &db_arg,
+            "--assets-path",
+            &assets_arg,
+            "--template-root",
+            "/templates",
+            "derived",
+            "rebuild",
+            "--target",
+            "all",
+        ])
+        .expect("parse failed");
+        let context = opts.build_context().expect("build context failed");
+        context.exec().expect("exec failed");
+        drop(context);
+
+        /*
+         * 各派生データと索引の復元を確認する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("reopen manager failed");
+        let template = manager
+            .get_template_candidate_by_page_id(&template_id)
+            .expect("get template candidate failed")
+            .expect("template candidate missing");
+        let legacy = manager
+            .get_template_candidate_by_page_id(&legacy_id)
+            .expect("get legacy candidate failed")
+            .expect("legacy candidate missing");
+        let prompt = manager
+            .get_prompt_candidate_by_page_id(&prompt_id)
+            .expect("get prompt candidate failed")
+            .expect("prompt candidate missing");
+        let resource = manager
+            .get_resource_candidate_by_page_id(&resource_id)
+            .expect("get resource candidate failed")
+            .expect("resource candidate missing");
+        assert_eq!(template.name(), "all-template");
+        assert_eq!(legacy.name(), "legacy");
+        assert_eq!(prompt.name(), "all-prompt");
+        assert_eq!(resource.resource_id(), "docs/all-resource");
+        assert_eq!(resource.name(), "all-resource");
+        assert_eq!(
+            manager
+                .get_mcp_primitive_name_owner_for_test(
+                    crate::database::types::McpPrimitiveKind::Prompt,
+                    "all-prompt",
+                )
+                .expect("get prompt name owner failed"),
+            Some(prompt_id),
+        );
+        assert_eq!(
+            manager
+                .get_resource_uri_owner_for_test("docs/all-resource")
+                .expect("get resource URI owner failed"),
+            Some(resource_id),
+        );
+        assert!(manager
+            .is_mcp_primitive_name_index_ready()
+            .expect("get primitive name readiness failed"));
+        assert!(manager
+            .is_resource_uri_index_ready()
+            .expect("get resource URI readiness failed"));
+    }
+
+    ///
+    /// all targetのprompt解析失敗時に
+    /// 全派生データを維持することを確認する。
+    ///
+    /// # 注記
+    /// template候補欠損と重複prompt名を準備し、
+    /// CLI context失敗後の状態を検証する。
+    ///
+    #[test]
+    fn derived_rebuild_all_preserves_all_tables_on_prompt_error() {
+        let dir = TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("database.redb");
+        let assets_path = dir.path().join("assets");
+        let db_arg = db_path.to_string_lossy().to_string();
+        let assets_arg = assets_path.to_string_lossy().to_string();
+
+        /*
+         * 再構成前の既存状態と解析失敗要因を準備する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("open manager failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let template_id = manager
+            .create_page(
+                "/templates/atomic",
+                "user",
+                concat!(
+                    "---\n",
+                    "wiki:\n",
+                    "  template:\n",
+                    "    name: atomic-template\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create template page failed");
+        let prompt_id = manager
+            .create_page(
+                "/prompts/stable",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: stable-prompt\n",
+                    "  description: stable\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create stable prompt failed");
+        let conflict_id = manager
+            .create_page(
+                "/prompts/conflict",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: conflict-prompt\n",
+                    "  description: conflict\n",
+                    "---\n",
+                    "本文",
+                )
+                .to_string(),
+            )
+            .expect("create conflict prompt failed");
+        let duplicate_source = concat!(
+            "---\n",
+            "mcp:\n",
+            "  primitive: prompt\n",
+            "  name: stable-prompt\n",
+            "  description: duplicate\n",
+            "---\n",
+            "本文",
+        )
+        .to_string();
+        manager
+            .remove_template_candidate_by_page_id(&template_id)
+            .expect("remove template candidate failed");
+        manager
+            .replace_latest_page_source_for_prompt_rebuild_test(
+                &conflict_id,
+                duplicate_source.clone(),
+            )
+            .expect("inject duplicate source failed");
+        drop(manager);
+
+        /*
+         * all targetが解析エラーを返すことを確認する
+         */
+        let opts = Options::try_parse_from([
+            "luwiki",
+            "--db-path",
+            &db_arg,
+            "--assets-path",
+            &assets_arg,
+            "derived",
+            "rebuild",
+            "--target",
+            "all",
+        ])
+        .expect("parse failed");
+        let context = opts.build_context().expect("build context failed");
+        let error = context
+            .exec()
+            .expect_err("all rebuild must reject duplicate prompt");
+        assert!(error
+            .to_string()
+            .contains("primitive=prompt name=stable-prompt"));
+        drop(context);
+
+        /*
+         * templatesとpromptsの既存状態を確認する
+         */
+        let manager = DatabaseManager::open(&db_path, &assets_path)
+            .expect("reopen manager failed");
+        assert!(manager
+            .get_template_candidate_by_page_id(&template_id)
+            .expect("get template candidate failed")
+            .is_none());
+        assert_eq!(
+            manager
+                .get_prompt_candidate_by_page_id(&prompt_id)
+                .expect("get prompt candidate failed")
+                .expect("stable prompt candidate missing")
+                .name(),
+            "stable-prompt",
+        );
+        assert_eq!(
+            manager
+                .get_prompt_candidate_by_page_id(&conflict_id)
+                .expect("get conflict candidate failed")
+                .expect("conflict prompt candidate missing")
+                .name(),
+            "conflict-prompt",
+        );
+        assert_eq!(
+            manager
+                .get_mcp_primitive_name_owner_for_test(
+                    crate::database::types::McpPrimitiveKind::Prompt,
+                    "stable-prompt",
+                )
+                .expect("get prompt name owner failed"),
+            Some(prompt_id),
+        );
+        assert_eq!(
+            manager
+                .get_mcp_primitive_name_owner_for_test(
+                    crate::database::types::McpPrimitiveKind::Prompt,
+                    "conflict-prompt",
+                )
+                .expect("get conflict name owner failed"),
+            Some(conflict_id),
+        );
+        assert!(manager
+            .is_mcp_primitive_name_index_ready()
+            .expect("get primitive name readiness failed"));
+        let state = manager
+            .get_current_page_state_by_path("/prompts/conflict")
+            .expect("get conflict page state failed")
+            .expect("conflict page state missing");
+        assert_eq!(
+            state
+                .latest_source()
+                .expect("conflict latest source missing")
+                .source(),
+            duplicate_source,
+        );
     }
 
     #[test]

@@ -66,6 +66,29 @@ export interface CreatePageResponse {
   lockToken: string;
 }
 
+export interface FrontMatterErrorDetailSyntax {
+  type: 'syntax';
+  line?: number;
+  column?: number;
+  message?: string;
+}
+
+export interface FrontMatterErrorDetailValidation {
+  type: 'validation';
+  property_path?: string;
+  message?: string;
+}
+
+export type FrontMatterErrorDetail =
+  | FrontMatterErrorDetailSyntax
+  | FrontMatterErrorDetailValidation;
+
+export interface FrontMatterErrorResponse {
+  error?: string;
+  kind: 'front_matter';
+  detail?: FrontMatterErrorDetail;
+}
+
 export interface PageLockInfo {
   expire: string;
   username: string;
@@ -83,6 +106,8 @@ export interface SearchResult {
 export interface TemplatePageItem {
   page_id: string;
   name: string;
+  description: string | null;
+  macro_expand: boolean | null;
 }
 
 export interface PageListItem {
@@ -123,6 +148,16 @@ function extractErrorReason(data: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+export function isFrontMatterErrorResponse(
+  data: unknown,
+): data is FrontMatterErrorResponse {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  const kind = (data as { kind?: unknown }).kind;
+  return kind === 'front_matter';
 }
 
 function buildRequestError(status: number, data?: unknown): Error & {
@@ -572,7 +607,7 @@ export async function fetchPageLockInfo(
  */
 export async function searchPages(params: {
   expression: string;
-  targets: Array<'headings' | 'body' | 'code'>;
+  targets: Array<'headings' | 'body' | 'code' | 'front_matter'>;
   withDeleted: boolean;
   allRevision: boolean;
 }): Promise<SearchResult[]> {

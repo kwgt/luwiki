@@ -19,7 +19,11 @@ use crate::audit::model::{AuditOperation, AuditRecord, AuditResult};
 use crate::auth::AuthContext;
 use crate::database::DatabaseManager;
 use crate::database::types::UserId;
-use crate::fts::FtsIndexConfig;
+use crate::fts::{FtsIndexConfig, FtsSearchTarget};
+use crate::markdown_source::front_matter::{
+    validate_prompt_name,
+    validate_resource_id,
+};
 use crate::mcp::service::{
     AppendServiceResult,
     EditPageResult,
@@ -43,19 +47,26 @@ use super::model::{
     GetPageSectionResponse,
     GetPageTocRequest,
     GetPageTocResponse,
+    GetPromptServiceResult,
     ListPagesRequest,
     ListPagesResponse,
+    ListPromptsServiceResult,
+    ListResourcesServiceResult,
     McpRequestEnvelope,
     McpResponseEnvelope,
     McpToolRequest,
     McpToolResponse,
     RenamePageRequest,
+    ReadResourceServiceResult,
     SearchPagesRequest,
     SearchPagesResponse,
     WritePageRequest,
     WritePageResponse,
 };
 use super::service::{EditPageRequest as ServiceEditPageRequest, McpService};
+
+/// resource URI authority の既定値
+const DEFAULT_RESOURCE_AUTHORITY: &str = "local.luwiki";
 
 ///
 /// MCPハンドラの骨格
@@ -99,6 +110,226 @@ impl McpHandler {
     ///
     pub(crate) fn auth(&self) -> &McpAuthGateway {
         &self.auth
+    }
+
+    ///
+    /// `prompts/list`をサービス層へ橋渡しする
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元IP address
+    /// * `cursor` - 次ページcursor
+    ///
+    /// # 戻り値
+    /// prompt一覧サービス結果を返す。
+    ///
+    pub(crate) fn handle_list_prompts(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        cursor: Option<&str>,
+    ) -> Result<ListPromptsServiceResult, McpError> {
+        match self.service.list_prompts(auth, db, cursor) {
+            Ok(result) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_list_prompts_audit_record(
+                            auth,
+                            address,
+                            &result,
+                            user_id,
+                        ),
+                    );
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_list_prompts_error_audit_record(
+                            auth,
+                            address,
+                            &error,
+                            user_id,
+                        ),
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    ///
+    /// `resources/list`をサービス層へ橋渡しする
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元IP address
+    /// * `cursor` - 次ページcursor
+    ///
+    /// # 戻り値
+    /// resource一覧サービス結果を返す。
+    ///
+    pub(crate) fn handle_list_resources(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        cursor: Option<&str>,
+    ) -> Result<ListResourcesServiceResult, McpError> {
+        match self.service.list_resources(auth, db, cursor) {
+            Ok(result) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_list_resources_audit_record(
+                            auth,
+                            address,
+                            &result,
+                            user_id,
+                        ),
+                    );
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_list_resources_error_audit_record(
+                            auth,
+                            address,
+                            &error,
+                            user_id,
+                        ),
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    ///
+    /// `resources/read`をサービス層へ橋渡しする
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元IP address
+    /// * `uri` - resource URI
+    ///
+    /// # 戻り値
+    /// resource取得サービス結果を返す。
+    ///
+    pub(crate) fn handle_read_resource(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        uri: &str,
+    ) -> Result<ReadResourceServiceResult, McpError> {
+        match self.service.read_resource(auth, db, uri) {
+            Ok(result) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_read_resource_audit_record(
+                            auth,
+                            address,
+                            uri,
+                            &result,
+                            user_id,
+                        ),
+                    );
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_read_resource_error_audit_record(
+                            auth,
+                            address,
+                            uri,
+                            &error,
+                            user_id,
+                        ),
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    ///
+    /// `prompts/get`をサービス層へ橋渡しする
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元IP address
+    /// * `name` - prompt名
+    /// * `arguments` - prompt引数
+    ///
+    /// # 戻り値
+    /// prompt取得サービス結果を返す。
+    ///
+    pub(crate) fn handle_get_prompt(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        name: &str,
+        arguments: Option<
+            &serde_json::Map<String, serde_json::Value>,
+        >,
+    ) -> Result<GetPromptServiceResult, McpError> {
+        match self.service.get_prompt(auth, db, name, arguments) {
+            Ok(result) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_get_prompt_audit_record(
+                            auth,
+                            address,
+                            name,
+                            &result,
+                            user_id,
+                        ),
+                    );
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some(user_id) =
+                    resolve_audit_user_id(db, auth)
+                {
+                    self.try_record_audit(
+                        build_get_prompt_error_audit_record(
+                            auth,
+                            address,
+                            name,
+                            &error,
+                            user_id,
+                        ),
+                    );
+                }
+                Err(error)
+            }
+        }
     }
 
     ///
@@ -191,6 +422,7 @@ impl McpHandler {
                             db,
                             fts_config,
                             input.query(),
+                            input.targets(),
                             input.prefix(),
                             input.limit(),
                         )?
@@ -484,6 +716,7 @@ impl McpHandler {
     /// * `fts_config` - FTS 設定
     /// * `address` - 入力元アドレス
     /// * `query` - 全文検索式
+    /// * `targets` - 検索対象一覧
     /// * `prefix` - 検索対象 prefix
     /// * `limit` - 最大取得件数
     ///
@@ -497,6 +730,7 @@ impl McpHandler {
         fts_config: &FtsIndexConfig,
         address: Option<IpAddr>,
         query: &str,
+        targets: &[FtsSearchTarget],
         prefix: Option<&str>,
         limit: Option<usize>,
     ) -> Result<SearchPagesResponse, McpError> {
@@ -504,6 +738,7 @@ impl McpHandler {
             super::tools::McpToolName::SearchPages,
             McpToolRequest::SearchPages(SearchPagesRequest::new(
                 query.to_string(),
+                targets.to_vec(),
                 prefix.map(str::to_string),
                 limit,
             )),
@@ -517,6 +752,7 @@ impl McpHandler {
             db,
             fts_config,
             query,
+            targets,
             prefix,
             limit,
         ) {
@@ -1025,6 +1261,337 @@ fn build_list_pages_audit_record(
     )
 }
 
+///
+/// prompts/list成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `result` - prompt一覧結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// prompt一覧成功監査レコードを返す。
+///
+fn build_list_prompts_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    result: &ListPromptsServiceResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::ListPrompts,
+        user_id,
+        auth,
+        address,
+        None,
+        None,
+        Some(format!(
+            "count={} has_more={}",
+            result.items().len(),
+            result.next_cursor().is_some(),
+        )),
+    )
+}
+
+///
+/// prompts/list失敗監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `error` - prompt一覧失敗
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// prompt一覧失敗監査レコードを返す。
+///
+fn build_list_prompts_error_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    error: &McpError,
+    user_id: UserId,
+) -> AuditRecord {
+    let result = audit_result_from_error(error);
+    let summary = match result {
+        AuditResult::ScopeDenied => "operation is not allowed",
+        AuditResult::InvalidInput => "cursor is invalid",
+        _ => "internal error",
+    };
+
+    AuditRecord::new(
+        AuditOperation::ListPrompts,
+        user_id,
+        auth.token_id().cloned(),
+        address,
+        None,
+        result,
+        Utc::now(),
+        Some(summary.to_string()),
+        None,
+    )
+}
+
+///
+/// resources/list成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `result` - resource一覧結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// resource一覧成功監査レコードを返す。
+///
+fn build_list_resources_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    result: &ListResourcesServiceResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::ListResources,
+        user_id,
+        auth,
+        address,
+        None,
+        None,
+        Some(format!(
+            "count={} has_more={}",
+            result.items().len(),
+            result.next_cursor().is_some(),
+        )),
+    )
+}
+
+///
+/// resources/list失敗監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `error` - resource一覧失敗
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// resource一覧失敗監査レコードを返す。
+///
+fn build_list_resources_error_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    error: &McpError,
+    user_id: UserId,
+) -> AuditRecord {
+    let result = audit_result_from_error(error);
+    let summary = match result {
+        AuditResult::ScopeDenied => "operation is not allowed",
+        AuditResult::InvalidInput => "cursor is invalid",
+        _ => "internal error",
+    };
+
+    AuditRecord::new(
+        AuditOperation::ListResources,
+        user_id,
+        auth.token_id().cloned(),
+        address,
+        None,
+        result,
+        Utc::now(),
+        Some(summary.to_string()),
+        None,
+    )
+}
+
+///
+/// resources/read成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `uri` - resource URI
+/// * `result` - resource取得結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// resource取得成功監査レコードを返す。
+///
+fn build_read_resource_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    uri: &str,
+    result: &ReadResourceServiceResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::ReadResource,
+        user_id,
+        auth,
+        address,
+        None,
+        result.revision(),
+        resource_uri_audit_summary(uri),
+    )
+}
+
+///
+/// resources/read失敗監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `uri` - resource URI
+/// * `error` - resource取得失敗
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// resource取得失敗監査レコードを返す。
+///
+fn build_read_resource_error_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    uri: &str,
+    error: &McpError,
+    user_id: UserId,
+) -> AuditRecord {
+    AuditRecord::new(
+        AuditOperation::ReadResource,
+        user_id,
+        auth.token_id().cloned(),
+        address,
+        None,
+        audit_result_from_error(error),
+        Utc::now(),
+        resource_uri_audit_summary(uri),
+        None,
+    )
+}
+
+///
+/// prompts/get成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `name` - prompt名
+/// * `result` - prompt取得結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// prompt取得成功監査レコードを返す。
+///
+fn build_get_prompt_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    name: &str,
+    result: &GetPromptServiceResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::GetPrompt,
+        user_id,
+        auth,
+        address,
+        None,
+        Some(result.revision()),
+        prompt_name_audit_summary(name),
+    )
+}
+
+///
+/// prompts/get失敗監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `name` - prompt名
+/// * `error` - prompt取得失敗
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// prompt取得失敗監査レコードを返す。
+///
+fn build_get_prompt_error_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    name: &str,
+    error: &McpError,
+    user_id: UserId,
+) -> AuditRecord {
+    AuditRecord::new(
+        AuditOperation::GetPrompt,
+        user_id,
+        auth.token_id().cloned(),
+        address,
+        None,
+        audit_result_from_error(error),
+        Utc::now(),
+        prompt_name_audit_summary(name),
+        None,
+    )
+}
+
+///
+/// 監査ログへ記録可能なprompt名summaryを生成する
+///
+/// # 引数
+/// * `name` - prompt名
+///
+/// # 戻り値
+/// prompt名が値制約を満たす場合だけsummaryを返す。
+///
+fn prompt_name_audit_summary(name: &str) -> Option<String> {
+    validate_prompt_name(name)
+        .ok()
+        .map(|_| format!("name={}", name))
+}
+
+///
+/// 監査ログへ記録可能なresource URI summaryを生成する
+///
+/// # 引数
+/// * `uri` - resource URI
+///
+/// # 戻り値
+/// URIが値制約を満たす場合だけsummaryを返す。
+///
+fn resource_uri_audit_summary(uri: &str) -> Option<String> {
+    if uri.trim().is_empty()
+        || uri.trim() != uri
+        || uri.chars().any(char::is_control)
+    {
+        return None;
+    }
+
+    let rest = uri.strip_prefix("luwiki://")?;
+    let path_start = rest.find('/')?;
+    let authority = &rest[..path_start];
+    if authority != DEFAULT_RESOURCE_AUTHORITY {
+        return None;
+    }
+    let path = &rest[path_start..];
+
+    if let Some(builtin_id) = path.strip_prefix("/builtin/") {
+        if builtin_id.is_empty()
+            || builtin_id.contains('/')
+            || builtin_id.trim() != builtin_id
+            || builtin_id.chars().any(char::is_control)
+        {
+            return None;
+        }
+
+        return Some(format!("uri={}", uri));
+    }
+
+    if let Some(resource_id) = path.strip_prefix("/page/") {
+        return validate_resource_id(resource_id)
+            .ok()
+            .map(|_| format!("uri={}", uri));
+    }
+
+    None
+}
+
 fn build_search_pages_audit_record(
     auth: &AuthContext,
     address: Option<IpAddr>,
@@ -1292,6 +1859,22 @@ mod tests {
     use crate::mcp::service::McpService;
     use crate::mcp::tools::McpToolName;
 
+    fn audit_sink_that_fails_to_write(
+        dir: &tempfile::TempDir,
+    ) -> Arc<RwLock<AuditSink>> {
+        let output_file = dir.path().join("audit-output-file");
+        fs::write(&output_file, "not a directory")
+            .expect("write audit output file failed");
+
+        Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: output_file,
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )))
+    }
+
     ///
     /// 認可失敗のメッセージから監査結果分類を判定できることを確認する。
     ///
@@ -1529,5 +2112,1097 @@ mod tests {
         );
         assert_eq!(record.token_id, auth.token_id().cloned());
         assert_eq!(record.revision, None);
+    }
+
+    ///
+    /// prompts/list成功を専用操作として監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// 秘匿情報を含むpromptを一覧取得し、監査JSONLへ
+    /// 件数とhas_more以外が混入しないことを検証する。
+    ///
+    #[test]
+    fn handle_list_prompts_records_success_audit_log() {
+        /*
+         * promptと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-prompts.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/secret/prompt-path",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: secret-prompt-name\n",
+                    "  description: prompt description\n",
+                    "  system: secret-system-value\n",
+                    "---\n",
+                    "secret-body-value",
+                )
+                .to_string(),
+            )
+            .expect("create prompt failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let address = Some(
+            "127.0.0.1"
+                .parse()
+                .expect("parse audit address failed"),
+        );
+
+        /*
+         * 一覧成功を監査ログへ記録する
+         */
+        let result = handler
+            .handle_list_prompts(
+                &auth,
+                &manager,
+                address,
+                None,
+            )
+            .expect("list prompts failed");
+        assert_eq!(result.items().len(), 1);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用操作と記録禁止情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        assert_eq!(record.operation, AuditOperation::ListPrompts);
+        assert_eq!(record.operation.as_str(), "list_prompts");
+        assert_eq!(record.result, AuditResult::Success);
+        assert_eq!(record.target_path, None);
+        assert_eq!(record.revision, None);
+        assert_eq!(
+            record.summary.as_deref(),
+            Some("count=1 has_more=false"),
+        );
+        assert_eq!(record.token_id, auth.token_id().cloned());
+        assert_eq!(record.address, address);
+        assert!(!body.contains("secret-prompt-name"));
+        assert!(!body.contains("/secret/prompt-path"));
+        assert!(!body.contains("secret-system-value"));
+        assert!(!body.contains("secret-body-value"));
+    }
+
+    ///
+    /// prompts/list失敗を専用結果分類で監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// read scope不足を発生させ、scope_deniedと固定summaryを
+    /// 検証する。
+    ///
+    #[test]
+    fn handle_list_prompts_records_failure_audit_log() {
+        /*
+         * scope不足の認証文脈と監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-prompts-error.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * scope不足失敗を監査ログへ記録する
+         */
+        let error = handler
+            .handle_list_prompts(
+                &auth,
+                &manager,
+                None,
+                Some("secret-cursor"),
+            )
+            .expect_err("scope denial expected");
+        assert_eq!(error.code(), McpErrorCode::Forbidden);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用操作と固定失敗情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        assert_eq!(record.operation, AuditOperation::ListPrompts);
+        assert_eq!(record.result, AuditResult::ScopeDenied);
+        assert_eq!(record.target_path, None);
+        assert_eq!(record.revision, None);
+        assert_eq!(
+            record.summary.as_deref(),
+            Some("operation is not allowed"),
+        );
+        assert!(!body.contains("secret-cursor"));
+        assert!(!body.contains("required scope denied: read"));
+    }
+
+    ///
+    /// prompts/get成功を専用操作として監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// system、本文、引数値を含むpromptを取得し、
+    /// 監査JSONLへ許可情報だけが
+    /// 記録されることを検証する。
+    ///
+    #[test]
+    fn handle_get_prompt_records_success_audit_log() {
+        /*
+         * promptと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-get-prompt.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/secret/get-prompt-path",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: audit-get-prompt\n",
+                    "  description: secret-description\n",
+                    "  system: secret-system {{@target}}\n",
+                    "  arguments:\n",
+                    "    - name: target\n",
+                    "      description: target description\n",
+                    "      required: true\n",
+                    "---\n",
+                    "secret-body {{@target}}",
+                )
+                .to_string(),
+            )
+            .expect("create prompt failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let address = Some(
+            "127.0.0.1"
+                .parse()
+                .expect("parse audit address failed"),
+        );
+        let arguments = serde_json::Map::from_iter([(
+            "target".to_string(),
+            serde_json::Value::String(
+                "secret-argument-value".to_string(),
+            ),
+        )]);
+
+        /*
+         * prompt取得成功を監査ログへ記録する
+         */
+        let result = handler
+            .handle_get_prompt(
+                &auth,
+                &manager,
+                address,
+                "audit-get-prompt",
+                Some(&arguments),
+            )
+            .expect("get prompt failed");
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用操作、revision、記録禁止情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        assert_eq!(record.operation, AuditOperation::GetPrompt);
+        assert_eq!(record.operation.as_str(), "get_prompt");
+        assert_eq!(record.result, AuditResult::Success);
+        assert_eq!(record.target_path, None);
+        assert_eq!(record.revision, Some(result.revision()));
+        assert_eq!(
+            record.summary.as_deref(),
+            Some("name=audit-get-prompt"),
+        );
+        assert_eq!(record.token_id, auth.token_id().cloned());
+        assert_eq!(record.address, address);
+        assert!(!body.contains("/secret/get-prompt-path"));
+        assert!(!body.contains("secret-description"));
+        assert!(!body.contains("secret-system"));
+        assert!(!body.contains("secret-body"));
+        assert!(!body.contains("secret-argument-value"));
+    }
+
+    ///
+    /// prompts/get失敗を専用結果分類で監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// 不存在、引数不正、scope不足、
+    /// 内部不整合を発生させ、
+    /// 固定分類と記録禁止情報を検証する。
+    ///
+    #[test]
+    fn handle_get_prompt_records_failure_audit_logs() {
+        /*
+         * 失敗状態を作るpromptと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-get-error.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/secret/get-error-path",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: audit-failure\n",
+                    "  description: secret-description\n",
+                    "  system: secret-system\n",
+                    "  arguments:\n",
+                    "    - name: target\n",
+                    "      description: target description\n",
+                    "      required: true\n",
+                    "---\n",
+                    "secret-body {{@target}}",
+                )
+                .to_string(),
+            )
+            .expect("create prompt failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(
+                    1024 * 1024,
+                ),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let read = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let append_only = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let arguments = serde_json::Map::from_iter([(
+            "unknown".to_string(),
+            serde_json::Value::String(
+                "secret-argument-value".to_string(),
+            ),
+        )]);
+
+        /*
+         * 不存在、引数不正、scope不足を記録する
+         */
+        let not_found = handler
+            .handle_get_prompt(
+                &read,
+                &manager,
+                None,
+                "missing-prompt",
+                None,
+            )
+            .expect_err("not found expected");
+        assert_eq!(not_found.code(), McpErrorCode::NotFound);
+        let invalid_name = handler
+            .handle_get_prompt(
+                &read,
+                &manager,
+                None,
+                " invalid-name",
+                None,
+            )
+            .expect_err("invalid name must be hidden");
+        assert_eq!(invalid_name.code(), McpErrorCode::NotFound);
+        let invalid = handler
+            .handle_get_prompt(
+                &read,
+                &manager,
+                None,
+                "audit-failure",
+                Some(&arguments),
+            )
+            .expect_err("invalid input expected");
+        assert_eq!(invalid.code(), McpErrorCode::InvalidInput);
+        let forbidden = handler
+            .handle_get_prompt(
+                &append_only,
+                &manager,
+                None,
+                "audit-failure",
+                None,
+            )
+            .expect_err("scope denial expected");
+        assert_eq!(forbidden.code(), McpErrorCode::Forbidden);
+
+        /*
+         * latest source不整合を記録する
+         */
+        manager
+            .replace_latest_page_source_for_prompt_rebuild_test(
+                &page_id,
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: prompt\n",
+                    "  name: secret-changed-name\n",
+                    "  description: changed\n",
+                    "---\n",
+                    "secret-internal-body",
+                )
+                .to_string(),
+            )
+            .expect("replace latest source failed");
+        let internal = handler
+            .handle_get_prompt(
+                &read,
+                &manager,
+                None,
+                "audit-failure",
+                None,
+            )
+            .expect_err("internal error expected");
+        assert_eq!(internal.code(), McpErrorCode::InternalError);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 失敗分類、summary、記録禁止情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let records = body
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<AuditRecord>(line)
+                    .expect("decode audit record failed")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 5);
+        assert_eq!(records[0].result, AuditResult::NotFound);
+        assert_eq!(records[1].result, AuditResult::NotFound);
+        assert_eq!(records[2].result, AuditResult::InvalidInput);
+        assert_eq!(records[3].result, AuditResult::ScopeDenied);
+        assert_eq!(records[4].result, AuditResult::InternalError);
+        for record in &records {
+            assert_eq!(record.operation, AuditOperation::GetPrompt);
+            assert_eq!(record.target_path, None);
+            assert_eq!(record.revision, None);
+        }
+        assert_eq!(
+            records[0].summary.as_deref(),
+            Some("name=missing-prompt"),
+        );
+        assert_eq!(records[1].summary, None);
+        for record in &records[2..] {
+            assert_eq!(
+                record.summary.as_deref(),
+                Some("name=audit-failure"),
+            );
+        }
+        assert!(!body.contains("/secret/get-error-path"));
+        assert!(!body.contains("secret-description"));
+        assert!(!body.contains("secret-system"));
+        assert!(!body.contains("secret-body"));
+        assert!(!body.contains("secret-argument-value"));
+        assert!(!body.contains("secret-changed-name"));
+        assert!(!body.contains("secret-internal-body"));
+        assert!(!body.contains(&page_id.to_string()));
+    }
+
+    ///
+    /// resources/list成功を専用操作として監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// 秘匿情報を含むresourceを一覧取得し、監査JSONLへ
+    /// 件数とhas_more以外が混入しないことを検証する。
+    ///
+    #[test]
+    fn handle_list_resources_records_success_audit_log() {
+        /*
+         * resourceと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-resources.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/secret/resource-path",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/secret-resource\n",
+                    "  name: secret-resource-name\n",
+                    "  description: secret resource description\n",
+                    "  mime_type: text/plain\n",
+                    "---\n",
+                    "secret-resource-body",
+                )
+                .to_string(),
+            )
+            .expect("create resource failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let address = Some(
+            "127.0.0.1"
+                .parse()
+                .expect("parse audit address failed"),
+        );
+
+        /*
+         * 一覧成功を監査ログへ記録する
+         */
+        let result = handler
+            .handle_list_resources(
+                &auth,
+                &manager,
+                address,
+                None,
+            )
+            .expect("list resources failed");
+        assert!(result.items().len() >= 1);
+        let expected_summary = format!(
+            "count={} has_more=false",
+            result.items().len(),
+        );
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用操作と記録禁止情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        assert_eq!(record.operation, AuditOperation::ListResources);
+        assert_eq!(record.operation.as_str(), "list_resources");
+        assert_eq!(record.result, AuditResult::Success);
+        assert_eq!(record.target_path, None);
+        assert_eq!(record.revision, None);
+        assert_eq!(
+            record.summary.as_deref(),
+            Some(expected_summary.as_str()),
+        );
+        assert_eq!(record.token_id, auth.token_id().cloned());
+        assert_eq!(record.address, address);
+        assert!(!body.contains("docs/secret-resource"));
+        assert!(!body.contains("secret-resource-name"));
+        assert!(!body.contains("/secret/resource-path"));
+        assert!(!body.contains("secret resource description"));
+        assert!(!body.contains("secret-resource-body"));
+    }
+
+    ///
+    /// resources/list失敗を専用結果分類で監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// read scope不足を発生させ、scope_deniedと固定summaryを
+    /// 検証する。
+    ///
+    #[test]
+    fn handle_list_resources_records_failure_audit_log() {
+        /*
+         * scope不足の認証文脈と監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-resources-error.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * scope不足失敗を監査ログへ記録する
+         */
+        let error = handler
+            .handle_list_resources(
+                &auth,
+                &manager,
+                None,
+                Some("secret-cursor"),
+            )
+            .expect_err("scope denial expected");
+        assert_eq!(error.code(), McpErrorCode::Forbidden);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用操作と固定失敗情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        assert_eq!(record.operation, AuditOperation::ListResources);
+        assert_eq!(record.result, AuditResult::ScopeDenied);
+        assert_eq!(record.target_path, None);
+        assert_eq!(record.revision, None);
+        assert_eq!(
+            record.summary.as_deref(),
+            Some("operation is not allowed"),
+        );
+        assert!(!body.contains("secret-cursor"));
+        assert!(!body.contains("required scope denied: read"));
+    }
+
+    ///
+    /// resources/read成功を専用操作として監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// front matterと本文を含むresourceを取得し、
+    /// 監査JSONLへ許可情報だけが記録されることを検証する。
+    ///
+    #[test]
+    fn handle_read_resource_records_success_audit_log() {
+        /*
+         * resourceと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-read-resource.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/secret/read-resource-path",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/audit-read\n",
+                    "  name: audit-read-resource\n",
+                    "  description: secret read description\n",
+                    "  mime_type: text/plain\n",
+                    "---\n",
+                    "secret-read-body",
+                )
+                .to_string(),
+            )
+            .expect("create resource failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let address = Some(
+            "127.0.0.1"
+                .parse()
+                .expect("parse audit address failed"),
+        );
+        let uri = "luwiki://local.luwiki/page/docs/audit-read";
+
+        /*
+         * resource取得成功を監査ログへ記録する
+         */
+        let result = handler
+            .handle_read_resource(
+                &auth,
+                &manager,
+                address,
+                uri,
+            )
+            .expect("read resource failed");
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用操作、revision、記録禁止情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        assert_eq!(record.operation, AuditOperation::ReadResource);
+        assert_eq!(record.operation.as_str(), "read_resource");
+        assert_eq!(record.result, AuditResult::Success);
+        assert_eq!(record.target_path, None);
+        assert_eq!(record.revision, result.revision());
+        assert_eq!(
+            record.summary.as_deref(),
+            Some("uri=luwiki://local.luwiki/page/docs/audit-read"),
+        );
+        assert_eq!(record.token_id, auth.token_id().cloned());
+        assert_eq!(record.address, address);
+        assert!(!body.contains("/secret/read-resource-path"));
+        assert!(!body.contains("audit-read-resource"));
+        assert!(!body.contains("secret read description"));
+        assert!(!body.contains("secret-read-body"));
+    }
+
+    ///
+    /// resources/read失敗を専用結果分類で監査記録することを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// 不存在、URI不正、scope不足、内部不整合を発生させ、
+    /// 固定分類と記録禁止情報を検証する。
+    ///
+    #[test]
+    fn handle_read_resource_records_failure_audit_logs() {
+        /*
+         * 失敗状態を作るresourceと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-read-error.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/secret/read-error-path",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/audit-failure\n",
+                    "  name: audit-failure-resource\n",
+                    "  description: secret failure description\n",
+                    "  mime_type: text/plain\n",
+                    "---\n",
+                    "secret-failure-body",
+                )
+                .to_string(),
+            )
+            .expect("create resource failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(
+                    1024 * 1024,
+                ),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let read = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let append_only = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * 不存在、URI不正、scope不足を記録する
+         */
+        let missing_uri = "luwiki://local.luwiki/page/docs/missing";
+        let not_found = handler
+            .handle_read_resource(&read, &manager, None, missing_uri)
+            .expect_err("not found expected");
+        assert_eq!(not_found.code(), McpErrorCode::NotFound);
+        let invalid = handler
+            .handle_read_resource(
+                &read,
+                &manager,
+                None,
+                "luwiki://local.luwiki/page/ bad-secret-uri",
+            )
+            .expect_err("invalid input expected");
+        assert_eq!(invalid.code(), McpErrorCode::InvalidInput);
+        let failure_uri =
+            "luwiki://local.luwiki/page/docs/audit-failure";
+        let forbidden = handler
+            .handle_read_resource(
+                &append_only,
+                &manager,
+                None,
+                failure_uri,
+            )
+            .expect_err("scope denial expected");
+        assert_eq!(forbidden.code(), McpErrorCode::Forbidden);
+
+        /*
+         * latest source不整合を記録する
+         */
+        manager
+            .replace_latest_page_source_for_resource_rebuild_test(
+                &page_id,
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/secret-changed\n",
+                    "  name: changed-resource\n",
+                    "  description: changed secret description\n",
+                    "---\n",
+                    "secret-internal-resource-body",
+                )
+                .to_string(),
+            )
+            .expect("replace latest source failed");
+        let internal = handler
+            .handle_read_resource(&read, &manager, None, failure_uri)
+            .expect_err("internal error expected");
+        assert_eq!(internal.code(), McpErrorCode::InternalError);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 失敗分類、summary、記録禁止情報を確認する
+         */
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let records = body
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<AuditRecord>(line)
+                    .expect("decode audit record failed")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0].result, AuditResult::NotFound);
+        assert_eq!(records[1].result, AuditResult::InvalidInput);
+        assert_eq!(records[2].result, AuditResult::ScopeDenied);
+        assert_eq!(records[3].result, AuditResult::InternalError);
+        for record in &records {
+            assert_eq!(record.operation, AuditOperation::ReadResource);
+            assert_eq!(record.target_path, None);
+            assert_eq!(record.revision, None);
+        }
+        assert_eq!(
+            records[0].summary.as_deref(),
+            Some("uri=luwiki://local.luwiki/page/docs/missing"),
+        );
+        assert_eq!(records[1].summary, None);
+        for record in &records[2..] {
+            assert_eq!(
+                record.summary.as_deref(),
+                Some("uri=luwiki://local.luwiki/page/docs/audit-failure"),
+            );
+        }
+        assert!(!body.contains(" bad-secret-uri"));
+        assert!(!body.contains("/secret/read-error-path"));
+        assert!(!body.contains("audit-failure-resource"));
+        assert!(!body.contains("secret failure description"));
+        assert!(!body.contains("secret-failure-body"));
+        assert!(!body.contains("docs/secret-changed"));
+        assert!(!body.contains("changed-resource"));
+        assert!(!body.contains("changed secret description"));
+        assert!(!body.contains("secret-internal-resource-body"));
+        assert!(!body.contains(&page_id.to_string()));
+    }
+
+    ///
+    /// resources/listが監査ログ書き込み失敗で結果を
+    /// 変えないことを確認する。
+    ///
+    /// # 注記
+    /// audit writerの出力先を通常ファイルにして書き込み失敗を
+    /// 発生させ、成功系と失敗系の結果が維持されることを検証する。
+    ///
+    #[test]
+    fn handle_list_resources_ignores_audit_record_failure() {
+        /*
+         * 書き込み失敗する監査sinkと認証文脈を準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-list-audit-fail.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(audit_sink_that_fails_to_write(&dir)),
+        );
+        let read = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+        let append_only = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Append]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * 成功結果と本来の失敗結果が監査ログ失敗で変わらない
+         */
+        let result = handler
+            .handle_list_resources(&read, &manager, None, None)
+            .expect("list resources should succeed");
+        assert!(!result.items().is_empty());
+
+        let error = handler
+            .handle_list_resources(
+                &append_only,
+                &manager,
+                None,
+                None,
+            )
+            .expect_err("scope denial expected");
+        assert_eq!(error.code(), McpErrorCode::Forbidden);
+    }
+
+    ///
+    /// resources/readが監査ログ書き込み失敗で結果を
+    /// 変えないことを確認する。
+    ///
+    /// # 注記
+    /// audit writerの出力先を通常ファイルにして書き込み失敗を
+    /// 発生させ、成功系と失敗系の結果が維持されることを検証する。
+    ///
+    #[test]
+    fn handle_read_resource_ignores_audit_record_failure() {
+        /*
+         * 書き込み失敗する監査sinkとresourceを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-read-audit-fail.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/audit-fail/read-resource",
+                "alice",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_id: docs/audit-fail\n",
+                    "  name: audit-fail-resource\n",
+                    "  description: audit fail resource\n",
+                    "---\n",
+                    "audit fail body",
+                )
+                .to_string(),
+            )
+            .expect("create resource failed");
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(audit_sink_that_fails_to_write(&dir)),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::new(),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * 成功結果と本来の失敗結果が監査ログ失敗で変わらない
+         */
+        let result = handler
+            .handle_read_resource(
+                &auth,
+                &manager,
+                None,
+                "luwiki://local.luwiki/page/docs/audit-fail",
+            )
+            .expect("read resource should succeed");
+        assert_eq!(result.text(), "audit fail body");
+
+        let error = handler
+            .handle_read_resource(
+                &auth,
+                &manager,
+                None,
+                "luwiki://local.luwiki/page/docs/missing",
+            )
+            .expect_err("not found expected");
+        assert_eq!(error.code(), McpErrorCode::NotFound);
     }
 }
