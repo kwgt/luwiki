@@ -2428,8 +2428,8 @@ impl Value for PromptCandidateEntry {
 ///
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct ResourceCandidateEntry {
-    /// resource 識別子
-    resource_id: String,
+    /// resource path
+    resource_path: String,
 
     /// resource 名
     name: String,
@@ -2446,7 +2446,7 @@ impl ResourceCandidateEntry {
     /// resource 候補派生データの生成
     ///
     /// # 引数
-    /// * `resource_id` - resource 識別子
+    /// * `resource_path` - resource path
     /// * `name` - resource 名
     /// * `description` - resource 説明
     /// * `mime_type` - MIME type
@@ -2455,13 +2455,13 @@ impl ResourceCandidateEntry {
     /// 生成した resource 候補派生データを返す。
     ///
     pub(crate) fn new(
-        resource_id: String,
+        resource_path: String,
         name: String,
         description: String,
         mime_type: Option<String>,
     ) -> Self {
         Self {
-            resource_id,
+            resource_path,
             name,
             description,
             mime_type,
@@ -2469,13 +2469,13 @@ impl ResourceCandidateEntry {
     }
 
     ///
-    /// resource 識別子へのアクセサ
+    /// resource path へのアクセサ
     ///
     /// # 戻り値
-    /// resource 識別子を返す。
+    /// resource path を返す。
     ///
-    pub(crate) fn resource_id(&self) -> &str {
-        &self.resource_id
+    pub(crate) fn resource_path(&self) -> &str {
+        &self.resource_path
     }
 
     ///

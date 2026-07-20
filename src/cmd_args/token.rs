@@ -18,6 +18,7 @@ use crate::database::types::{
     BearerScope,
     BearerScopeSet,
     PathPrefixSet,
+    TokenId,
 };
 use crate::rest_api::validate_page_path;
 
@@ -182,6 +183,9 @@ impl Validate for TokenCreateOpts {
         if let Some(name) = self.normalized_name() {
             if name.is_empty() {
                 return Err(anyhow!("token name must not be empty"));
+            }
+            if TokenId::from_string(&name).is_ok() {
+                return Err(anyhow!("token name must not be ULID-formatted"));
             }
         }
 
@@ -855,6 +859,15 @@ mod tests {
             user_name: "alice".to_string(),
         };
         assert!(blank_name.validate().is_err());
+
+        let mut ulid_name = TokenCreateOpts {
+            scope: Some("write".to_string()),
+            ttl: Some("30d".to_string()),
+            name: Some("01KXM000000000000000000000".to_string()),
+            path_prefixes: Vec::new(),
+            user_name: "alice".to_string(),
+        };
+        assert!(ulid_name.validate().is_err());
 
         let mut invalid_prefix = TokenCreateOpts {
             scope: Some("write".to_string()),

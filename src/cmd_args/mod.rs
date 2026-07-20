@@ -201,6 +201,9 @@ fn default_cert_path() -> PathBuf {
 /// デフォルトのWikiタイトル
 const DEFAULT_WIKI_TITLE: &str = "LUWIKI";
 
+/// MCP resource URI authority のデフォルト値
+const DEFAULT_MCP_AUTHORITY: &str = "local.luwiki";
+
 /// アセットサイズ単位(KiB)
 const ASSET_SIZE_KIB: u64 = 1024;
 
@@ -1224,6 +1227,7 @@ impl Command {
                 config.set_run_bind_addr(opts.bind_addr());
                 config.set_run_bind_port(opts.bind_port());
                 config.set_run_use_mcp(opts.use_mcp());
+                config.set_run_mcp_authority(opts.mcp_authority());
                 config.set_run_use_tls(opts.use_tls());
                 config.set_run_server_cert(opts.cert_path());
             }
@@ -1469,6 +1473,81 @@ where
 }
 
 ///
+/// MCP authority の妥当性を検証する
+///
+/// # 引数
+/// * `authority` - 検証対象の authority
+///
+/// # 戻り値
+/// 妥当な場合は `Ok(())` を返す。
+///
+fn validate_mcp_authority(authority: &str) -> Result<()> {
+    /*
+     * 空値と境界空白を検証する
+     */
+    if authority.is_empty() {
+        return Err(anyhow!("mcp authority is empty"));
+    }
+    if authority.trim() != authority {
+        return Err(anyhow!(
+            "mcp authority must not have leading or trailing whitespace"
+        ));
+    }
+
+    /*
+     * 文字種と長さを検証する
+     */
+    if authority.chars().any(char::is_control) {
+        return Err(anyhow!(
+            "mcp authority must not contain control characters"
+        ));
+    }
+    if authority.len() > 253 {
+        return Err(anyhow!("mcp authority must be at most 253 characters"));
+    }
+    if authority.contains("://") {
+        return Err(anyhow!("mcp authority must not contain scheme"));
+    }
+    if authority.chars().any(|ch| matches!(ch, '/' | '?' | '#' | '@')) {
+        return Err(anyhow!(
+            "mcp authority must not contain /, ?, #, or @"
+        ));
+    }
+    if !authority.is_ascii() {
+        return Err(anyhow!("mcp authority must be ASCII"));
+    }
+
+    /*
+     * hostname風のラベル構造を検証する
+     */
+    for label in authority.split('.') {
+        if label.is_empty() {
+            return Err(anyhow!("mcp authority must not contain empty label"));
+        }
+        if label.len() > 63 {
+            return Err(anyhow!(
+                "mcp authority label must be at most 63 characters"
+            ));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(anyhow!(
+                "mcp authority label must not start or end with hyphen"
+            ));
+        }
+        if !label
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        {
+            return Err(anyhow!(
+                "mcp authority must contain only ASCII hostname characters"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+///
 /// アセットサイズ指定文字列の解析
 ///
 /// # 引数
@@ -1666,6 +1745,61 @@ mod tests {
         assert!(run_opts.use_mcp());
     }
 
+    #[test]
+    fn apply_config_sets_run_mcp_authority_when_configured() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[run]\nmcp_authority = \"mcp.example.test\"\n",
+        )
+        .expect("write config failed");
+        let config_arg = config_path.to_string_lossy().to_string();
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "--config-path",
+            &config_arg,
+            "run",
+        ])
+        .expect("parse failed");
+
+        opts.apply_config().expect("apply config failed");
+        opts.validate().expect("validate failed");
+
+        let run_opts = match opts.command {
+            Some(Command::Run(run_opts)) => run_opts,
+            _ => panic!("run options missing"),
+        };
+        assert_eq!(run_opts.mcp_authority(), "mcp.example.test");
+    }
+
+    #[test]
+    fn validate_rejects_invalid_run_mcp_authority() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[run]\nmcp_authority = \"https://example.test\"\n",
+        )
+        .expect("write config failed");
+        let config_arg = config_path.to_string_lossy().to_string();
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "--config-path",
+            &config_arg,
+            "run",
+        ])
+        .expect("parse failed");
+
+        opts.apply_config().expect("apply config failed");
+
+        let err = opts.validate().expect_err("validate must fail");
+        assert!(
+            err.to_string()
+                .contains("mcp authority must not contain scheme")
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn parse_run_win_service_option_on_windows() {
@@ -1770,6 +1904,10 @@ mod tests {
 
         let config = config::load(&config_path).expect("load failed");
         assert_eq!(config.run_use_mcp(), Some(true));
+        assert_eq!(
+            config.run_mcp_authority(),
+            Some(DEFAULT_MCP_AUTHORITY.to_string()),
+        );
         assert_eq!(config.audit_path(), Some(audit_path));
         assert_eq!(config.audit_retention(), Some("72h".to_string()));
         assert_eq!(config.audit_rotate_size(), Some("512K".to_string()));
@@ -2121,7 +2259,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/cli-resource\n",
+                    "  resource_path: /docs/cli-resource\n",
                     "  name: cli-resource\n",
                     "  description: CLI再構成\n",
                     "---\n",
@@ -2134,7 +2272,7 @@ mod tests {
             .remove_resource_candidate_by_page_id(&page_id)
             .expect("remove resource candidate failed");
         manager
-            .set_resource_uri_owner_for_test("docs/cli-resource", None)
+            .set_resource_uri_owner_for_test("/docs/cli-resource", None)
             .expect("remove resource URI failed");
         drop(manager);
 
@@ -2166,11 +2304,11 @@ mod tests {
             .get_resource_candidate_by_page_id(&page_id)
             .expect("get resource candidate failed")
             .expect("resource candidate missing");
-        assert_eq!(candidate.resource_id(), "docs/cli-resource");
+        assert_eq!(candidate.resource_path(), "/docs/cli-resource");
         assert_eq!(candidate.name(), "cli-resource");
         assert_eq!(
             manager
-                .get_resource_uri_owner_for_test("docs/cli-resource")
+                .get_resource_uri_owner_for_test("/docs/cli-resource")
                 .expect("get resource URI owner failed"),
             Some(page_id),
         );
@@ -2241,7 +2379,7 @@ mod tests {
             .to_string(),
         )
         .expect("create prompt page failed");
-        let resource_id = manager
+        let resource_page_id = manager
             .create_page(
                 "/resources/all",
                 "user",
@@ -2249,7 +2387,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/all-resource\n",
+                    "  resource_path: /docs/all-resource\n",
                     "  name: all-resource\n",
                     "  description: all再構成\n",
                     "---\n",
@@ -2272,10 +2410,10 @@ mod tests {
             )
             .expect("remove prompt name failed");
         manager
-            .remove_resource_candidate_by_page_id(&resource_id)
+            .remove_resource_candidate_by_page_id(&resource_page_id)
             .expect("remove resource candidate failed");
         manager
-            .set_resource_uri_owner_for_test("docs/all-resource", None)
+            .set_resource_uri_owner_for_test("/docs/all-resource", None)
             .expect("remove resource URI failed");
         drop(manager);
 
@@ -2318,13 +2456,13 @@ mod tests {
             .expect("get prompt candidate failed")
             .expect("prompt candidate missing");
         let resource = manager
-            .get_resource_candidate_by_page_id(&resource_id)
+            .get_resource_candidate_by_page_id(&resource_page_id)
             .expect("get resource candidate failed")
             .expect("resource candidate missing");
         assert_eq!(template.name(), "all-template");
         assert_eq!(legacy.name(), "legacy");
         assert_eq!(prompt.name(), "all-prompt");
-        assert_eq!(resource.resource_id(), "docs/all-resource");
+        assert_eq!(resource.resource_path(), "/docs/all-resource");
         assert_eq!(resource.name(), "all-resource");
         assert_eq!(
             manager
@@ -2337,9 +2475,9 @@ mod tests {
         );
         assert_eq!(
             manager
-                .get_resource_uri_owner_for_test("docs/all-resource")
+                .get_resource_uri_owner_for_test("/docs/all-resource")
                 .expect("get resource URI owner failed"),
-            Some(resource_id),
+            Some(resource_page_id),
         );
         assert!(manager
             .is_mcp_primitive_name_index_ready()

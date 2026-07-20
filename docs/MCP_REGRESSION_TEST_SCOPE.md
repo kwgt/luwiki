@@ -183,7 +183,7 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 7. MCP 無効時に `/mcp` 非公開で既存サーバ機能が維持されること
 8. resources capability が readiness に応じて公開・非公開になること
 9. `resources/list` / `resources/read` と既存 tools / prompts が同じ session 上で共存すること
-10. ページ由来 resource の path prefix 制約と固定組み込み resource の非適用境界
+10. 固定組み込み resource とページ由来 resource の path prefix 非適用境界
 11. `derived rebuild --target resources` / `all` 後に resources 候補と URI 索引を復元できること
 12. `resources.listChanged` を宣言せず通知しないこと
 
@@ -297,9 +297,9 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 
 1. 固定組み込みresourceとページ由来resourceを同じ`resources/list`へ合流できること
 2. 固定組み込みresourceにページ用path prefix制約を適用しないこと
-3. ページ由来resourceにread scopeとpath prefix制約を適用すること
-4. path prefix範囲外のページ由来resourceは一覧から除外し、
-   取得ではnot foundとして秘匿すること
+3. ページ由来resourceにもページ用path prefix制約を適用しないこと
+4. ページ由来resourceにread scopeとresource ACLを適用し、
+   ACL非許可では一覧から除外し、取得ではnot foundとして秘匿すること
 5. draft、soft delete、hard delete、orphan候補、
    URI索引不整合の公開制御を維持すること
 6. URI昇順、50件、cursor、空一覧を維持すること

@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 
-use crate::database::resource_uris::derive_resource_id_from_path;
+use crate::database::resource_uris::derive_resource_path_from_path;
 use crate::database::types::ResourceCandidateEntry;
 use crate::markdown_source::front_matter::{
     ResourcePageFrontMatter,
@@ -21,7 +21,7 @@ use crate::markdown_source::front_matter::{
 /// resource ページ情報から resource 候補派生データを生成する
 ///
 /// # 引数
-/// * `resource_id` - 検証済み resource 識別子
+/// * `resource_path` - 検証済み resource path
 /// * `resource` - resource ページ情報
 ///
 /// # 戻り値
@@ -29,11 +29,11 @@ use crate::markdown_source::front_matter::{
 ///
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_resource_candidate_entry(
-    resource_id: String,
+    resource_path: String,
     resource: &ResourcePageFrontMatter,
 ) -> ResourceCandidateEntry {
     ResourceCandidateEntry::new(
-        resource_id,
+        resource_path,
         resource.name().to_string(),
         resource.description().to_string(),
         resource.mime_type().map(str::to_string),
@@ -58,13 +58,13 @@ pub(crate) fn build_resource_candidate_entry_from_source(
     let Some(resource) = extract_resource_page_front_matter(source)? else {
         return Ok(None);
     };
-    let resource_id = match resource.resource_id() {
-        Some(resource_id) => resource_id.to_string(),
-        None => derive_resource_id_from_path(current_path)?,
+    let resource_path = match resource.resource_path() {
+        Some(resource_path) => resource_path.to_string(),
+        None => derive_resource_path_from_path(current_path)?,
     };
 
     Ok(Some(build_resource_candidate_entry(
-        resource_id,
+        resource_path,
         &resource,
     )))
 }
@@ -89,7 +89,7 @@ mod tests {
             "---\n",
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: docs/spec\n",
+            "  resource_path: /docs/spec\n",
             "  name: spec\n",
             "  description: resource description\n",
             "  mime_type: text/markdown\n",
@@ -101,24 +101,24 @@ mod tests {
             .expect("resource page missing");
 
         let entry =
-            build_resource_candidate_entry("docs/spec".to_string(), &resource);
+            build_resource_candidate_entry("/docs/spec".to_string(), &resource);
 
-        assert_eq!(entry.resource_id(), "docs/spec");
+        assert_eq!(entry.resource_path(), "/docs/spec");
         assert_eq!(entry.name(), "spec");
         assert_eq!(entry.description(), "resource description");
         assert_eq!(entry.mime_type(), Some("text/markdown"));
     }
 
     ///
-    /// 明示 resource_id を候補へ反映できることを確認する。
+    /// 明示 resource_path を候補へ反映できることを確認する。
     ///
     #[test]
-    fn build_resource_candidate_entry_from_source_uses_explicit_resource_id() {
+    fn build_resource_candidate_entry_from_source_uses_explicit_resource_path() {
         let source = concat!(
             "---\n",
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: docs/explicit\n",
+            "  resource_path: /docs/explicit\n",
             "  name: explicit\n",
             "  description: desc\n",
             "---\n",
@@ -132,18 +132,18 @@ mod tests {
         .expect("build failed")
         .expect("resource candidate missing");
 
-        assert_eq!(entry.resource_id(), "docs/explicit");
+        assert_eq!(entry.resource_path(), "/docs/explicit");
         assert_eq!(entry.name(), "explicit");
         assert_eq!(entry.description(), "desc");
         assert_eq!(entry.mime_type(), None);
     }
 
     ///
-    /// resource_id 省略時に current path 由来 resource_id を
+    /// resource_path 省略時に current path 由来 resource_path を
     /// 候補へ反映できることを確認する。
     ///
     #[test]
-    fn build_resource_candidate_entry_from_source_uses_path_resource_id() {
+    fn build_resource_candidate_entry_from_source_uses_path_resource_path() {
         let source = concat!(
             "---\n",
             "mcp:\n",
@@ -162,7 +162,7 @@ mod tests {
         .expect("build failed")
         .expect("resource candidate missing");
 
-        assert_eq!(entry.resource_id(), "resources/path-derived");
+        assert_eq!(entry.resource_path(), "/pages/resources/path-derived");
         assert_eq!(entry.mime_type(), Some("application/json"));
     }
 
@@ -198,7 +198,7 @@ mod tests {
     }
 
     ///
-    /// path 由来 resource_id の不正をエラーとして
+    /// ルート path 由来 resource_path の不正をエラーとして
     /// 伝播することを確認する。
     ///
     #[test]
@@ -214,14 +214,14 @@ mod tests {
         );
 
         let error = build_resource_candidate_entry_from_source(
-            "/builtin/spec",
+            "/",
             source,
         )
-        .expect_err("invalid path-derived resource_id must fail");
+        .expect_err("invalid path-derived resource_path must fail");
 
         assert!(
             error.to_string()
-                .contains("mcp.resource_id must not start with reserved prefix builtin/")
+                .contains("mcp.resource_path must not end with /")
         );
     }
 
@@ -236,7 +236,7 @@ mod tests {
             "---\n",
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: docs/spec\n",
+            "  resource_path: /docs/spec\n",
             "  name: spec\n",
             "  description: desc\n",
             "  mime_type: text /markdown\n",

@@ -312,7 +312,7 @@ MCP resourcesはtools用`tools/call`とは別のrmcp標準routingへ接続する
 7. rmcp `Resource`、`ListResourcesResult`
 
 database層はresource候補と最新ページ状態を合流し、公開可能なページ由来候補を返す。
-service層は固定組み込みresourceとの合流、read scope、path prefix、cursor、
+service層は固定組み込みresourceとの合流、read scope、resource ACL、cursor、
 URI順、50件上限を処理する。handler層はresources専用監査ログを生成し、
 server層がrmcp型へ最終変換する。
 
@@ -324,7 +324,7 @@ server層がrmcp型へ最終変換する。
 2. `LuwikiMcpServer::read_resource_for_auth_at()`
 3. `McpHandler::handle_read_resource()`
 4. `McpService::read_resource()`
-5. 固定組み込みresource本文、または`DatabaseManager::get_resource_source_by_id()`
+5. 固定組み込みresource本文、または`DatabaseManager::get_resource_source_by_path()`
 6. `ReadResourceServiceResult`
 7. rmcp `ResourceContents`、`ReadResourceResult`
 
@@ -345,7 +345,8 @@ server層はtext contentsとしてrmcp型へ変換する。
 databaseへアクセスし、lock失敗を内部エラーへ変換する。
 
 resourcesはread scopeを要求する。固定組み込みresourceにはページ用path prefix制約を
-適用しない。ページ由来resourceにはページ用path prefix制約を適用する。
+適用しない。ページ由来resourceにもページ用path prefix制約を適用せず、
+resource ACLを適用する。
 同じ認証文脈を使うpathベースtoolsには従来のprefix制約を維持する。
 
 ### 6.4 型とroutingの分離

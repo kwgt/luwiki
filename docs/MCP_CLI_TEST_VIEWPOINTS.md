@@ -262,9 +262,9 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
 2. `PAGE_INDEX_TABLE`に存在する非draftページのlatest sourceを使用すること
 3. soft delete済みresourceを候補とURI予約の再構成対象に含めること
 4. draft、通常ページ、templateページ、promptページをresource候補から除外すること
-5. 明示`mcp.resource_id`がある場合はその値をresource IDとして使用すること
-6. `mcp.resource_id`未指定時はcurrent path由来resource IDを使用すること
-7. resource ID重複を検出し、再構成失敗として扱うこと
+5. 明示`mcp.resource_path`がある場合はその値をresource pathとして使用すること
+6. `mcp.resource_path`未指定または`null`時はcurrent path由来`/pages/...` fallbackを使用すること
+7. resource path重複を検出し、再構成失敗として扱うこと
 8. 同じページ正本状態で再実行しても同じ候補、URI逆引き索引、
    readinessを生成すること
 9. 成功時に`rebuilt resource candidates: <件数>`を表示すること
@@ -292,7 +292,7 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
 1. front matter解析失敗
 2. latest source欠落
 3. prompt primitive内の名前重複
-4. resource ID重複
+4. resource path重複
 5. DB読取、書込み、commit失敗
 
 失敗時は次を確認する。
@@ -323,7 +323,7 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
 - CLI引数解析テスト
   - targetの受理、省略、未知値
 - database単体テスト
-  - 対象抽出、名前重複、resource ID重複、原子性、冪等性、失敗時保持
+  - 対象抽出、名前重複、resource path重複、原子性、冪等性、失敗時保持
 - CLI結合テスト
   - target別の成功表示、非ゼロ終了、`template_root`の適用範囲
 - MCP transport回帰テスト

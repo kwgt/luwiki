@@ -172,6 +172,10 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 
 `--mcp`オプションが指定されていない場合は、設定ファイルの`run.use_mcp`を既定値として扱う。`run.use_mcp=true`であればMCP機能を有効化し、`run.use_mcp=false`または未設定であればMCP機能は無効とする。
 
+MCP resource URI の authority は設定ファイルの`run.mcp_authority`で指定する。
+CLIオプションは提供しない。未設定時は`local.luwiki`を使用する。
+`--save-config`指定時は、解決済みのauthorityを`run.mcp_authority`へ保存する。
+
 `--win-service`オプションは Windows 環境でのみ使用可能とし、非 Windows 環境ではオプション自体を提供しない。このオプションが指定された場合、`run` コマンドは Windows サービスとして起動されることを前提に SCM と連携して動作する。
 
 ユーザ未登録の状態で`run`コマンドを実行した場合はエラーとする。
@@ -269,10 +273,10 @@ rebuilt resource candidates: <件数>
 ページを含めない。
 
 再構成は、対象となる全ページの収集、front matter解析、latest source確認、
-prompt名重複検査、resource ID重複検査に成功した後で既存テーブルを置換する。
+prompt名重複検査、resource path重複検査に成功した後で既存テーブルを置換する。
 同じページ正本状態に対する再実行は冪等とする。
 
-front matter解析失敗、latest source欠落、prompt名重複、resource ID重複、
+front matter解析失敗、latest source欠落、prompt名重複、resource path重複、
 DB操作またはcommit失敗時は非ゼロ終了とする。
 `prompts`では候補、名前索引、構築状態を一括して維持する。
 `resources`では候補、URI逆引き索引、URI索引構築状態を一括して維持する。
@@ -1356,11 +1360,13 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
 | `bind` | サーバがバインドするアドレスを指定する | `BIND-ADDR` | "0.0.0.0"
 | `port` | サーバがバインドするポートを指定する | `PORT` | 8080
 | `use_mcp` | MCP機能を有効化するか否か | `--mcp` | false
+| `mcp_authority` | MCP resource URI の authority | なし | `local.luwiki`
 | `use_tls` | TLSの使用 | `--tls` | false
 | `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
  
 #### 注記
 - 互換性のために、`run`テーブルに値が無い場合は`global.use_tls`/`global.server_cert`を読み取って補完する。
+- `mcp_authority`はconfig専用項目とし、空文字、前後空白、制御文字、非ASCII、scheme、`/`、`?`、`#`、`@`を含む値、253文字超、hostname風ではないラベル構造を拒否する。
 
 <a id="config-user-list"></a>
 ### user.listテーブル

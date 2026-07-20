@@ -74,7 +74,7 @@ pub(in crate::database) static MCP_PRIMITIVE_NAME_STATE_TABLE:
     TableDefinition<u8, u8> =
         TableDefinition::new("mcp_primitive_name_state_table");
 
-/// resource URI逆引き索引テーブル (resource_id => ページID)
+/// resource URI逆引き索引テーブル (resource_path => ページID)
 pub(in crate::database) static RESOURCE_URI_INDEX_TABLE:
     TableDefinition<String, PageId> =
         TableDefinition::new("resource_uri_index_table");
@@ -231,7 +231,7 @@ pub(crate) enum DbError {
 
     /// resource URIが別ページと競合した
     ResourceUriAlreadyExists {
-        resource_id: String,
+        resource_path: String,
     },
 }
 
@@ -273,11 +273,11 @@ impl std::fmt::Display for DbError {
                 name,
             ),
             DbError::ResourceUriAlreadyExists {
-                resource_id,
+                resource_path,
             } => write!(
                 f,
-                "resource URI already exists: resource_id={}",
-                resource_id,
+                "resource URI already exists: resource_path={}",
+                resource_path,
             ),
         }
     }

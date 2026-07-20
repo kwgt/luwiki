@@ -277,7 +277,7 @@ impl DatabaseManager {
             entries.push(ResourceCandidateListEntry::new(
                 page_id,
                 path_info.current_path().to_string(),
-                candidate.resource_id().to_string(),
+                candidate.resource_path().to_string(),
                 candidate.name().to_string(),
                 candidate.description().to_string(),
                 mime_type,
@@ -288,17 +288,17 @@ impl DatabaseManager {
     }
 
     ///
-    /// resource_idから公開可能な最新ページソースを取得する
+    /// resource_pathから公開可能な最新ページソースを取得する
     ///
     /// # 引数
-    /// * `resource_id` - resource 識別子
+    /// * `resource_path` - resource path
     ///
     /// # 戻り値
     /// URI索引と最新ページ状態の解決結果を分類して返す。
     ///
-    pub(crate) fn get_resource_source_by_id(
+    pub(crate) fn get_resource_source_by_path(
         &self,
-        resource_id: &str,
+        resource_path: &str,
     ) -> Result<ResourceSourceLookupResult> {
         let txn = self.db.begin_read()?;
         let uri_table = txn.open_table(RESOURCE_URI_INDEX_TABLE)?;
@@ -308,7 +308,7 @@ impl DatabaseManager {
         /*
          * URI索引から公開可能な最新ページ状態を解決する
          */
-        let page_id = match uri_table.get(resource_id.to_string())? {
+        let page_id = match uri_table.get(resource_path.to_string())? {
             Some(owner) => owner.value(),
             None => return Ok(ResourceSourceLookupResult::NotFound),
         };
@@ -463,7 +463,7 @@ pub(in crate::database) fn collect_resource_candidates_in_txn(
     let source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
     let mut candidates = Vec::new();
     let mut uri_entries = Vec::new();
-    let mut resource_ids = HashSet::new();
+    let mut resource_paths = HashSet::new();
 
     /*
      * 最新ページソースから候補とURI索引を生成する
@@ -486,13 +486,13 @@ pub(in crate::database) fn collect_resource_candidates_in_txn(
         )? else {
             continue;
         };
-        let resource_id = candidate.resource_id().to_string();
-        if !resource_ids.insert(resource_id.clone()) {
+        let resource_path = candidate.resource_path().to_string();
+        if !resource_paths.insert(resource_path.clone()) {
             return Err(anyhow::anyhow!(DbError::ResourceUriAlreadyExists {
-                resource_id,
+                resource_path,
             }));
         }
-        uri_entries.push((resource_id, page_id.clone()));
+        uri_entries.push((resource_path, page_id.clone()));
         candidates.push((page_id, candidate));
     }
 

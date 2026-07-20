@@ -316,17 +316,29 @@ mcp:
 ```yaml
 mcp:
   primitive: resource
-  resource_id: docs/front-matter
+  resource_path: /docs/front-matter
   name: "Front Matter Specification"
   description: "LuWiki front matter specification"
   mime_type: text/markdown
+  resource_acl:
+    default:
+      list: true
+      read: true
+    list:
+      allow:
+        - docs-reader
+    read:
+      deny:
+        - suspended-token
 ```
 
 注記:
 
-- `resource_id` は省略可能とする
-- `resource_id` 省略時は、対象ページの current path から先頭の `/` を除いた値を resource ID として使用する
+- `resource_path` は省略可能とする
+- `resource_path: null` は省略と同義とする
+- `resource_path` 省略時は、対象ページの current path から `/pages/<page-path-without-leading-slash>` を resource path として使用する
 - `mime_type` は省略可能とし、省略時は `text/markdown` を既定値とする
+- `resource_acl` は省略可能とし、省略時は Bearer の `read` scope とページ状態を満たす全tokenへ公開する
 - resource 本文自体はページ本文側を利用する前提とし、front matter には一覧化、URI解決、公開判定に必要な情報を置く
 
 ### 6.4 prompt の値制約
@@ -437,16 +449,19 @@ mcp:
 
 ### 6.9 resource の値制約
 
-#### 6.9.1 `mcp.resource_id`
+#### 6.9.1 `mcp.resource_path`
 
 - optional な文字列とする
-- 未指定時はページの current path から導出する
+- `null` は未指定と同義として扱う
+- 未指定時はページの current path から `/pages/<page-path-without-leading-slash>` を導出する
+- 文字列として指定する場合は `/` で始まる絶対 URI path とする
 - 空文字および空白文字だけの値を許容しない
 - 先頭および末尾の空白文字を許容しない
 - 制御文字を許容しない
 - 最大512文字とし、Unicode scalar value 単位で数える
-- `builtin/` で始まる値を許容しない
-- `/` で始まる値および `/` で終わる値を許容しない
+- `/builtin` および `/builtin/` 配下を許容しない
+- `/pages` および `/pages/` 配下を明示値として許容しない
+- `/` そのものおよび `/` で終わる値を許容しない
 - `//` を含む値を許容しない
 - `.` または `..` の path segment を含む値を許容しない
 - trim、小文字化、Unicode 正規化を行わず、入力値を保持する
@@ -486,18 +501,35 @@ mcp:
 
 - `mcp.primitive = resource` では `mcp.system` を許容しない
 - `mcp.primitive = resource` では `mcp.arguments` を許容しない
+- `mcp.resource_id` は廃止済み項目として扱い、指定された場合は `mcp.resource_path` の使用を求める validation error とする
 - resource の未知プロパティを許容しない
+
+#### 6.9.6 `mcp.resource_acl`
+
+- 任意項目とし、未指定および `null` は ACL 未指定として扱う
+- `default.list` と `default.read` は任意の boolean とする
+- `list.allow`、`list.deny`、`read.allow`、`read.deny` は任意の文字列配列とする
+- `allow` および `deny` は、指定する場合は空配列を許容しない
+- ACL principal は Bearer token ID または Bearer token name と照合する
+- ACL principal が ULID 形式の場合は token ID として扱い、それ以外は token name として扱う
+- ACL principal は空文字、前後空白、制御文字を許容しない
+- 同一操作内では deny を allow より優先する
+- allow に一致する場合は許可する
+- deny と allow のどちらにも一致しない場合は `default.<operation>` を使用する
+- `default.<operation>` も未指定の場合は許可する
+- `resources/list` 用 ACL は resource の発見可能性だけを制御する
+- `resources/read` 用 ACL は URI 指定時の取得可能性だけを制御し、list ACL を継承しない
 
 ### 6.10 resource 本文と保存時境界
 
 - resource 本文は `ExtractedFrontMatter::body()` に相当する、front matter 終端直後からページソース末尾までの raw Markdown とする
 - front matter の保存時検証では、resource 本文が空または空白だけであることを理由に保存を拒否しない
 - `resources/read` は最新ページソースの front matter を共通 parser で再検証する
-- `resources/read` で front matter、resource ID、最新ソース、URI索引の不整合を検出した場合は、最新正本または派生データの内部不整合として扱う
+- `resources/read` で front matter、resource path、最新ソース、URI索引の不整合を検出した場合は、最新正本または派生データの内部不整合として扱う
 
 ### 6.11 resource の解析モデルとページ分類
 
-- `ResourcePageFrontMatter` 相当の読み取り専用モデルで、resource_id、name、description、mime_type を公開する
+- `ResourcePageFrontMatter` 相当の読み取り専用モデルで、resource_path、name、description、mime_type、resource_acl を公開する
 - resource の分類・抽出は共通 front matter parser の解析結果から行う
 - database 層および MCP 層では、resource 分類のために YAML を個別に再解析しない
 - ページ用途分類では template、MCP prompt、MCP resource を区別する
@@ -506,33 +538,33 @@ mcp:
 
 ### 6.12 resource URI の一意性
 
-- ページ由来 resource は resource ID から生成する URI で一意に識別する
-- resource ID の一致判定は大文字・小文字を区別する完全一致とする
+- ページ由来 resource は resource path から生成する URI で一意に識別する
+- resource path の一致判定は大文字・小文字を区別する完全一致とする
 - trim、小文字化、Unicode 正規化を行わない
-- `resource_id => page_id` の resource URI 逆引き索引で一意性を管理する
+- `resource_path => page_id` の resource URI 逆引き索引で一意性を管理する
 - URI逆引き索引はページ正本と同じ redb write transaction で更新する
-- 同一ページが現在所有する resource ID の再利用は許容する
-- 別ページが同一 resource ID を所有する場合は正本の commit 前に拒否する
-- resource 指定解除、明示 resource ID 変更、別 primitive への変更時は旧 resource ID を解放する
-- soft delete では resource ID 予約を維持し、hard delete で解放する
+- 同一ページが現在所有する resource path の再利用は許容する
+- 別ページが同一 resource path を所有する場合は正本の commit 前に拒否する
+- resource 指定解除、明示 resource path 変更、別 primitive への変更時は旧 resource path を解放する
+- soft delete では resource path 予約を維持し、hard delete で解放する
 - import、rollback、amend、および既存ページからの初期構築でも同じ重複規則を適用する
-- `builtin/` で始まる resource ID は固定組み込み resource 用に予約し、ページ由来 resource では使用しない
+- `/builtin` および `/pages` 配下は LuWiki 予約 path として扱い、明示 `mcp.resource_path` では使用しない
 
 ### 6.13 resource 候補派生データ
 
 - resource 一覧用候補は `page_id => ResourceCandidateEntry` として保持する
-- 候補には resource_id、name、description、mime_type を保持する
+- 候補には resource_path、name、description、mime_type、resource_acl を保持する
 - 本文、path、deleted、draft、latest revision は候補へ重複保存しない
 - `mime_type` 未指定時の既定値は一覧合流および取得時に補完する
 - create、put、amend、append、rollback の正本 commit 後に候補を同期する
 - import ではDB投入とアセット本配置後に、対象ページID群の候補を同期する
 - rename、soft delete、undelete では候補を書き換えず、最新ページ索引との合流で path および公開状態へ追従する
-- path 由来 resource ID の rename 追従は URI逆引き索引の同期で行う
+- fallback resource path の rename 追従は URI逆引き索引の同期で行う
 - hard delete では正本削除後に候補と URI逆引き索引を除去する
 - resource候補、resource URI逆引き索引、URI索引構築状態を最新ページソースから同一 redb write transaction で再構成できる
 - `derived rebuild --target resources` では resource候補、resource URI逆引き索引、URI索引構築状態を再構成する
 - `derived rebuild --target all` では templates、prompts、resources を同一 redb write transaction で再構成する
-- 再構成中の解析失敗、latest source欠落、resource ID重複、DB失敗時は commit せず、既存の派生データを維持する
+- 再構成中の解析失敗、latest source欠落、resource path重複、DB失敗時は commit せず、既存の派生データを維持する
 - soft delete済みresourceは再構成対象へ含め、draftは除外する
 
 ---
@@ -747,10 +779,10 @@ definitions:
           enum:
             - "resource"
 
-        resource_id:
+        resource_path:
           description: >-
-            ページ由来resourceの識別子。
-            未指定時は対象ページのcurrent pathから導出する。
+            ページ由来resource URIの絶対path。
+            未指定またはnull時は対象ページのcurrent pathから/pages配下へ導出する。
           type: "string"
           minLength: 1
           maxLength: 512
@@ -776,6 +808,11 @@ definitions:
           type: "string"
           minLength: 1
           maxLength: 128
+
+        resource_acl:
+          description: >-
+            resources/list および resources/read の token 単位 ACL。
+          type: "object"
       additionalProperties: false
 
   custom_meta:
@@ -858,10 +895,10 @@ front matter の内部データ構造そのものとは分離する。
 - `mcp.primitive = resource` では、
   `resources/list` および `resources/read` へマッピング可能な情報のみを
   front matter 上へ持つ
-- resource の resource_id、name、description、mime_type は
+- resource の resource_path、name、description、mime_type、resource_acl は
   6.9 の値制約を満たすこと
 - resource の未知プロパティを許容しない
-- resource ID のページ横断一意性は、
+- resource path のページ横断一意性は、
   front matter 単体検証後にDB resource URI逆引き索引で検証する
 
 ### 9.4 `custom_meta`

@@ -48,7 +48,7 @@ use crate::mcp::errors::{
     McpErrorResponse,
 };
 use crate::mcp::handler::McpHandler;
-use crate::mcp::service::McpService;
+use crate::mcp::service::{DEFAULT_RESOURCE_AUTHORITY, McpService};
 use crate::mcp::tools::{
     EditPageToolArgs,
     GetPageSectionToolArgs,
@@ -86,6 +86,9 @@ pub(crate) struct LuwikiMcpServer {
 
     /// resources公開前提が整っているか
     resources_ready: bool,
+
+    /// resource URI authority
+    resource_authority: String,
 }
 
 impl LuwikiMcpServer {
@@ -99,6 +102,26 @@ impl LuwikiMcpServer {
     /// 生成した MCP server 実装を返す。
     ///
     pub(crate) fn new(state: Arc<RwLock<AppState>>) -> Self {
+        Self::with_resource_authority(
+            state,
+            DEFAULT_RESOURCE_AUTHORITY.to_string(),
+        )
+    }
+
+    ///
+    /// resource authorityを指定してMCP server実装を生成する
+    ///
+    /// # 引数
+    /// * `state` - HTTP サーバ共有状態
+    /// * `resource_authority` - resource URI authority
+    ///
+    /// # 戻り値
+    /// 生成した MCP server 実装を返す。
+    ///
+    pub(crate) fn with_resource_authority(
+        state: Arc<RwLock<AppState>>,
+        resource_authority: String,
+    ) -> Self {
         let prompts_ready = state
             .read()
             .ok()
@@ -124,6 +147,7 @@ impl LuwikiMcpServer {
             tool_router: Self::tool_router(),
             prompts_ready,
             resources_ready,
+            resource_authority,
         }
     }
 
@@ -374,7 +398,9 @@ impl LuwikiMcpServer {
             .and_then(|state| state.audit_sink());
         McpHandler::new(
             McpAuthGateway::new(),
-            McpService::new(),
+            McpService::with_resource_authority(
+                self.resource_authority.clone(),
+            ),
             audit_sink,
         )
     }
@@ -1014,6 +1040,7 @@ mod tests {
         PathPrefixSet,
         PromptCandidateEntry,
         ResourceCandidateEntry,
+        TokenId,
         UserAttribute,
         UserAttributeSet,
     };
@@ -1049,25 +1076,25 @@ mod tests {
     /// resources/listテスト用のresourceページソースを生成する
     ///
     /// # 引数
-    /// * `resource_id` - resource識別子
+    /// * `resource_path` - resource path
     /// * `name` - resource名
     ///
     /// # 戻り値
     /// resource front matterと本文を含むソースを返す。
     ///
-    fn resource_source_for_list(resource_id: &str, name: &str) -> String {
+    fn resource_source_for_list(resource_path: &str, name: &str) -> String {
         format!(
             concat!(
                 "---\n",
                 "mcp:\n",
                 "  primitive: resource\n",
-                "  resource_id: {}\n",
+                "  resource_path: {}\n",
                 "  name: {}\n",
                 "  description: {} description\n",
                 "---\n",
                 "本文",
             ),
-            resource_id,
+            resource_path,
             name,
             name,
         )
@@ -1077,7 +1104,7 @@ mod tests {
     /// resources/listテスト用のMIME type付きresourceページソースを生成する
     ///
     /// # 引数
-    /// * `resource_id` - resource識別子
+    /// * `resource_path` - resource path
     /// * `name` - resource名
     /// * `mime_type` - MIME type
     ///
@@ -1085,7 +1112,7 @@ mod tests {
     /// resource front matterと本文を含むソースを返す。
     ///
     fn resource_source_for_list_with_mime_type(
-        resource_id: &str,
+        resource_path: &str,
         name: &str,
         mime_type: &str,
     ) -> String {
@@ -1094,14 +1121,14 @@ mod tests {
                 "---\n",
                 "mcp:\n",
                 "  primitive: resource\n",
-                "  resource_id: {}\n",
+                "  resource_path: {}\n",
                 "  name: {}\n",
                 "  description: {} description\n",
                 "  mime_type: {}\n",
                 "---\n",
                 "本文",
             ),
-            resource_id,
+            resource_path,
             name,
             name,
             mime_type,
@@ -1460,6 +1487,7 @@ mod tests {
             BearerScopeSet::from_iter([BearerScope::Read]),
             PathPrefixSet::new(),
             UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
             None,
         );
 
@@ -2174,7 +2202,7 @@ mod tests {
             .create_page(
                 "/resources/list",
                 "user",
-                resource_source_for_list("docs/list", "list-resource"),
+                resource_source_for_list("/docs/list", "list-resource"),
             )
             .expect("create resource page failed");
         manager
@@ -2212,7 +2240,7 @@ mod tests {
 
         assert!(server.resources_ready);
         assert!(uris.contains(
-            &"luwiki://local.luwiki/page/docs/list"
+            &"luwiki://local.luwiki/docs/list"
         ));
         assert_eq!(result.next_cursor, None);
     }
@@ -2293,6 +2321,7 @@ mod tests {
             PathPrefixSet::new(),
             attributes,
             None,
+            None,
         );
         assert!(server
             .list_resources_for_auth(&read_only, None)
@@ -2301,14 +2330,14 @@ mod tests {
 
     ///
     /// resources/listがページ由来resourceへ
-    /// path prefix制約を適用することを確認する。
+    /// path prefix制約を適用しないことを確認する。
     ///
     /// # 注記
     /// 許可prefix内外のresourceページを準備し、
-    /// 固定組み込みresourceと許可済みページ由来resourceだけを返す。
+    /// 固定組み込みresourceとページ由来resourceを返す。
     ///
     #[test]
-    fn mcp_server_list_resources_applies_page_path_prefix() {
+    fn mcp_server_list_resources_ignores_page_path_prefix() {
         /*
          * path制約内外のresourceページを準備する
          */
@@ -2326,7 +2355,7 @@ mod tests {
                 "/allowed/resource",
                 "user",
                 resource_source_for_list(
-                    "docs/allowed",
+                    "/docs/allowed",
                     "allowed-resource",
                 ),
             )
@@ -2336,7 +2365,7 @@ mod tests {
                 "/blocked/resource",
                 "user",
                 resource_source_for_list(
-                    "docs/blocked",
+                    "/docs/blocked",
                     "blocked-resource",
                 ),
             )
@@ -2362,7 +2391,7 @@ mod tests {
         );
 
         /*
-         * path prefix制約でページ由来resourceだけ絞られることを確認する
+         * ページ由来resourceがpath prefix制約で絞られないことを確認する
          */
         let server = LuwikiMcpServer::new(state);
         let result = server
@@ -2378,11 +2407,156 @@ mod tests {
             &"luwiki://local.luwiki/builtin/front-matter-spec"
         ));
         assert!(uris.contains(
-            &"luwiki://local.luwiki/page/docs/allowed"
+            &"luwiki://local.luwiki/docs/allowed"
         ));
-        assert!(!uris.contains(
-            &"luwiki://local.luwiki/page/docs/blocked"
+        assert!(uris.contains(
+            &"luwiki://local.luwiki/docs/blocked"
         ));
+    }
+
+    ///
+    /// resources/listとresources/readがresource ACLを
+    /// operation別に適用することを確認する。
+    ///
+    /// # 注記
+    /// listの既定拒否、readの独立許可、deny優先を検証する。
+    ///
+    #[test]
+    fn mcp_server_resources_apply_resource_acl_per_operation() {
+        /*
+         * ACL付きresourceページを準備する
+         */
+        let dir = tempdir().expect("create tempdir failed");
+        let db_path = dir.path().join("database.redb");
+        let asset_path = dir.path().join("assets");
+        let index_path = dir.path().join("fts");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open database failed");
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/resources/entry",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_path: /docs/entry\n",
+                    "  name: entry-resource\n",
+                    "  description: entry resource description\n",
+                    "  resource_acl:\n",
+                    "    default:\n",
+                    "      list: deny\n",
+                    "    list:\n",
+                    "      allow:\n",
+                    "        - agent-docs\n",
+                    "---\n",
+                    "entry body\n",
+                )
+                .to_string(),
+            )
+            .expect("create entry resource failed");
+        manager
+            .create_page(
+                "/resources/secret",
+                "user",
+                concat!(
+                    "---\n",
+                    "mcp:\n",
+                    "  primitive: resource\n",
+                    "  resource_path: /docs/secret\n",
+                    "  name: secret-resource\n",
+                    "  description: secret resource description\n",
+                    "  resource_acl:\n",
+                    "    default:\n",
+                    "      list: deny\n",
+                    "      read: deny\n",
+                    "    list:\n",
+                    "      allow:\n",
+                    "        - agent-docs\n",
+                    "    read:\n",
+                    "      allow:\n",
+                    "        - agent-docs\n",
+                    "      deny:\n",
+                    "        - agent-docs\n",
+                    "---\n",
+                    "secret body\n",
+                )
+                .to_string(),
+            )
+            .expect("create secret resource failed");
+        manager
+            .rebuild_resource_candidates()
+            .expect("rebuild resource candidates failed");
+        let state = Arc::new(RwLock::new(AppState::new(
+            manager,
+            FrontendConfig::default(),
+            FtsIndexConfig::new(index_path),
+            None,
+            "LUWIKI".to_string(),
+            None,
+            1024 * 1024,
+            None,
+        )));
+        let server = LuwikiMcpServer::new(state);
+        let token_id = TokenId::new();
+        let agent = AuthContext::new_with_attributes(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/private"]),
+            UserAttributeSet::new(),
+            Some(token_id),
+            Some("agent-docs".to_string()),
+        );
+        let other = AuthContext::new_with_attributes(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/private"]),
+            UserAttributeSet::new(),
+            None,
+            Some("agent-other".to_string()),
+        );
+
+        /*
+         * list ACLは発見可能性だけを制御する
+         */
+        let agent_result = server
+            .list_resources_for_auth(&agent, None)
+            .expect("agent list resources failed");
+        let agent_uris = agent_result
+            .resources
+            .iter()
+            .map(|resource| resource.uri.as_str())
+            .collect::<Vec<_>>();
+        assert!(agent_uris.contains(&"luwiki://local.luwiki/docs/entry"));
+        assert!(agent_uris.contains(&"luwiki://local.luwiki/docs/secret"));
+
+        let other_result = server
+            .list_resources_for_auth(&other, None)
+            .expect("other list resources failed");
+        let other_uris = other_result
+            .resources
+            .iter()
+            .map(|resource| resource.uri.as_str())
+            .collect::<Vec<_>>();
+        assert!(!other_uris.contains(&"luwiki://local.luwiki/docs/entry"));
+        assert!(!other_uris.contains(&"luwiki://local.luwiki/docs/secret"));
+
+        /*
+         * read ACLはlist ACLを継承せず、denyはallowより優先する
+         */
+        let entry = server
+            .read_resource_for_auth(&other, "luwiki://local.luwiki/docs/entry")
+            .expect("list-hidden entry must be readable by default");
+        assert_eq!(entry.contents.len(), 1);
+
+        let secret_error = server
+            .read_resource_for_auth(&agent, "luwiki://local.luwiki/docs/secret")
+            .expect_err("deny must override allow");
+        assert_eq!(secret_error.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(secret_error.message, "resource not found");
     }
 
     ///
@@ -2412,7 +2586,7 @@ mod tests {
                 "/resources/visible",
                 "user",
                 resource_source_for_list(
-                    "docs/visible",
+                    "/docs/visible",
                     "visible-resource",
                 ),
             )
@@ -2422,7 +2596,7 @@ mod tests {
                 "/resources/deleted",
                 "user",
                 resource_source_for_list(
-                    "docs/deleted",
+                    "/docs/deleted",
                     "deleted-resource",
                 ),
             )
@@ -2442,7 +2616,7 @@ mod tests {
             .insert_resource_candidate_for_test(
                 &draft_id,
                 &ResourceCandidateEntry::new(
-                    "docs/draft".to_string(),
+                    "/docs/draft".to_string(),
                     "draft-resource".to_string(),
                     "draft-resource description".to_string(),
                     None,
@@ -2453,7 +2627,7 @@ mod tests {
             .insert_resource_candidate_for_test(
                 &orphan_id,
                 &ResourceCandidateEntry::new(
-                    "docs/orphan".to_string(),
+                    "/docs/orphan".to_string(),
                     "orphan-resource".to_string(),
                     "orphan-resource description".to_string(),
                     None,
@@ -2501,7 +2675,7 @@ mod tests {
             vec![
                 "luwiki://local.luwiki/builtin/front-matter-spec",
                 "luwiki://local.luwiki/builtin/mcp-prompt-spec",
-                "luwiki://local.luwiki/page/docs/visible",
+                "luwiki://local.luwiki/docs/visible",
             ],
         );
         assert_eq!(result.next_cursor, None);
@@ -2537,7 +2711,7 @@ mod tests {
                 "/resources/mapping",
                 "user",
                 resource_source_for_list_with_mime_type(
-                    "docs/mapping",
+                    "/docs/mapping",
                     "mapped-resource",
                     "application/json",
                 ),
@@ -2620,7 +2794,7 @@ mod tests {
         let page_resource = &result.resources[2];
         assert_eq!(
             page_resource.uri,
-            "luwiki://local.luwiki/page/docs/mapping",
+            "luwiki://local.luwiki/docs/mapping",
         );
         assert_eq!(page_resource.name, "mapped-resource");
         assert_eq!(
@@ -2807,6 +2981,7 @@ mod tests {
             PathPrefixSet::new(),
             UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
             None,
+            None,
         );
         assert!(server
             .read_resource_for_auth(&read_only, uri)
@@ -2845,7 +3020,7 @@ mod tests {
             .insert_resource_candidate_for_test(
                 &draft_id,
                 &ResourceCandidateEntry::new(
-                    "docs/draft-read".to_string(),
+                    "/docs/draft-read".to_string(),
                     "draft-read-resource".to_string(),
                     "draft read description".to_string(),
                     None,
@@ -2854,7 +3029,7 @@ mod tests {
             .expect("insert draft resource candidate failed");
         manager
             .set_resource_uri_owner_for_test(
-                "docs/draft-read",
+                "/docs/draft-read",
                 Some(&draft_id),
             )
             .expect("insert draft resource uri owner failed");
@@ -2882,7 +3057,7 @@ mod tests {
         let error = server
             .read_resource_for_auth(
                 &auth,
-                "luwiki://local.luwiki/page/docs/draft-read",
+                "luwiki://local.luwiki/docs/draft-read",
             )
             .expect_err("draft resource must be hidden");
         assert_resource_protocol_error(
@@ -2894,7 +3069,7 @@ mod tests {
         let serialized = serde_json::to_string(&error)
             .expect("serialize protocol error failed");
         assert!(!serialized.contains("/secret/draft-resource"));
-        assert!(!serialized.contains("docs/draft-read"));
+        assert!(!serialized.contains("/docs/draft-read"));
         assert!(!serialized.contains("draft-read-resource"));
         assert!(!serialized.contains("draft read description"));
         assert!(!serialized.contains(&draft_id.to_string()));
@@ -2906,7 +3081,7 @@ mod tests {
     ///
     /// # 注記
     /// URI索引から最新ページソースを解決し、front matter除去後の
-    /// raw Markdown本文、MIME type、path prefix制約を検証する。
+    /// raw Markdown本文、MIME type、path prefix非適用を検証する。
     ///
     #[test]
     fn mcp_server_read_resource_returns_page_contents() {
@@ -2930,7 +3105,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/read\n",
+                    "  resource_path: /docs/read\n",
                     "  name: read-resource\n",
                     "  description: read resource description\n",
                     "  mime_type: text/plain\n",
@@ -2975,7 +3150,7 @@ mod tests {
         let result = server
             .read_resource_for_auth(
                 &allowed,
-                "luwiki://local.luwiki/page/docs/read",
+                "luwiki://local.luwiki/docs/read",
             )
             .expect("read page resource failed");
         assert_eq!(result.contents.len(), 1);
@@ -2986,7 +3161,7 @@ mod tests {
                 text,
                 meta,
             } => {
-                assert_eq!(uri, "luwiki://local.luwiki/page/docs/read");
+                assert_eq!(uri, "luwiki://local.luwiki/docs/read");
                 assert_eq!(mime_type.as_deref(), Some("text/plain"));
                 assert_eq!(text, "# Resource Body\n\n本文\n");
                 assert_eq!(meta, &None);
@@ -2997,24 +3172,15 @@ mod tests {
         }
 
         /*
-         * path prefix制約外では秘匿優先のnot foundへ寄せる
+         * resources/readではページ用path prefix制約を適用しない
          */
-        let error = server
+        let blocked_result = server
             .read_resource_for_auth(
                 &blocked,
-                "luwiki://local.luwiki/page/docs/read",
+                "luwiki://local.luwiki/docs/read",
             )
-            .expect_err("blocked resource must be hidden");
-        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
-        assert_eq!(error.message, "resource not found");
-        assert_eq!(
-            error
-                .data
-                .as_ref()
-                .and_then(|data| data.get("code"))
-                .and_then(serde_json::Value::as_str),
-            Some("not_found"),
-        );
+            .expect("path prefix outside resource must be readable");
+        assert_eq!(blocked_result.contents, result.contents);
     }
 
     ///
@@ -3043,7 +3209,7 @@ mod tests {
             .create_page(
                 "/secret/soft-resource",
                 "alice",
-                resource_source_for_list("docs/soft", "soft-resource"),
+                resource_source_for_list("/docs/soft", "soft-resource"),
             )
             .expect("create soft deleted resource failed");
         manager
@@ -3053,7 +3219,7 @@ mod tests {
             .create_page(
                 "/secret/hard-resource",
                 "alice",
-                resource_source_for_list("docs/hard", "hard-resource"),
+                resource_source_for_list("/docs/hard", "hard-resource"),
             )
             .expect("create hard deleted resource failed");
         manager
@@ -3087,10 +3253,10 @@ mod tests {
          * 非公開状態と不存在は同じnot_foundへ寄せる
          */
         for uri in [
-            "luwiki://local.luwiki/page/docs/soft",
-            "luwiki://local.luwiki/page/docs/hard",
-            "luwiki://other.luwiki/page/docs/soft",
-            "luwiki://local.luwiki/page/docs/missing",
+            "luwiki://local.luwiki/docs/soft",
+            "luwiki://local.luwiki/docs/hard",
+            "luwiki://other.luwiki/docs/soft",
+            "luwiki://local.luwiki/docs/missing",
         ] {
             let error = server
                 .read_resource_for_auth(&auth, uri)
@@ -3115,7 +3281,10 @@ mod tests {
          * URI形式不正はinvalid_inputへ変換する
          */
         let invalid = server
-            .read_resource_for_auth(&auth, "luwiki://local.luwiki/page/ bad")
+            .read_resource_for_auth(
+                &auth,
+                "luwiki://local.luwiki/docs//bad",
+            )
             .expect_err("invalid resource uri must fail");
         assert_resource_protocol_error(
             &invalid,
@@ -3125,7 +3294,7 @@ mod tests {
         );
         let serialized_invalid = serde_json::to_string(&invalid)
             .expect("serialize invalid uri error failed");
-        assert!(!serialized_invalid.contains(" bad"));
+        assert!(!serialized_invalid.contains("docs//bad"));
     }
 
     ///
@@ -3133,7 +3302,7 @@ mod tests {
     /// internal errorへ変換することを確認する。
     ///
     /// # 注記
-    /// URI索引を維持したままlatest sourceのresource_idだけを変え、
+    /// URI索引を維持したままlatest sourceのresource_pathだけを変え、
     /// 本文、path、page IDが公開エラーへ混入しないことを検証する。
     ///
     #[test]
@@ -3155,7 +3324,7 @@ mod tests {
                 "/secret/inconsistent-resource",
                 "alice",
                 resource_source_for_list(
-                    "docs/original",
+                    "/docs/original",
                     "inconsistent-resource",
                 ),
             )
@@ -3170,7 +3339,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/changed\n",
+                    "  resource_path: /docs/changed\n",
                     "  name: changed-resource\n",
                     "  description: changed resource description\n",
                     "---\n",
@@ -3203,9 +3372,9 @@ mod tests {
         let error = server
             .read_resource_for_auth(
                 &auth,
-                "luwiki://local.luwiki/page/docs/original",
+                "luwiki://local.luwiki/docs/original",
             )
-            .expect_err("resource_id mismatch must fail");
+            .expect_err("resource_path mismatch must fail");
         assert_resource_protocol_error(
             &error,
             ErrorCode::INTERNAL_ERROR,
@@ -3215,7 +3384,7 @@ mod tests {
         let serialized = serde_json::to_string(&error)
             .expect("serialize protocol error failed");
         assert!(!serialized.contains("/secret/inconsistent-resource"));
-        assert!(!serialized.contains("docs/changed"));
+        assert!(!serialized.contains("/docs/changed"));
         assert!(!serialized.contains("changed-resource"));
         assert!(!serialized.contains("changed resource description"));
         assert!(!serialized.contains("secret-body"));
@@ -3244,16 +3413,16 @@ mod tests {
         manager
             .add_user("user", "pass", None)
             .expect("add user failed");
-        for (path, resource_id, name) in [
-            ("/resources/zeta", "docs/zeta", "zeta"),
-            ("/resources/alpha-upper", "Docs/alpha", "alpha-upper"),
-            ("/resources/japanese", "docs/日本", "japanese"),
+        for (path, resource_path, name) in [
+            ("/resources/zeta", "/docs/zeta", "zeta"),
+            ("/resources/alpha-upper", "/Docs/alpha", "alpha-upper"),
+            ("/resources/japanese", "/docs/日本", "japanese"),
         ] {
             manager
                 .create_page(
                     path,
                     "user",
-                    resource_source_for_list(resource_id, name),
+                    resource_source_for_list(resource_path, name),
                 )
                 .expect("create resource page failed");
         }
@@ -3292,18 +3461,18 @@ mod tests {
         assert_eq!(
             uris,
             vec![
+                "luwiki://local.luwiki/Docs/alpha",
                 "luwiki://local.luwiki/builtin/front-matter-spec",
                 "luwiki://local.luwiki/builtin/mcp-prompt-spec",
-                "luwiki://local.luwiki/page/Docs/alpha",
-                "luwiki://local.luwiki/page/docs/zeta",
-                "luwiki://local.luwiki/page/docs/日本",
+                "luwiki://local.luwiki/docs/zeta",
+                "luwiki://local.luwiki/docs/日本",
             ],
         );
 
         let after_missing = server
             .list_resources_for_auth(
                 &auth,
-                Some("luwiki://local.luwiki/page/docs/a"),
+                Some("luwiki://local.luwiki/docs/a"),
             )
             .expect("list after missing cursor failed");
         let uris = after_missing
@@ -3314,8 +3483,8 @@ mod tests {
         assert_eq!(
             uris,
             vec![
-                "luwiki://local.luwiki/page/docs/zeta",
-                "luwiki://local.luwiki/page/docs/日本",
+                "luwiki://local.luwiki/docs/zeta",
+                "luwiki://local.luwiki/docs/日本",
             ],
         );
         assert_eq!(after_missing.next_cursor, None);
@@ -3344,13 +3513,13 @@ mod tests {
             .add_user("user", "pass", None)
             .expect("add user failed");
         for index in 0..52 {
-            let resource_id = format!("docs/resource-{:03}", index);
+            let resource_path = format!("/docs/resource-{:03}", index);
             let name = format!("resource-{:03}", index);
             manager
                 .create_page(
                     format!("/resources/{}", index),
                     "user",
-                    resource_source_for_list(&resource_id, &name),
+                    resource_source_for_list(&resource_path, &name),
                 )
                 .expect("create resource page failed");
         }
@@ -3392,11 +3561,11 @@ mod tests {
         );
         assert_eq!(
             first.resources[49].uri,
-            "luwiki://local.luwiki/page/docs/resource-047",
+            "luwiki://local.luwiki/docs/resource-047",
         );
         assert_eq!(
             first.next_cursor.as_deref(),
-            Some("luwiki://local.luwiki/page/docs/resource-047"),
+            Some("luwiki://local.luwiki/docs/resource-047"),
         );
 
         let second = server
@@ -3413,10 +3582,10 @@ mod tests {
         assert_eq!(
             uris,
             vec![
-                "luwiki://local.luwiki/page/docs/resource-048",
-                "luwiki://local.luwiki/page/docs/resource-049",
-                "luwiki://local.luwiki/page/docs/resource-050",
-                "luwiki://local.luwiki/page/docs/resource-051",
+                "luwiki://local.luwiki/docs/resource-048",
+                "luwiki://local.luwiki/docs/resource-049",
+                "luwiki://local.luwiki/docs/resource-050",
+                "luwiki://local.luwiki/docs/resource-051",
             ],
         );
         assert_eq!(second.next_cursor, None);
@@ -3461,7 +3630,7 @@ mod tests {
         );
         let server = LuwikiMcpServer::new(state);
         let too_long = format!(
-            "luwiki://local.luwiki/page/{}",
+            "luwiki://local.luwiki/{}",
             "x".repeat(513),
         );
 
@@ -3473,11 +3642,12 @@ mod tests {
             " leading",
             "trailing ",
             "\n",
-            "http://local.luwiki/page/docs/a",
-            "luwiki://other/page/docs/a",
-            "luwiki://local.luwiki/other/docs/a",
-            "luwiki://local.luwiki/page/",
-            "luwiki://local.luwiki/page/builtin/spec",
+            "http://local.luwiki/docs/a",
+            "luwiki://other/docs/a",
+            "luwiki://local.luwiki/",
+            "luwiki://local.luwiki/pages",
+            "luwiki://local.luwiki/pages/docs/a",
+            "luwiki://local.luwiki/docs/../a",
             "luwiki://local.luwiki/builtin/",
             "luwiki://local.luwiki/builtin/a/b",
         ] {
@@ -3499,7 +3669,7 @@ mod tests {
         let result = server
             .list_resources_for_auth(
                 &auth,
-                Some("luwiki://local.luwiki/page/zzzz"),
+                Some("luwiki://local.luwiki/zzzz"),
             )
             .expect("valid missing cursor failed");
         assert!(result.resources.is_empty());
@@ -3532,21 +3702,21 @@ mod tests {
             .create_page(
                 "/resources/first",
                 "user",
-                resource_source_for_list("docs/first", "first-resource"),
+                resource_source_for_list("/docs/first", "first-resource"),
             )
             .expect("create first resource failed");
         let second_id = manager
             .create_page(
                 "/resources/second",
                 "user",
-                resource_source_for_list("docs/second", "second-resource"),
+                resource_source_for_list("/docs/second", "second-resource"),
             )
             .expect("create second resource failed");
         manager
             .insert_resource_candidate_for_test(
                 &second_id,
                 &ResourceCandidateEntry::new(
-                    "docs/first".to_string(),
+                    "/docs/first".to_string(),
                     "duplicate-resource".to_string(),
                     "secret duplicate description".to_string(),
                     None,
@@ -3618,7 +3788,7 @@ mod tests {
         let serialized = serde_json::to_string(&internal)
             .expect("serialize protocol error failed");
         assert!(!serialized.contains("/resources/"));
-        assert!(!serialized.contains("docs/first"));
+        assert!(!serialized.contains("/docs/first"));
         assert!(!serialized.contains("duplicate-resource"));
         assert!(!serialized.contains("secret duplicate description"));
         assert!(!serialized.contains("duplicate resource"));
@@ -3833,6 +4003,7 @@ mod tests {
             BearerScopeSet::from_iter([BearerScope::Read]),
             PathPrefixSet::new(),
             attributes,
+            None,
             None,
         );
         assert!(server

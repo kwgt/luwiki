@@ -202,7 +202,7 @@ pub(crate) fn run(
         audit_sink,
     ))));
     let mcp_session_manager =
-        mcp_endpoint.map(|_| ManagedSessionManager::new());
+        mcp_endpoint.as_ref().map(|_| ManagedSessionManager::new());
 
     /*
      * MCP session sweep task を Tokio runtime 上で起動する
@@ -381,10 +381,10 @@ fn create_server(
         /*
          * MCP endpoint を必要時のみ登録する
          */
-        let app = match mcp_endpoint {
+        let app = match mcp_endpoint.as_ref() {
             Some(endpoint) => app
                 .service(crate::mcp::transport::create_scope(
-                    endpoint,
+                    endpoint.clone(),
                     state.clone(),
                     mcp_session_manager
                         .as_ref()

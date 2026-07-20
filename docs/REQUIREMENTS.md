@@ -385,15 +385,15 @@
 
 ### 12.3 path ベース操作
 
-- 本節の path prefix 制約はページを対象とする path ベース操作、およびページ由来 MCP resources へ適用する
-- 本節の path prefix 制約は MCP prompts および固定組み込み MCP resources には適用しない
+- 本節の path prefix 制約はページを対象とする path ベース操作へ適用する
+- 本節の path prefix 制約は MCP prompts および MCP resources には適用しない
 - MCP の read 系操作は対象ページの現在 path を基準に認可判定する
 - MCP の create は新規作成要求の target path を基準に認可判定する
 - MCP の update は対象ページの現在 path を基準に認可判定する
 - MCP の append は対象ページの現在 path を基準に認可判定する
 - MCP の rename は移動元 path と移動先 path の両方が許可範囲内である場合にのみ許可する
 - MCP の検索・一覧で prefix 指定がある場合は、結果の後段フィルタだけでなく要求 prefix 自体も認可判定対象とする
-- MCP resources では、ページ由来 resource の current path が path prefix 範囲内にある場合だけ一覧・取得対象とする
+- MCP resources では、ページ由来 resource の current path が path prefix 範囲外でも一覧・取得対象とする
 - rename 後の旧 path は自動追跡せず、旧 path 指定時は見つからないものとして扱う
 
 ### 12.4 append の扱い
@@ -444,12 +444,14 @@
 ### 12.7 MCP resources
 
 - ページの front matter に `mcp.primitive = resource` が指定されている場合、そのページを MCP resource として公開する
-- ページ由来 resource は、明示された `mcp.resource_id` または current path から導出した resource ID で識別する
-- current path 由来 resource ID は先頭の `/` を除いた path 文字列とする
-- `mcp.resource_id` はページ由来 resource の URI 空間で一意であることを要求する
+- ページ由来 resource は、明示された `mcp.resource_path` または current path から導出した fallback resource path で識別する
+- `mcp.resource_path` はページ由来 resource URI の path 部分であり、絶対 URI path として指定する
+- `mcp.resource_path` 未指定または `null` の場合、current path から `/pages/<page-path-without-leading-slash>` を fallback resource path として導出する
+- `mcp.resource_path` はページ由来 resource の URI 空間で一意であることを要求する
 - 固定組み込み resource の URI は `luwiki://<authority>/builtin/<id>` とする
-- ページ由来 resource の URI は `luwiki://<authority>/page/<resource_id>` とする
-- `builtin/` で始まる resource ID は固定組み込み resource 用に予約し、ページ由来 resource では使用できない
+- ページ由来 resource の URI は `luwiki://<authority><resource_path>` とする
+- `/builtin` および `/pages` 配下は LuWiki 予約 path とし、明示 `mcp.resource_path` では使用できない
+- resource URI の authority は run 設定 `mcp_authority` で指定し、未指定時は `local.luwiki` とする
 - 固定組み込み resource とページ由来 resource は `resources/list` の同じ一覧結果へ合流する
 - 初期版では front matter 詳細仕様と MCP prompts 仕様を固定組み込み resource として公開する
 - resource の名前、説明、MIME type は front matter から取得する
@@ -459,8 +461,10 @@
 - `resources/read` で指定 URI の resource 本文を取得できること
 - `resources/list` および `resources/read` は Bearer の `read` scope を要求する
 - `ReadOnly` 属性を持つユーザでも、Bearer の `read` scope があれば resources 操作を利用できること
-- ページ由来 resources にはページ用 path prefix 制約を適用する
-- path prefix 範囲外のページ由来 resource は、一覧では除外し、取得では見つからないものとして扱う
+- resources 操作にはページ用 path prefix 制約を適用しない
+- path prefix 範囲外のページ由来 resource も、Bearer の `read` scope と resource 固有 ACL を満たす場合は一覧・取得対象とする
+- resources 用 ACL は front matter の `mcp.resource_acl` で resource ごとに任意指定できる
+- `mcp.resource_acl` は `resources/list` と `resources/read` を独立して制御し、deny を allow より優先する
 - resource の公開結果にはページ path および page_id を含めない
 - resource は最新リビジョンだけを公開対象とする
 - draft、soft delete 済み、hard delete 済みのページは resources の公開対象としない
@@ -472,7 +476,7 @@
 - ページ正本の保存成功後に resource 一覧用派生データを同期する
 - resource 一覧用派生データの同期に失敗した場合、保存済みのページ正本を巻き戻さず、同期未完了を呼び出し元へ通知する
 - create、update、amend、append、rollback、import は、resource 候補と URI 逆引き情報へ追従する
-- rename は明示 `mcp.resource_id` の URI を維持し、path 由来 resource ID の URI を移動後 path へ追従させる
+- rename は明示 `mcp.resource_path` の URI を維持し、fallback resource path の URI を移動後 path 由来の `/pages/...` へ追従させる
 - soft delete 済みページの resource URI は予約状態を維持し、hard delete 時に解放する
 - resource 一覧用派生データおよび resource URI 逆引き情報を、最新ページソースから再構成できること
 - resource URI 逆引き情報が対応済みの構築状態であることを確認できる場合だけ、MCP resources capability を公開する

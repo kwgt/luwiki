@@ -58,6 +58,9 @@ pub(crate) struct RunCommandContext {
     /// MCP有効フラグ
     mcp_enabled: bool,
 
+    /// MCP resource URI authority
+    mcp_authority: String,
+
     /// 起動時にブラウザを開くか否かのフラグ
     #[allow(dead_code)]
     open_browser: bool,
@@ -118,6 +121,7 @@ impl RunCommandContext {
             cert_path: sub_opts.cert_path(),
             cert_is_explicit: sub_opts.is_cert_path_explicit(),
             mcp_enabled: sub_opts.use_mcp(),
+            mcp_authority: sub_opts.mcp_authority(),
             open_browser: sub_opts.is_browser_open(),
             #[cfg(windows)]
             win_service: sub_opts.is_win_service(),
@@ -188,7 +192,7 @@ impl RunCommandContext {
          * MCP endpoint情報の解決
          */
         let mcp_endpoint = if self.mcp_enabled {
-            Some(mcp::create_endpoint())
+            Some(mcp::create_endpoint(self.mcp_authority.clone()))
         } else {
             None
         };

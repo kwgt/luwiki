@@ -123,10 +123,10 @@ impl DatabaseManager {
     }
 
     ///
-    /// テスト用にresource_idの所有ページIDを取得する
+    /// テスト用にresource_pathの所有ページIDを取得する
     ///
     /// # 引数
-    /// * `resource_id` - 取得対象resource_id
+    /// * `resource_path` - 取得対象resource_path
     ///
     /// # 戻り値
     /// 所有ページIDが存在する場合は`Some(PageId)`を返す。
@@ -134,13 +134,13 @@ impl DatabaseManager {
     #[cfg(test)]
     pub(crate) fn get_resource_uri_owner_for_test(
         &self,
-        resource_id: &str,
+        resource_path: &str,
     ) -> Result<Option<PageId>> {
         let txn = self.db.begin_read()?;
         let table =
             txn.open_table(super::schema::RESOURCE_URI_INDEX_TABLE)?;
 
-        Ok(match table.get(resource_id.to_string())? {
+        Ok(match table.get(resource_path.to_string())? {
             Some(owner) => Some(owner.value()),
             None => None,
         })
@@ -150,7 +150,7 @@ impl DatabaseManager {
     /// テスト用にresource URI逆引き索引の所有者を変更する
     ///
     /// # 引数
-    /// * `resource_id` - 更新対象resource_id
+    /// * `resource_path` - 更新対象resource_path
     /// * `owner` - 設定する所有ページID。`None`の場合は削除する。
     ///
     /// # 戻り値
@@ -159,7 +159,7 @@ impl DatabaseManager {
     #[cfg(test)]
     pub(crate) fn set_resource_uri_owner_for_test(
         &self,
-        resource_id: &str,
+        resource_path: &str,
         owner: Option<&PageId>,
     ) -> Result<()> {
         let txn = self.db.begin_write()?;
@@ -168,10 +168,10 @@ impl DatabaseManager {
                 txn.open_table(super::schema::RESOURCE_URI_INDEX_TABLE)?;
             match owner {
                 Some(page_id) => {
-                    table.insert(resource_id.to_string(), page_id.clone())?;
+                    table.insert(resource_path.to_string(), page_id.clone())?;
                 }
                 None => {
-                    let _ = table.remove(resource_id.to_string())?;
+                    let _ = table.remove(resource_path.to_string())?;
                 }
             }
         }

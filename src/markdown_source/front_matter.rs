@@ -382,8 +382,8 @@ impl PromptPageFrontMatter {
 ///
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourcePageFrontMatter {
-    /// resource 識別子
-    resource_id: Option<String>,
+    /// resource path
+    resource_path: Option<String>,
 
     /// resource 名
     name: String,
@@ -393,17 +393,20 @@ pub struct ResourcePageFrontMatter {
 
     /// MIME type
     mime_type: Option<String>,
+
+    /// resource ACL
+    resource_acl: Option<ResourceAclFrontMatter>,
 }
 
 impl ResourcePageFrontMatter {
     ///
-    /// resource 識別子へのアクセサ
+    /// resource path へのアクセサ
     ///
     /// # 戻り値
-    /// `mcp.resource_id` が存在する場合はその値を返す。
+    /// `mcp.resource_path` が存在する場合はその値を返す。
     ///
-    pub fn resource_id(&self) -> Option<&str> {
-        self.resource_id.as_deref()
+    pub fn resource_path(&self) -> Option<&str> {
+        self.resource_path.as_deref()
     }
 
     ///
@@ -434,6 +437,16 @@ impl ResourcePageFrontMatter {
     ///
     pub fn mime_type(&self) -> Option<&str> {
         self.mime_type.as_deref()
+    }
+
+    ///
+    /// resource ACL へのアクセサ
+    ///
+    /// # 戻り値
+    /// `mcp.resource_acl` が存在する場合は参照を返す。
+    ///
+    pub(crate) fn resource_acl(&self) -> Option<&ResourceAclFrontMatter> {
+        self.resource_acl.as_ref()
     }
 }
 
@@ -822,8 +835,11 @@ pub struct McpFrontMatter {
     /// primitive 種別
     primitive: String,
 
-    /// resource 識別子
+    /// 廃止済み resource 識別子
     resource_id: Option<String>,
+
+    /// resource path
+    resource_path: Option<String>,
 
     /// 表示名
     name: Option<String>,
@@ -833,6 +849,9 @@ pub struct McpFrontMatter {
 
     /// MIME type
     mime_type: Option<String>,
+
+    /// resource ACL
+    resource_acl: Option<ResourceAclFrontMatter>,
 
     /// system 情報
     system: Option<String>,
@@ -907,7 +926,14 @@ impl McpFrontMatter {
         if self.resource_id.is_some() {
             return Err(validation_error(
                 "mcp.resource_id",
-                "mcp.resource_id is not allowed for prompt primitive",
+                "mcp.resource_id is deprecated; use mcp.resource_path",
+            ));
+        }
+
+        if self.resource_path.is_some() {
+            return Err(validation_error(
+                "mcp.resource_path",
+                "mcp.resource_path is not allowed for prompt primitive",
             ));
         }
 
@@ -915,6 +941,13 @@ impl McpFrontMatter {
             return Err(validation_error(
                 "mcp.mime_type",
                 "mcp.mime_type is not allowed for prompt primitive",
+            ));
+        }
+
+        if self.resource_acl.is_some() {
+            return Err(validation_error(
+                "mcp.resource_acl",
+                "mcp.resource_acl is not allowed for prompt primitive",
             ));
         }
 
@@ -935,8 +968,15 @@ impl McpFrontMatter {
     /// 妥当な場合は `Ok(())` を返す。
     ///
     fn validate_resource(&self) -> Result<(), FrontMatterValidationError> {
-        if let Some(resource_id) = self.resource_id.as_deref() {
-            validate_resource_id(resource_id)?;
+        if self.resource_id.is_some() {
+            return Err(validation_error(
+                "mcp.resource_id",
+                "mcp.resource_id is deprecated; use mcp.resource_path",
+            ));
+        }
+
+        if let Some(resource_path) = self.resource_path.as_deref() {
+            validate_resource_path(resource_path)?;
         }
 
         let name = self.name.as_deref().ok_or_else(|| {
@@ -957,6 +997,10 @@ impl McpFrontMatter {
 
         if let Some(mime_type) = self.mime_type.as_deref() {
             validate_resource_mime_type(mime_type)?;
+        }
+
+        if let Some(resource_acl) = &self.resource_acl {
+            resource_acl.validate()?;
         }
 
         if self.system.is_some() {
@@ -985,77 +1029,296 @@ impl McpFrontMatter {
 }
 
 ///
-/// MCP resource 識別子の妥当性を検証する
+/// MCP resource ACL
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceAclFrontMatter {
+    /// 既定動作
+    default: Option<ResourceAclDefaultFrontMatter>,
+
+    /// resources/list 用ACL
+    list: Option<ResourceAclOperationFrontMatter>,
+
+    /// resources/read 用ACL
+    read: Option<ResourceAclOperationFrontMatter>,
+}
+
+impl ResourceAclFrontMatter {
+    ///
+    /// resources/list 用ACLへのアクセサ
+    ///
+    /// # 戻り値
+    /// `mcp.resource_acl.list` が存在する場合は参照を返す。
+    ///
+    pub(crate) fn list(&self) -> Option<&ResourceAclOperationFrontMatter> {
+        self.list.as_ref()
+    }
+
+    ///
+    /// resources/read 用ACLへのアクセサ
+    ///
+    /// # 戻り値
+    /// `mcp.resource_acl.read` が存在する場合は参照を返す。
+    ///
+    pub(crate) fn read(&self) -> Option<&ResourceAclOperationFrontMatter> {
+        self.read.as_ref()
+    }
+
+    ///
+    /// resources/list の既定動作を返す
+    ///
+    /// # 戻り値
+    /// `default.list` が存在する場合は値を返す。
+    ///
+    pub(crate) fn default_list(&self) -> Option<ResourceAclDefaultAction> {
+        self.default.as_ref().and_then(|default| default.list())
+    }
+
+    ///
+    /// resources/read の既定動作を返す
+    ///
+    /// # 戻り値
+    /// `default.read` が存在する場合は値を返す。
+    ///
+    pub(crate) fn default_read(&self) -> Option<ResourceAclDefaultAction> {
+        self.default.as_ref().and_then(|default| default.read())
+    }
+
+    ///
+    /// 妥当性を検証する
+    ///
+    /// # 戻り値
+    /// 妥当な場合は `Ok(())` を返す。
+    ///
+    fn validate(&self) -> Result<(), FrontMatterValidationError> {
+        if let Some(list) = &self.list {
+            list.validate("mcp.resource_acl.list")?;
+        }
+        if let Some(read) = &self.read {
+            read.validate("mcp.resource_acl.read")?;
+        }
+
+        Ok(())
+    }
+}
+
+///
+/// MCP resource ACL の既定動作
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ResourceAclDefaultFrontMatter {
+    /// resources/list の既定動作
+    list: Option<ResourceAclDefaultAction>,
+
+    /// resources/read の既定動作
+    read: Option<ResourceAclDefaultAction>,
+}
+
+impl ResourceAclDefaultFrontMatter {
+    ///
+    /// resources/list の既定動作を返す
+    ///
+    /// # 戻り値
+    /// `default.list` が存在する場合は値を返す。
+    ///
+    fn list(&self) -> Option<ResourceAclDefaultAction> {
+        self.list
+    }
+
+    ///
+    /// resources/read の既定動作を返す
+    ///
+    /// # 戻り値
+    /// `default.read` が存在する場合は値を返す。
+    ///
+    fn read(&self) -> Option<ResourceAclDefaultAction> {
+        self.read
+    }
+}
+
+///
+/// MCP resource ACL の既定動作値
+///
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ResourceAclDefaultAction {
+    /// 許可
+    Allow,
+
+    /// 拒否
+    Deny,
+}
+
+///
+/// MCP resource ACL のoperation別指定
+///
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceAclOperationFrontMatter {
+    /// 許可対象
+    allow: Option<Vec<String>>,
+
+    /// 拒否対象
+    deny: Option<Vec<String>>,
+}
+
+impl ResourceAclOperationFrontMatter {
+    ///
+    /// 許可対象へのアクセサ
+    ///
+    /// # 戻り値
+    /// `allow` の要素を返す。
+    ///
+    pub(crate) fn allow(&self) -> &[String] {
+        self.allow.as_deref().unwrap_or(&[])
+    }
+
+    ///
+    /// 拒否対象へのアクセサ
+    ///
+    /// # 戻り値
+    /// `deny` の要素を返す。
+    ///
+    pub(crate) fn deny(&self) -> &[String] {
+        self.deny.as_deref().unwrap_or(&[])
+    }
+
+    ///
+    /// 妥当性を検証する
+    ///
+    /// # 引数
+    /// * `path` - エラー表示用の front matter path
+    ///
+    /// # 戻り値
+    /// 妥当な場合は `Ok(())` を返す。
+    ///
+    fn validate(&self, path: &str) -> Result<(), FrontMatterValidationError> {
+        validate_resource_acl_principals(
+            &format!("{}.allow", path),
+            self.allow.as_deref(),
+        )?;
+        validate_resource_acl_principals(
+            &format!("{}.deny", path),
+            self.deny.as_deref(),
+        )?;
+
+        Ok(())
+    }
+}
+
+///
+/// MCP resource path の妥当性を検証する
 ///
 /// # 引数
-/// * `resource_id` - 検証対象の resource 識別子
+/// * `resource_path` - 検証対象の resource path
 ///
 /// # 戻り値
 /// 妥当な場合は `Ok(())` を返す。
 ///
-pub(crate) fn validate_resource_id(
-    resource_id: &str,
+pub(crate) fn validate_resource_path(
+    resource_path: &str,
+) -> Result<(), FrontMatterValidationError> {
+    validate_resource_path_shape(resource_path)?;
+
+    /*
+     * 明示指定では予約 path を拒否する
+     */
+    if resource_path == "/builtin" || resource_path.starts_with("/builtin/") {
+        return Err(validation_error(
+            "mcp.resource_path",
+            "mcp.resource_path must not use reserved path /builtin",
+        ));
+    }
+    if resource_path == "/pages" || resource_path.starts_with("/pages/") {
+        return Err(validation_error(
+            "mcp.resource_path",
+            "mcp.resource_path must not use reserved path /pages",
+        ));
+    }
+
+    Ok(())
+}
+
+///
+/// MCP resource path の共通形状を検証する
+///
+/// # 引数
+/// * `resource_path` - 検証対象の resource path
+///
+/// # 戻り値
+/// 妥当な場合は `Ok(())` を返す。
+///
+pub(crate) fn validate_resource_path_shape(
+    resource_path: &str,
 ) -> Result<(), FrontMatterValidationError> {
     /*
      * 空値と境界空白の検証
      */
-    if resource_id.trim().is_empty() {
+    if resource_path.trim().is_empty() {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not be empty",
+            "mcp.resource_path",
+            "mcp.resource_path must not be empty",
         ));
     }
-    if resource_id.trim() != resource_id {
+    if resource_path.trim() != resource_path {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not have leading or trailing whitespace",
+            "mcp.resource_path",
+            "mcp.resource_path must not have leading or trailing whitespace",
         ));
     }
 
     /*
      * 文字種と文字数の検証
      */
-    if resource_id.chars().any(char::is_control) {
+    if resource_path.chars().any(char::is_control) {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not contain control characters",
+            "mcp.resource_path",
+            "mcp.resource_path must not contain control characters",
         ));
     }
-    if resource_id.chars().count() > MAX_MCP_RESOURCE_ID_CHARS {
+    if resource_path.chars().count() > MAX_MCP_RESOURCE_ID_CHARS {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must be at most 512 characters",
+            "mcp.resource_path",
+            "mcp.resource_path must be at most 512 characters",
         ));
     }
 
     /*
-     * パス形式と予約 prefix の検証
+     * パス形式の検証
      */
-    if resource_id.starts_with("builtin/") {
+    if !resource_path.starts_with('/') {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not start with reserved prefix builtin/",
+            "mcp.resource_path",
+            "mcp.resource_path must start with /",
         ));
     }
-    if resource_id.starts_with('/') || resource_id.ends_with('/') {
+    if resource_path == "/" {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not start or end with /",
+            "mcp.resource_path",
+            "mcp.resource_path must not be /",
         ));
     }
-    if resource_id.contains("//") {
+    if resource_path.ends_with('/') {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not contain empty path segments",
+            "mcp.resource_path",
+            "mcp.resource_path must not end with /",
         ));
     }
-    if resource_id
+    if resource_path.contains("//") {
+        return Err(validation_error(
+            "mcp.resource_path",
+            "mcp.resource_path must not contain empty path segments",
+        ));
+    }
+    if resource_path
         .split('/')
         .any(|segment| matches!(segment, "." | ".."))
     {
         return Err(validation_error(
-            "mcp.resource_id",
-            "mcp.resource_id must not contain . or .. path segments",
+            "mcp.resource_path",
+            "mcp.resource_path must not contain . or .. path segments",
         ));
     }
 
@@ -1220,6 +1483,55 @@ fn validate_resource_mime_type(
             "mcp.mime_type",
             "mcp.mime_type must contain valid MIME type token characters",
         ));
+    }
+
+    Ok(())
+}
+
+///
+/// MCP resource ACL principal 配列の妥当性を検証する
+///
+/// # 引数
+/// * `path` - エラー表示用の front matter path
+/// * `principals` - 検証対象 principal 配列
+///
+/// # 戻り値
+/// 妥当な場合は `Ok(())` を返す。
+///
+fn validate_resource_acl_principals(
+    path: &str,
+    principals: Option<&[String]>,
+) -> Result<(), FrontMatterValidationError> {
+    let Some(principals) = principals else {
+        return Ok(());
+    };
+    if principals.is_empty() {
+        return Err(validation_error(
+            path,
+            "resource ACL principal list must not be empty",
+        ));
+    }
+
+    for (index, principal) in principals.iter().enumerate() {
+        let item_path = format!("{}[{}]", path, index);
+        if principal.trim().is_empty() {
+            return Err(validation_error(
+                &item_path,
+                "resource ACL principal must not be empty",
+            ));
+        }
+        if principal.trim() != principal {
+            return Err(validation_error(
+                &item_path,
+                "resource ACL principal must not have leading or trailing whitespace",
+            ));
+        }
+        if principal.chars().any(char::is_control) {
+            return Err(validation_error(
+                &item_path,
+                "resource ACL principal must not contain control characters",
+            ));
+        }
     }
 
     Ok(())
@@ -1637,10 +1949,11 @@ impl ResourcePageFrontMatter {
         }
 
         Some(Self {
-            resource_id: mcp.resource_id.clone(),
+            resource_path: mcp.resource_path.clone(),
             name: mcp.name.clone()?,
             description: mcp.description.clone()?,
             mime_type: mcp.mime_type.clone(),
+            resource_acl: mcp.resource_acl.clone(),
         })
     }
 }
@@ -1981,6 +2294,7 @@ mod tests {
         PageFrontMatterKind,
         PromptArgumentFrontMatter,
         PromptPageFrontMatter,
+        ResourceAclDefaultAction,
         ResourcePageFrontMatter,
         TemplatePageFrontMatter,
         classify_page_front_matter,
@@ -2261,7 +2575,7 @@ mod tests {
             "---\n",
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: docs/spec\n",
+            "  resource_path: /docs/spec\n",
             "  name: spec\n",
             "  description: 仕様\n",
             "  mime_type: text/markdown\n",
@@ -2273,16 +2587,92 @@ mod tests {
             .expect("extract failed")
             .expect("resource page missing");
 
-        assert_eq!(resource.resource_id(), Some("docs/spec"));
+        assert_eq!(resource.resource_path(), Some("/docs/spec"));
         assert_eq!(resource.name(), "spec");
         assert_eq!(resource.description(), "仕様");
         assert_eq!(resource.mime_type(), Some("text/markdown"));
     }
 
     ///
+    /// resource ACLをresourceページ情報として取得できることを確認する
+    ///
+    /// 注記: default、list allow、read denyを抽出して比較する。
+    ///
+    #[test]
+    fn extract_resource_page_front_matter_returns_resource_acl() {
+        let source = concat!(
+            "---\n",
+            "mcp:\n",
+            "  primitive: resource\n",
+            "  resource_path: /docs/spec\n",
+            "  name: spec\n",
+            "  description: 仕様\n",
+            "  resource_acl:\n",
+            "    default:\n",
+            "      list: deny\n",
+            "      read: allow\n",
+            "    list:\n",
+            "      allow:\n",
+            "        - agent-docs\n",
+            "    read:\n",
+            "      deny:\n",
+            "        - agent-limited\n",
+            "---\n",
+            "本文",
+        );
+
+        let resource = extract_resource_page_front_matter(source)
+            .expect("extract failed")
+            .expect("resource page missing");
+        let acl = resource.resource_acl().expect("resource ACL missing");
+
+        assert_eq!(acl.default_list(), Some(ResourceAclDefaultAction::Deny));
+        assert_eq!(acl.default_read(), Some(ResourceAclDefaultAction::Allow));
+        assert_eq!(
+            acl.list().expect("list ACL missing").allow(),
+            &["agent-docs".to_string()],
+        );
+        assert_eq!(
+            acl.read().expect("read ACL missing").deny(),
+            &["agent-limited".to_string()],
+        );
+    }
+
+    ///
+    /// resource ACLの空principal配列を拒否することを確認する
+    ///
+    /// 注記: allow / deny は指定時にnon-empty arrayである必要がある。
+    ///
+    #[test]
+    fn parse_front_matter_rejects_empty_resource_acl_principal_list() {
+        let source = concat!(
+            "---\n",
+            "mcp:\n",
+            "  primitive: resource\n",
+            "  resource_path: /docs/spec\n",
+            "  name: spec\n",
+            "  description: 仕様\n",
+            "  resource_acl:\n",
+            "    list:\n",
+            "      allow: []\n",
+            "---\n",
+            "本文",
+        );
+
+        let error = parse_document_front_matter(source)
+            .expect_err("empty ACL principal list must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resource ACL principal list must not be empty")
+        );
+    }
+
+    ///
     /// 任意項目未指定の resource を取得できることを確認する
     ///
-    /// 注記: resource_id と mime_type を省略した resource を抽出する。
+    /// 注記: resource_path と mime_type を省略した resource を抽出する。
     ///
     #[test]
     fn extract_resource_page_front_matter_uses_none_for_optional_fields() {
@@ -2300,7 +2690,7 @@ mod tests {
             .expect("extract failed")
             .expect("resource page missing");
 
-        assert_eq!(resource.resource_id(), None);
+        assert_eq!(resource.resource_path(), None);
         assert_eq!(resource.mime_type(), None);
     }
 
@@ -2453,7 +2843,7 @@ mod tests {
             "    name: 仕様テンプレート\n",
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: docs/spec\n",
+            "  resource_path: /docs/spec\n",
             "  name: spec\n",
             "  description: 仕様\n",
             "---\n",
@@ -2471,10 +2861,11 @@ mod tests {
                     macro_expand: None,
                 }),
                 PageFrontMatterKind::McpResource(ResourcePageFrontMatter {
-                    resource_id: Some("docs/spec".to_string()),
+                    resource_path: Some("/docs/spec".to_string()),
                     name: "spec".to_string(),
                     description: "仕様".to_string(),
                     mime_type: None,
+                    resource_acl: None,
                 }),
             ]
         );
@@ -2575,7 +2966,7 @@ mod tests {
             "---\n",
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: builtin/spec\n",
+            "  resource_path: /builtin/spec\n",
             "  name: spec\n",
             "  description: 仕様\n",
             "---\n",
@@ -2589,10 +2980,10 @@ mod tests {
             err,
             FrontMatterError::Validate(
                 FrontMatterValidationError::Validation {
-                    property_path: "mcp.resource_id".to_string(),
+                    property_path: "mcp.resource_path".to_string(),
                     message: concat!(
-                        "mcp.resource_id must not start with ",
-                        "reserved prefix builtin/",
+                        "mcp.resource_path must not use ",
+                        "reserved path /builtin",
                     )
                     .to_string(),
                 },
@@ -3396,7 +3787,8 @@ mod tests {
     ///
     /// resource 専用項目を prompt で拒否することを確認する
     ///
-    /// 注記: resource_id と mime_type を prompt primitive へ指定する。
+    /// 注記: resource_path、mime_type、resource_acl を
+    /// prompt primitive へ指定する。
     ///
     #[test]
     fn parse_front_matter_rejects_resource_properties_for_prompt() {
@@ -3404,10 +3796,10 @@ mod tests {
             (
                 concat!(
                     "mcp:\n  primitive: prompt\n  name: prompt\n",
-                    "  description: desc\n  resource_id: docs/spec",
+                    "  description: desc\n  resource_path: docs/spec",
                 ),
-                "mcp.resource_id",
-                "mcp.resource_id is not allowed for prompt primitive",
+                "mcp.resource_path",
+                "mcp.resource_path is not allowed for prompt primitive",
             ),
             (
                 concat!(
@@ -3416,6 +3808,16 @@ mod tests {
                 ),
                 "mcp.mime_type",
                 "mcp.mime_type is not allowed for prompt primitive",
+            ),
+            (
+                concat!(
+                    "mcp:\n  primitive: prompt\n  name: prompt\n",
+                    "  description: desc\n  resource_acl:\n",
+                    "    default:\n",
+                    "      list: allow",
+                ),
+                "mcp.resource_acl",
+                "mcp.resource_acl is not allowed for prompt primitive",
             ),
         ];
 
@@ -3438,7 +3840,7 @@ mod tests {
         let source = concat!(
             "mcp:\n",
             "  primitive: resource\n",
-            "  resource_id: docs/spec.v1\n",
+            "  resource_path: /docs/spec.v1\n",
             "  name: Resource Spec\n",
             "  description: \"仕様\\t説明\\n続き\"\n",
             "  mime_type: application/vnd.luwiki+json",
@@ -3447,67 +3849,140 @@ mod tests {
         let parsed = parse_front_matter(source).expect("parse should succeed");
         let resource = parsed.resource_page().expect("resource missing");
 
-        assert_eq!(resource.resource_id(), Some("docs/spec.v1"));
+        assert_eq!(resource.resource_path(), Some("/docs/spec.v1"));
         assert_eq!(resource.name(), "Resource Spec");
         assert_eq!(resource.mime_type(), Some("application/vnd.luwiki+json"));
     }
 
     ///
-    /// resource_id の不正値を拒否することを確認する
+    /// resource_path null を未指定として扱うことを確認する
     ///
-    /// 注記: M4 1.3で確定した明示resource_idの値制約を検証する。
+    /// 注記: 補完で出力する `resource_path: null` が
+    /// 明示 path なしの resource として扱われることを検証する。
     ///
     #[test]
-    fn parse_front_matter_rejects_invalid_resource_ids() {
+    fn parse_front_matter_treats_null_resource_path_as_omitted() {
+        let source = concat!(
+            "mcp:\n",
+            "  primitive: resource\n",
+            "  resource_path: null\n",
+            "  name: Resource Spec\n",
+            "  description: desc",
+        );
+
+        let parsed = parse_front_matter(source).expect("parse should succeed");
+        let resource = parsed.resource_page().expect("resource missing");
+
+        assert_eq!(resource.resource_path(), None);
+    }
+
+    ///
+    /// 廃止済み resource_id を拒否することを確認する
+    ///
+    /// 注記: 互換対応を入れず、resource_path への移行を促す。
+    ///
+    #[test]
+    fn parse_front_matter_rejects_deprecated_resource_id() {
+        let source = concat!(
+            "mcp:\n",
+            "  primitive: resource\n",
+            "  resource_id: docs/spec\n",
+            "  name: Resource Spec\n",
+            "  description: desc",
+        );
+
+        let err = parse_front_matter(source)
+            .expect_err("validation error expected");
+
+        assert_eq!(
+            err,
+            FrontMatterValidationError::Validation {
+                property_path: "mcp.resource_id".to_string(),
+                message: concat!(
+                    "mcp.resource_id is deprecated; ",
+                    "use mcp.resource_path",
+                )
+                .to_string(),
+            }
+        );
+    }
+
+    ///
+    /// resource_path の不正値を拒否することを確認する
+    ///
+    /// 注記: M4 13.3で確定した明示resource_pathの値制約を検証する。
+    ///
+    #[test]
+    fn parse_front_matter_rejects_invalid_resource_paths() {
         let long_id = "a".repeat(513);
         let cases = vec![
             (
-                "mcp:\n  primitive: resource\n  resource_id: \"\"\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not be empty",
+                "mcp:\n  primitive: resource\n  resource_path: \"\"\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not be empty",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: \" docs/spec\"\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not have leading or trailing whitespace",
+                "mcp:\n  primitive: resource\n  resource_path: \" /docs/spec\"\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not have leading or trailing whitespace",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: \"docs/spec\\u0007\"\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not contain control characters",
+                "mcp:\n  primitive: resource\n  resource_path: \"/docs/spec\\u0007\"\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not contain control characters",
             ),
             (
                 format!(
-                    "mcp:\n  primitive: resource\n  resource_id: {}\n  name: spec\n  description: desc",
+                    "mcp:\n  primitive: resource\n  resource_path: {}\n  name: spec\n  description: desc",
                     long_id,
                 ),
-                "mcp.resource_id",
-                "mcp.resource_id must be at most 512 characters",
+                "mcp.resource_path",
+                "mcp.resource_path must be at most 512 characters",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: builtin/spec\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not start with reserved prefix builtin/",
+                "mcp:\n  primitive: resource\n  resource_path: docs/spec\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must start with /",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: /docs/spec\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not start or end with /",
+                "mcp:\n  primitive: resource\n  resource_path: /\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not be /",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: docs/spec/\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not start or end with /",
+                "mcp:\n  primitive: resource\n  resource_path: /docs/spec/\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not end with /",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: docs//spec\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not contain empty path segments",
+                "mcp:\n  primitive: resource\n  resource_path: /docs//spec\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not contain empty path segments",
             ),
             (
-                "mcp:\n  primitive: resource\n  resource_id: docs/../spec\n  name: spec\n  description: desc".to_string(),
-                "mcp.resource_id",
-                "mcp.resource_id must not contain . or .. path segments",
+                "mcp:\n  primitive: resource\n  resource_path: /docs/../spec\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not contain . or .. path segments",
+            ),
+            (
+                "mcp:\n  primitive: resource\n  resource_path: /builtin/spec\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not use reserved path /builtin",
+            ),
+            (
+                "mcp:\n  primitive: resource\n  resource_path: /builtin\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not use reserved path /builtin",
+            ),
+            (
+                "mcp:\n  primitive: resource\n  resource_path: /pages/spec\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not use reserved path /pages",
+            ),
+            (
+                "mcp:\n  primitive: resource\n  resource_path: /pages\n  name: spec\n  description: desc".to_string(),
+                "mcp.resource_path",
+                "mcp.resource_path must not use reserved path /pages",
             ),
         ];
 

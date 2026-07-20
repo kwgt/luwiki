@@ -26,6 +26,7 @@ use super::{
     default_db_path,
     default_fts_index_path,
     default_log_path,
+    DEFAULT_MCP_AUTHORITY,
     DEFAULT_AUDIT_RETENTION_TEXT,
     DEFAULT_AUDIT_ROTATE_SIZE_TEXT,
     LogLevel,
@@ -197,6 +198,14 @@ impl Config {
     pub(super) fn set_run_use_mcp(&mut self, use_mcp: bool) {
         let run = self.ensure_run();
         run.use_mcp = Some(use_mcp);
+    }
+
+    ///
+    /// runサブコマンドのMCP authorityを更新
+    ///
+    pub(super) fn set_run_mcp_authority(&mut self, authority: String) {
+        let run = self.ensure_run();
+        run.mcp_authority = Some(authority);
     }
 
     ///
@@ -519,6 +528,15 @@ impl Config {
         self.run
             .as_ref()
             .and_then(|run| run.use_mcp)
+    }
+
+    ///
+    /// runサブコマンドのMCP authorityへのアクセサ
+    ///
+    pub(super) fn run_mcp_authority(&self) -> Option<String> {
+        self.run
+            .as_ref()
+            .and_then(|run| run.mcp_authority.clone())
     }
 
     ///
@@ -862,6 +880,7 @@ impl Config {
                 bind_addr: None,
                 bind_port: None,
                 use_mcp: None,
+                mcp_authority: None,
                 use_tls: None,
                 server_cert: None,
             });
@@ -1101,6 +1120,7 @@ impl Default for Config {
                 bind_addr: Some("0.0.0.0".to_string()),
                 bind_port: Some(8080),
                 use_mcp: Some(false),
+                mcp_authority: Some(DEFAULT_MCP_AUTHORITY.to_string()),
                 use_tls: Some(false),
                 server_cert: None,
             }),
@@ -1234,6 +1254,9 @@ struct RunInfo {
 
     /// MCPの有効化
     use_mcp: Option<bool>,
+
+    /// MCP resource URI authority
+    mcp_authority: Option<String>,
 
     /// TLSの使用
     use_tls: Option<bool>,

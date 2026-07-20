@@ -39,6 +39,7 @@ pub(crate) struct AuthContext {
     path_prefixes: PathPrefixSet,
     user_attributes: UserAttributeSet,
     token_id: Option<TokenId>,
+    token_name: Option<String>,
 }
 
 ///
@@ -101,6 +102,7 @@ impl AuthContext {
             path_prefixes,
             UserAttributeSet::new(),
             token_id,
+            None,
         )
     }
 
@@ -113,6 +115,7 @@ impl AuthContext {
     /// * `path_prefixes` - path prefix 制約集合
     /// * `user_attributes` - ユーザ属性集合
     /// * `token_id` - BearerトークンID
+    /// * `token_name` - Bearerトークン任意名
     ///
     /// # 戻り値
     /// 生成した認証文脈を返す。
@@ -123,6 +126,7 @@ impl AuthContext {
         path_prefixes: PathPrefixSet,
         user_attributes: UserAttributeSet,
         token_id: Option<TokenId>,
+        token_name: Option<String>,
     ) -> Self {
         Self {
             user,
@@ -130,6 +134,7 @@ impl AuthContext {
             path_prefixes,
             user_attributes,
             token_id,
+            token_name,
         }
     }
 
@@ -191,6 +196,16 @@ impl AuthContext {
     ///
     pub(crate) fn token_id(&self) -> Option<&TokenId> {
         self.token_id.as_ref()
+    }
+
+    ///
+    /// Bearerトークン任意名へのアクセサ
+    ///
+    /// # 戻り値
+    /// Bearerトークン任意名が存在する場合は参照を返す。
+    ///
+    pub(crate) fn token_name(&self) -> Option<&str> {
+        self.token_name.as_deref()
     }
 }
 
@@ -271,6 +286,7 @@ pub(crate) fn authenticate_bearer_token(
         token_info.path_prefixes(),
         user_info.attributes(),
         Some(token_id),
+        token_info.name(),
     );
 
     Ok(Ok(BearerAuthSuccess::new(auth, updated_expire_at)))

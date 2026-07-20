@@ -22,7 +22,7 @@ use crate::database::types::UserId;
 use crate::fts::{FtsIndexConfig, FtsSearchTarget};
 use crate::markdown_source::front_matter::{
     validate_prompt_name,
-    validate_resource_id,
+    validate_resource_path,
 };
 use crate::mcp::service::{
     AppendServiceResult,
@@ -64,9 +64,6 @@ use super::model::{
     WritePageResponse,
 };
 use super::service::{EditPageRequest as ServiceEditPageRequest, McpService};
-
-/// resource URI authority の既定値
-const DEFAULT_RESOURCE_AUTHORITY: &str = "local.luwiki";
 
 ///
 /// MCPハンドラの骨格
@@ -249,6 +246,7 @@ impl McpHandler {
                             uri,
                             &result,
                             user_id,
+                            self.service.resource_authority(),
                         ),
                     );
                 }
@@ -265,6 +263,7 @@ impl McpHandler {
                             uri,
                             &error,
                             user_id,
+                            self.service.resource_authority(),
                         ),
                     );
                 }
@@ -1422,6 +1421,7 @@ fn build_read_resource_audit_record(
     uri: &str,
     result: &ReadResourceServiceResult,
     user_id: UserId,
+    resource_authority: &str,
 ) -> AuditRecord {
     build_success_record(
         AuditOperation::ReadResource,
@@ -1430,7 +1430,7 @@ fn build_read_resource_audit_record(
         address,
         None,
         result.revision(),
-        resource_uri_audit_summary(uri),
+        resource_uri_audit_summary(uri, resource_authority),
     )
 }
 
@@ -1453,6 +1453,7 @@ fn build_read_resource_error_audit_record(
     uri: &str,
     error: &McpError,
     user_id: UserId,
+    resource_authority: &str,
 ) -> AuditRecord {
     AuditRecord::new(
         AuditOperation::ReadResource,
@@ -1462,7 +1463,7 @@ fn build_read_resource_error_audit_record(
         None,
         audit_result_from_error(error),
         Utc::now(),
-        resource_uri_audit_summary(uri),
+        resource_uri_audit_summary(uri, resource_authority),
         None,
     )
 }
@@ -1555,7 +1556,10 @@ fn prompt_name_audit_summary(name: &str) -> Option<String> {
 /// # 戻り値
 /// URIが値制約を満たす場合だけsummaryを返す。
 ///
-fn resource_uri_audit_summary(uri: &str) -> Option<String> {
+fn resource_uri_audit_summary(
+    uri: &str,
+    expected_authority: &str,
+) -> Option<String> {
     if uri.trim().is_empty()
         || uri.trim() != uri
         || uri.chars().any(char::is_control)
@@ -1566,7 +1570,7 @@ fn resource_uri_audit_summary(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("luwiki://")?;
     let path_start = rest.find('/')?;
     let authority = &rest[..path_start];
-    if authority != DEFAULT_RESOURCE_AUTHORITY {
+    if authority != expected_authority {
         return None;
     }
     let path = &rest[path_start..];
@@ -1583,13 +1587,9 @@ fn resource_uri_audit_summary(uri: &str) -> Option<String> {
         return Some(format!("uri={}", uri));
     }
 
-    if let Some(resource_id) = path.strip_prefix("/page/") {
-        return validate_resource_id(resource_id)
-            .ok()
-            .map(|_| format!("uri={}", uri));
-    }
-
-    None
+    validate_resource_path(path)
+        .ok()
+        .map(|_| format!("uri={}", uri))
 }
 
 fn build_search_pages_audit_record(
@@ -2640,7 +2640,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/secret-resource\n",
+                    "  resource_path: /docs/secret-resource\n",
                     "  name: secret-resource-name\n",
                     "  description: secret resource description\n",
                     "  mime_type: text/plain\n",
@@ -2829,7 +2829,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/audit-read\n",
+                    "  resource_path: /docs/audit-read\n",
                     "  name: audit-read-resource\n",
                     "  description: secret read description\n",
                     "  mime_type: text/plain\n",
@@ -2862,7 +2862,7 @@ mod tests {
                 .parse()
                 .expect("parse audit address failed"),
         );
-        let uri = "luwiki://local.luwiki/page/docs/audit-read";
+        let uri = "luwiki://local.luwiki/docs/audit-read";
 
         /*
          * resource取得成功を監査ログへ記録する
@@ -2896,7 +2896,7 @@ mod tests {
         assert_eq!(record.revision, result.revision());
         assert_eq!(
             record.summary.as_deref(),
-            Some("uri=luwiki://local.luwiki/page/docs/audit-read"),
+            Some("uri=luwiki://local.luwiki/docs/audit-read"),
         );
         assert_eq!(record.token_id, auth.token_id().cloned());
         assert_eq!(record.address, address);
@@ -2935,7 +2935,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/audit-failure\n",
+                    "  resource_path: /docs/audit-failure\n",
                     "  name: audit-failure-resource\n",
                     "  description: secret failure description\n",
                     "  mime_type: text/plain\n",
@@ -2975,7 +2975,7 @@ mod tests {
         /*
          * 不存在、URI不正、scope不足を記録する
          */
-        let missing_uri = "luwiki://local.luwiki/page/docs/missing";
+        let missing_uri = "luwiki://local.luwiki/docs/missing";
         let not_found = handler
             .handle_read_resource(&read, &manager, None, missing_uri)
             .expect_err("not found expected");
@@ -2985,12 +2985,12 @@ mod tests {
                 &read,
                 &manager,
                 None,
-                "luwiki://local.luwiki/page/ bad-secret-uri",
+                "luwiki://local.luwiki/docs//bad-secret-uri",
             )
             .expect_err("invalid input expected");
         assert_eq!(invalid.code(), McpErrorCode::InvalidInput);
         let failure_uri =
-            "luwiki://local.luwiki/page/docs/audit-failure";
+            "luwiki://local.luwiki/docs/audit-failure";
         let forbidden = handler
             .handle_read_resource(
                 &append_only,
@@ -3011,7 +3011,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/secret-changed\n",
+                    "  resource_path: /docs/secret-changed\n",
                     "  name: changed-resource\n",
                     "  description: changed secret description\n",
                     "---\n",
@@ -3053,13 +3053,13 @@ mod tests {
         }
         assert_eq!(
             records[0].summary.as_deref(),
-            Some("uri=luwiki://local.luwiki/page/docs/missing"),
+            Some("uri=luwiki://local.luwiki/docs/missing"),
         );
         assert_eq!(records[1].summary, None);
         for record in &records[2..] {
             assert_eq!(
                 record.summary.as_deref(),
-                Some("uri=luwiki://local.luwiki/page/docs/audit-failure"),
+                Some("uri=luwiki://local.luwiki/docs/audit-failure"),
             );
         }
         assert!(!body.contains(" bad-secret-uri"));
@@ -3161,7 +3161,7 @@ mod tests {
                     "---\n",
                     "mcp:\n",
                     "  primitive: resource\n",
-                    "  resource_id: docs/audit-fail\n",
+                    "  resource_path: /docs/audit-fail\n",
                     "  name: audit-fail-resource\n",
                     "  description: audit fail resource\n",
                     "---\n",
@@ -3190,7 +3190,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "luwiki://local.luwiki/page/docs/audit-fail",
+                "luwiki://local.luwiki/docs/audit-fail",
             )
             .expect("read resource should succeed");
         assert_eq!(result.text(), "audit fail body");
@@ -3200,7 +3200,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "luwiki://local.luwiki/page/docs/missing",
+                "luwiki://local.luwiki/docs/missing",
             )
             .expect_err("not found expected");
         assert_eq!(error.code(), McpErrorCode::NotFound);

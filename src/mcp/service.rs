@@ -39,17 +39,21 @@ use crate::database::types::{
     BearerScope,
     PageId,
     PageIndex,
+    TokenId,
     UserAttribute,
     UserId,
 };
 use crate::fts::{self, FtsIndexConfig, FtsSearchTarget};
 use crate::markdown_source::front_matter::{
     PromptPageFrontMatter,
+    ResourceAclDefaultAction,
+    ResourceAclFrontMatter,
     extract_front_matter,
     is_valid_prompt_argument_name,
     parse_front_matter,
     validate_prompt_name,
-    validate_resource_id,
+    validate_resource_path,
+    validate_resource_path_shape,
 };
 
 use super::errors::{McpError, McpErrorCode};
@@ -76,7 +80,7 @@ const DEFAULT_PROMPT_LIST_LIMIT: usize = 50;
 const DEFAULT_RESOURCE_LIST_LIMIT: usize = 50;
 
 /// resource URI authority の既定値
-const DEFAULT_RESOURCE_AUTHORITY: &str = "local.luwiki";
+pub(crate) const DEFAULT_RESOURCE_AUTHORITY: &str = "local.luwiki";
 
 /// `search_pages` の既定件数
 const DEFAULT_SEARCH_LIMIT: usize = 20;
@@ -89,6 +93,18 @@ const APPEND_WAIT_TIMEOUT_MS: u64 = 1_000;
 
 /// `append` 競合待機のポーリング間隔 (ミリ秒)
 const APPEND_WAIT_INTERVAL_MS: u64 = 50;
+
+///
+/// resource ACL の対象operation
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResourceAclOperation {
+    /// resources/list
+    List,
+
+    /// resources/read
+    Read,
+}
 
 ///
 /// MCPで扱う操作種別
@@ -510,8 +526,11 @@ struct ParsedHeading {
 ///
 /// MCPサービス層
 ///
-#[derive(Clone, Debug, Default)]
-pub(crate) struct McpService;
+#[derive(Clone, Debug)]
+pub(crate) struct McpService {
+    /// resource URI authority
+    resource_authority: String,
+}
 
 impl McpOperation {
     ///
@@ -1479,7 +1498,34 @@ impl McpService {
     /// 生成したサービス層オブジェクトを返す。
     ///
     pub(crate) fn new() -> Self {
-        Self
+        Self::with_resource_authority(DEFAULT_RESOURCE_AUTHORITY.to_string())
+    }
+
+    ///
+    /// resource authorityを指定してMCPサービス層を生成する
+    ///
+    /// # 引数
+    /// * `resource_authority` - resource URI authority
+    ///
+    /// # 戻り値
+    /// 生成したサービス層オブジェクトを返す。
+    ///
+    pub(crate) fn with_resource_authority(
+        resource_authority: String,
+    ) -> Self {
+        Self {
+            resource_authority,
+        }
+    }
+
+    ///
+    /// resource URI authorityを返す
+    ///
+    /// # 戻り値
+    /// resource URI authorityを返す。
+    ///
+    pub(crate) fn resource_authority(&self) -> &str {
+        &self.resource_authority
     }
 
     ///
@@ -2010,33 +2056,53 @@ impl McpService {
          */
         self.ensure_operation_scope(auth, McpOperation::ListResources)?;
         if let Some(cursor) = cursor {
-            validate_resource_list_cursor(cursor)?;
+            validate_resource_list_cursor(
+                cursor,
+                self.resource_authority(),
+            )?;
         }
 
         /*
-         * 固定組み込みresourceと認可済みページ由来resourceを合流する
+         * 固定組み込みresourceとACL許可済みページ由来resourceを合流する
          */
-        let page_entries = db
-            .list_resource_candidates()
-            .map_err(|_| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    "internal error",
-                )
-            })?
-            .into_iter()
-            .filter(|entry| {
-                self.is_path_prefix_allowed(auth, entry.current_path())
-            })
-            .map(|entry| {
-                page_resource_list_entry(
-                    DEFAULT_RESOURCE_AUTHORITY,
-                    &entry,
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut page_entries = Vec::new();
+        for entry in db.list_resource_candidates().map_err(|_| {
+            McpError::new(McpErrorCode::InternalError, "internal error")
+        })? {
+            let lookup = db
+                .get_resource_source_by_path(entry.resource_path())
+                .map_err(|_| resource_internal_error())?;
+            let source_entry = match lookup {
+                ResourceSourceLookupResult::Found(source_entry) => source_entry,
+                ResourceSourceLookupResult::NotFound
+                | ResourceSourceLookupResult::Unavailable => continue,
+                ResourceSourceLookupResult::Inconsistent => {
+                    return Err(resource_internal_error());
+                }
+            };
+            let extracted = extract_front_matter(source_entry.source())
+                .map_err(|_| resource_internal_error())?
+                .ok_or_else(resource_internal_error)?;
+            let front_matter = parse_front_matter(extracted.front_matter())
+                .map_err(|_| resource_internal_error())?;
+            let resource = front_matter
+                .resource_page()
+                .ok_or_else(resource_internal_error)?;
+            if !resource_acl_allows(
+                auth,
+                resource.resource_acl(),
+                ResourceAclOperation::List,
+            ) {
+                continue;
+            }
+
+            page_entries.push(page_resource_list_entry(
+                self.resource_authority(),
+                &entry,
+            ));
+        }
         let entries = merge_resource_list_entries(
-            builtin_resource_list_entries(DEFAULT_RESOURCE_AUTHORITY),
+            builtin_resource_list_entries(self.resource_authority()),
             page_entries,
         )
         .map_err(|_| {
@@ -2107,12 +2173,15 @@ impl McpService {
          * read scopeとURIを検証する
          */
         self.ensure_operation_scope(auth, McpOperation::ReadResource)?;
-        let target = parse_resource_read_uri(uri)?;
+        let target = parse_resource_read_uri(
+            uri,
+            self.resource_authority(),
+        )?;
 
         match target {
             ResourceUriTarget::Builtin { builtin_id } => {
                 let contents = builtin_resource_contents(
-                    DEFAULT_RESOURCE_AUTHORITY,
+                    self.resource_authority(),
                     &builtin_id,
                 )
                 .ok_or_else(resource_not_found)?;
@@ -2124,9 +2193,9 @@ impl McpService {
                     None,
                 ))
             }
-            ResourceUriTarget::Page { resource_id } => {
+            ResourceUriTarget::Page { resource_path } => {
                 let lookup = db
-                    .get_resource_source_by_id(&resource_id)
+                    .get_resource_source_by_path(&resource_path)
                     .map_err(|_| resource_internal_error())?;
                 let entry = match lookup {
                     ResourceSourceLookupResult::Found(entry) => entry,
@@ -2138,13 +2207,6 @@ impl McpService {
                         return Err(resource_internal_error());
                     }
                 };
-                if !self.is_path_prefix_allowed(
-                    auth,
-                    entry.current_path(),
-                ) {
-                    return Err(resource_not_found());
-                }
-
                 let extracted = extract_front_matter(entry.source())
                     .map_err(|_| resource_internal_error())?
                     .ok_or_else(resource_internal_error)?;
@@ -2155,14 +2217,21 @@ impl McpService {
                 let resource = front_matter
                     .resource_page()
                     .ok_or_else(resource_internal_error)?;
-                let actual_resource_id = match resource.resource_id() {
-                    Some(resource_id) => resource_id.to_string(),
-                    None => resource_id_from_current_path(
+                let actual_resource_path = match resource.resource_path() {
+                    Some(resource_path) => resource_path.to_string(),
+                    None => resource_path_from_current_path(
                         entry.current_path(),
                     )?,
                 };
-                if actual_resource_id != resource_id {
+                if actual_resource_path != resource_path {
                     return Err(resource_internal_error());
+                }
+                if !resource_acl_allows(
+                    auth,
+                    resource.resource_acl(),
+                    ResourceAclOperation::Read,
+                ) {
+                    return Err(resource_not_found());
                 }
 
                 let mime_type = resource
@@ -2172,8 +2241,8 @@ impl McpService {
 
                 Ok(ReadResourceServiceResult::new(
                     page_resource_uri(
-                        DEFAULT_RESOURCE_AUTHORITY,
-                        &resource_id,
+                        self.resource_authority(),
+                        &resource_path,
                     ),
                     mime_type,
                     extracted.body().to_string(),
@@ -4003,7 +4072,10 @@ fn path_matches_prefix(target_path: &str, prefix: &str) -> bool {
 /// # 戻り値
 /// 検証に成功した場合は `Ok(())` を返す。
 ///
-fn validate_resource_list_cursor(cursor: &str) -> Result<(), McpError> {
+fn validate_resource_list_cursor(
+    cursor: &str,
+    expected_authority: &str,
+) -> Result<(), McpError> {
     let invalid_cursor = || {
         McpError::new(
             McpErrorCode::InvalidInput,
@@ -4020,10 +4092,7 @@ fn validate_resource_list_cursor(cursor: &str) -> Result<(), McpError> {
     if cursor.chars().any(char::is_control) {
         return Err(invalid_cursor());
     }
-    let max_cursor_chars = format!(
-        "luwiki://{}/page/",
-        DEFAULT_RESOURCE_AUTHORITY,
-    )
+    let max_cursor_chars = format!("luwiki://{}", expected_authority)
         .chars()
         .count()
         + 512;
@@ -4041,7 +4110,7 @@ fn validate_resource_list_cursor(cursor: &str) -> Result<(), McpError> {
         return Err(invalid_cursor());
     };
     let authority = &rest[..path_start];
-    if authority != DEFAULT_RESOURCE_AUTHORITY {
+    if authority != expected_authority {
         return Err(invalid_cursor());
     }
     let path = &rest[path_start..];
@@ -4058,12 +4127,7 @@ fn validate_resource_list_cursor(cursor: &str) -> Result<(), McpError> {
         return Ok(());
     }
 
-    if let Some(resource_id) = path.strip_prefix("/page/") {
-        return validate_resource_id(resource_id)
-            .map_err(|_| invalid_cursor());
-    }
-
-    Err(invalid_cursor())
+    validate_resource_path(path).map_err(|_| invalid_cursor())
 }
 
 ///
@@ -4079,8 +4143,8 @@ enum ResourceUriTarget {
 
     /// ページ由来resource
     Page {
-        /// resource 識別子
-        resource_id: String,
+        /// resource path
+        resource_path: String,
     },
 }
 
@@ -4095,6 +4159,7 @@ enum ResourceUriTarget {
 ///
 fn parse_resource_read_uri(
     uri: &str,
+    expected_authority: &str,
 ) -> Result<ResourceUriTarget, McpError> {
     /*
      * 空値、境界空白、制御文字を検証する
@@ -4116,7 +4181,7 @@ fn parse_resource_read_uri(
         return Err(resource_uri_invalid());
     };
     let authority = &rest[..path_start];
-    if authority != DEFAULT_RESOURCE_AUTHORITY {
+    if authority != expected_authority {
         return Err(resource_not_found());
     }
     let path = &rest[path_start..];
@@ -4135,38 +4200,33 @@ fn parse_resource_read_uri(
         });
     }
 
-    if let Some(resource_id) = path.strip_prefix("/page/") {
-        validate_resource_id(resource_id)
-            .map_err(|_| resource_uri_invalid())?;
+    validate_resource_path(path).map_err(|_| resource_uri_invalid())?;
 
-        return Ok(ResourceUriTarget::Page {
-            resource_id: resource_id.to_string(),
-        });
-    }
-
-    Err(resource_not_found())
+    Ok(ResourceUriTarget::Page {
+        resource_path: path.to_string(),
+    })
 }
 
 ///
-/// current pathからresource_idを導出する
+/// current pathからresource_pathを導出する
 ///
 /// # 引数
 /// * `current_path` - 対象ページのcurrent path
 ///
 /// # 戻り値
-/// 導出したresource_idを返す。
+/// 導出したresource_pathを返す。
 ///
-fn resource_id_from_current_path(
+fn resource_path_from_current_path(
     current_path: &str,
 ) -> Result<String, McpError> {
-    let resource_id = current_path
+    let path_without_root = current_path
         .strip_prefix('/')
-        .unwrap_or(current_path)
-        .to_string();
-    validate_resource_id(&resource_id)
+        .unwrap_or(current_path);
+    let resource_path = format!("/pages/{}", path_without_root);
+    validate_resource_path_shape(&resource_path)
         .map_err(|_| resource_internal_error())?;
 
-    Ok(resource_id)
+    Ok(resource_path)
 }
 
 ///
@@ -4205,6 +4265,79 @@ fn normalize_absolute_path(raw_path: &str) -> String {
     }
 
     raw_path.trim_end_matches('/').to_string()
+}
+
+///
+/// resource ACL がoperationを許可するかを判定する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `acl` - resource ACL
+/// * `operation` - 判定対象operation
+///
+/// # 戻り値
+/// 許可される場合は `true` を返す。
+///
+fn resource_acl_allows(
+    auth: &AuthContext,
+    acl: Option<&ResourceAclFrontMatter>,
+    operation: ResourceAclOperation,
+) -> bool {
+    let Some(acl) = acl else {
+        return true;
+    };
+    let operation_acl = match operation {
+        ResourceAclOperation::List => acl.list(),
+        ResourceAclOperation::Read => acl.read(),
+    };
+    let default_action = match operation {
+        ResourceAclOperation::List => acl.default_list(),
+        ResourceAclOperation::Read => acl.default_read(),
+    }
+    .unwrap_or(ResourceAclDefaultAction::Allow);
+
+    if let Some(operation_acl) = operation_acl {
+        if operation_acl
+            .deny()
+            .iter()
+            .any(|principal| resource_acl_principal_matches(auth, principal))
+        {
+            return false;
+        }
+        if operation_acl
+            .allow()
+            .iter()
+            .any(|principal| resource_acl_principal_matches(auth, principal))
+        {
+            return true;
+        }
+    }
+
+    matches!(default_action, ResourceAclDefaultAction::Allow)
+}
+
+///
+/// resource ACL principal が認証tokenに一致するかを判定する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `principal` - token ID または token name
+///
+/// # 戻り値
+/// 一致する場合は `true` を返す。
+///
+fn resource_acl_principal_matches(
+    auth: &AuthContext,
+    principal: &str,
+) -> bool {
+    if TokenId::from_string(principal).is_ok() {
+        return auth
+            .token_id()
+            .is_some_and(|token_id| token_id.to_string() == principal);
+    }
+
+    auth.token_name()
+        .is_some_and(|token_name| token_name == principal)
 }
 
 ///
@@ -5072,6 +5205,7 @@ mod tests {
             PathPrefixSet::new(),
             UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
             None,
+            None,
         );
 
         assert!(service
@@ -5123,6 +5257,7 @@ mod tests {
             BearerScopeSet::from_iter([BearerScope::Write]),
             PathPrefixSet::from_iter(["/mcp"]),
             UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
             None,
         );
 
@@ -5230,6 +5365,7 @@ mod tests {
             BearerScopeSet::from_iter([BearerScope::Update]),
             PathPrefixSet::from_iter(["/mcp"]),
             UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
             None,
         );
         let service = McpService::new();

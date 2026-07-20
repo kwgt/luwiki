@@ -1411,10 +1411,13 @@ Bearer平文を転送しない。
 固定組み込みresourceとページ由来resourceは同じresources capabilityの下で公開する。
 `resources/list`では両者を合流し、URI昇順で返す。
 `resources/read`ではURIに応じて固定組み込み本文またはページ由来本文を解決する。
+resource URIのauthorityはrun設定`mcp_authority`から解決し、未指定時は
+`local.luwiki`を使用する。
 
 固定組み込みresourceにはページ用path prefix制約を適用しない。
-ページ由来resourceにはread scopeとpath prefix制約を適用し、
-範囲外の場合は一覧から除外し、取得ではnot foundとして扱う。
+ページ由来resourceにもページ用path prefix制約を適用しない。
+ページ由来resourceにはread scopeとresource ACLを適用し、
+ACL非許可の場合は一覧から除外し、取得ではnot foundとして扱う。
 
 ### 5.5 通知非対応
 

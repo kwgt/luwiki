@@ -13,7 +13,13 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use clap::Args;
 
-use super::{ApplyConfig, ShowOptions, Validate};
+use super::{
+    ApplyConfig,
+    DEFAULT_MCP_AUTHORITY,
+    ShowOptions,
+    Validate,
+    validate_mcp_authority,
+};
 use crate::cmd_args::config::Config;
 use crate::cmd_args::default_cert_path;
 
@@ -34,6 +40,10 @@ pub(crate) struct RunOpts {
         default_missing_value = "true"
     )]
     use_mcp: Option<bool>,
+
+    /// MCP resource URI authority
+    #[arg(skip)]
+    mcp_authority: Option<String>,
 
     /// TLSでの通信を有効にする
     #[arg(short = 'T', long = "tls")]
@@ -76,6 +86,18 @@ impl RunOpts {
     ///
     pub(crate) fn use_mcp(&self) -> bool {
         self.use_mcp.unwrap_or(false)
+    }
+
+    ///
+    /// MCP authority へのアクセサ
+    ///
+    /// # 戻り値
+    /// MCP resource URI の authority を返す。
+    ///
+    pub(crate) fn mcp_authority(&self) -> String {
+        self.mcp_authority
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MCP_AUTHORITY.to_string())
     }
 
     ///
@@ -181,6 +203,11 @@ impl Validate for RunOpts {
         }
 
         /*
+         * MCP authority 設定を検証
+         */
+        validate_mcp_authority(&self.mcp_authority())?;
+
+        /*
          * 検証結果を返却
          */
         Ok(())
@@ -221,6 +248,9 @@ impl ApplyConfig for RunOpts {
          */
         if self.use_mcp.is_none() {
             self.use_mcp = config.run_use_mcp();
+        }
+        if self.mcp_authority.is_none() {
+            self.mcp_authority = config.run_mcp_authority();
         }
 
         /*
@@ -324,6 +354,7 @@ impl ShowOptions for RunOpts {
         println!("run command options");
         println!("   browser_open:   {:?}", self.is_browser_open());
         println!("   mcp enabled:    {}", self.use_mcp());
+        println!("   mcp authority:  {}", self.mcp_authority());
         println!("   tls enabled:    {}", self.use_tls());
         println!("   cert path:      {}", self.cert_path().display());
         #[cfg(windows)]

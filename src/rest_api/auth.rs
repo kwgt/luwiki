@@ -401,6 +401,7 @@ async fn validate_basic_auth(
         PathPrefixSet::new(),
         user_info.attributes(),
         None,
+        None,
     ));
 
     Ok(req)

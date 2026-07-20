@@ -115,8 +115,8 @@ pub(crate) struct ResourceCandidateListEntry {
     /// current path
     current_path: String,
 
-    /// resource 識別子
-    resource_id: String,
+    /// resource path
+    resource_path: String,
 
     /// resource 名
     name: String,
@@ -880,7 +880,7 @@ impl ResourceCandidateListEntry {
     /// # 引数
     /// * `page_id` - ページID
     /// * `current_path` - current path
-    /// * `resource_id` - resource 識別子
+    /// * `resource_path` - resource path
     /// * `name` - resource 名
     /// * `description` - resource 説明
     /// * `mime_type` - MIME type
@@ -891,7 +891,7 @@ impl ResourceCandidateListEntry {
     pub(in crate::database) fn new(
         page_id: PageId,
         current_path: String,
-        resource_id: String,
+        resource_path: String,
         name: String,
         description: String,
         mime_type: String,
@@ -899,7 +899,7 @@ impl ResourceCandidateListEntry {
         Self {
             page_id,
             current_path,
-            resource_id,
+            resource_path,
             name,
             description,
             mime_type,
@@ -927,13 +927,13 @@ impl ResourceCandidateListEntry {
     }
 
     ///
-    /// resource 識別子へのアクセサ
+    /// resource path へのアクセサ
     ///
     /// # 戻り値
-    /// resource 識別子を返す。
+    /// resource path を返す。
     ///
-    pub(crate) fn resource_id(&self) -> &str {
-        &self.resource_id
+    pub(crate) fn resource_path(&self) -> &str {
+        &self.resource_path
     }
 
     ///

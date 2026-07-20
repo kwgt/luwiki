@@ -36,6 +36,15 @@ const FRONT_MATTER_KEYWORD_SECTION = { name: 'Front Matter', rank: 1 } as const;
 const FRONT_MATTER_VALUE_SECTION = { name: 'Front Matter Values', rank: 2 } as const;
 const FRONT_MATTER_SNIPPET_SECTION = { name: 'Front Matter Snippets', rank: 3 } as const;
 
+const mcpResourceBlockSnippet = [
+  'mcp:',
+  '  primitive: resource',
+  '  # resource_path は絶対 URI path です。null は /pages/<ページ path> を使います。',
+  '  resource_path: null',
+  '  name: ${name}',
+  '  description: ${description}',
+].join('\n');
+
 const topLevelKeyOptions: Completion[] = [
   { label: 'wiki', type: 'namespace', detail: 'LuWiki metadata', section: FRONT_MATTER_KEYWORD_SECTION },
   { label: 'mcp', type: 'namespace', detail: 'MCP metadata', section: FRONT_MATTER_KEYWORD_SECTION },
@@ -52,10 +61,10 @@ const topLevelKeyOptions: Completion[] = [
     detail: 'prompt primitive template',
     section: FRONT_MATTER_SNIPPET_SECTION,
   }),
-  snippetCompletion('mcp:\n  primitive: resource\n  name: ${name}\n  description: ${description}', {
+  snippetCompletion(mcpResourceBlockSnippet, {
     label: 'mcp resource block',
     type: 'snippet',
-    detail: 'resource primitive template',
+    detail: 'resource primitive template with resource_path',
     section: FRONT_MATTER_SNIPPET_SECTION,
   }),
 ];
@@ -72,10 +81,29 @@ const nestedKeyOptions = new Map<string, Completion[]>([
   ]],
   ['mcp', [
     { label: 'primitive', type: 'property', detail: 'prompt or resource', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'resource_path', type: 'property', detail: 'absolute resource URI path; null uses /pages fallback', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'resource_acl', type: 'property', detail: 'resource list/read ACL', section: FRONT_MATTER_KEYWORD_SECTION },
     { label: 'name', type: 'property', detail: 'display name', section: FRONT_MATTER_KEYWORD_SECTION },
     { label: 'description', type: 'property', detail: 'description', section: FRONT_MATTER_KEYWORD_SECTION },
     { label: 'system', type: 'property', detail: 'prompt-only system text', section: FRONT_MATTER_KEYWORD_SECTION },
     { label: 'arguments', type: 'property', detail: 'prompt argument list', section: FRONT_MATTER_KEYWORD_SECTION },
+  ]],
+  ['mcp.resource_acl', [
+    { label: 'default', type: 'property', detail: 'default list/read policy', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'list', type: 'property', detail: 'resources/list ACL', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'read', type: 'property', detail: 'resources/read ACL', section: FRONT_MATTER_KEYWORD_SECTION },
+  ]],
+  ['mcp.resource_acl.default', [
+    { label: 'list', type: 'property', detail: 'default resources/list policy', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'read', type: 'property', detail: 'default resources/read policy', section: FRONT_MATTER_KEYWORD_SECTION },
+  ]],
+  ['mcp.resource_acl.list', [
+    { label: 'allow', type: 'property', detail: 'allowed token IDs or names', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'deny', type: 'property', detail: 'denied token IDs or names', section: FRONT_MATTER_KEYWORD_SECTION },
+  ]],
+  ['mcp.resource_acl.read', [
+    { label: 'allow', type: 'property', detail: 'allowed token IDs or names', section: FRONT_MATTER_KEYWORD_SECTION },
+    { label: 'deny', type: 'property', detail: 'denied token IDs or names', section: FRONT_MATTER_KEYWORD_SECTION },
   ]],
   ['mcp.arguments.[]', [
     { label: 'name', type: 'property', detail: 'argument name', section: FRONT_MATTER_KEYWORD_SECTION },
@@ -96,6 +124,14 @@ const valueOptions = new Map<string, Completion[]>([
   ['mcp.arguments.[].required', [
     { label: 'true', type: 'constant', detail: 'required argument', section: FRONT_MATTER_VALUE_SECTION },
     { label: 'false', type: 'constant', detail: 'optional argument', section: FRONT_MATTER_VALUE_SECTION },
+  ]],
+  ['mcp.resource_acl.default.list', [
+    { label: 'true', type: 'constant', detail: 'allow by default', section: FRONT_MATTER_VALUE_SECTION },
+    { label: 'false', type: 'constant', detail: 'deny by default', section: FRONT_MATTER_VALUE_SECTION },
+  ]],
+  ['mcp.resource_acl.default.read', [
+    { label: 'true', type: 'constant', detail: 'allow by default', section: FRONT_MATTER_VALUE_SECTION },
+    { label: 'false', type: 'constant', detail: 'deny by default', section: FRONT_MATTER_VALUE_SECTION },
   ]],
 ]);
 
@@ -311,4 +347,8 @@ export function debugFrontMatterCompletionTarget(
     pos,
     explicit: true,
   } as CompletionContext);
+}
+
+export function debugMcpResourceBlockSnippet(): string {
+  return mcpResourceBlockSnippet;
 }

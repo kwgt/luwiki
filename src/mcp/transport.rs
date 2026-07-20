@@ -33,10 +33,13 @@ const MCP_ENDPOINT_PATH: &str = "/mcp";
 ///
 /// HTTPサーバ統合層へ渡すMCP endpoint情報
 ///
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct McpEndpoint {
     /// endpointの公開パス
     path: &'static str,
+
+    /// resource URI authority
+    resource_authority: String,
 }
 
 impl McpEndpoint {
@@ -49,8 +52,14 @@ impl McpEndpoint {
     /// # 戻り値
     /// 生成したendpoint情報を返す。
     ///
-    pub(crate) fn new(path: &'static str) -> Self {
-        Self { path }
+    pub(crate) fn new(
+        path: &'static str,
+        resource_authority: String,
+    ) -> Self {
+        Self {
+            path,
+            resource_authority,
+        }
     }
 
     ///
@@ -59,8 +68,18 @@ impl McpEndpoint {
     /// # 戻り値
     /// endpointの公開パスを返す。
     ///
-    pub(crate) fn path(self) -> &'static str {
+    pub(crate) fn path(&self) -> &'static str {
         self.path
+    }
+
+    ///
+    /// resource URI authorityを取得
+    ///
+    /// # 戻り値
+    /// resource URI authorityを返す。
+    ///
+    pub(crate) fn resource_authority(&self) -> &str {
+        &self.resource_authority
     }
 }
 
@@ -70,8 +89,8 @@ impl McpEndpoint {
 /// # 戻り値
 /// HTTPサーバ統合層から参照するMCP endpoint情報を返す。
 ///
-pub(crate) fn create_endpoint() -> McpEndpoint {
-    McpEndpoint::new(MCP_ENDPOINT_PATH)
+pub(crate) fn create_endpoint(resource_authority: String) -> McpEndpoint {
+    McpEndpoint::new(MCP_ENDPOINT_PATH, resource_authority)
 }
 
 ///
@@ -91,13 +110,17 @@ pub(crate) fn create_scope(
 ) -> impl actix_web::dev::HttpServiceFactory {
     let app_state = state.get_ref().clone();
     let auth_state = state.get_ref().clone();
+    let resource_authority = endpoint.resource_authority().to_string();
 
     /*
      * RMCP Streamable HTTP transport を構築する
      */
     let http_service = StreamableHttpService::builder()
         .service_factory(Arc::new(move || {
-            Ok(LuwikiMcpServer::new(app_state.clone()))
+            Ok(LuwikiMcpServer::with_resource_authority(
+                app_state.clone(),
+                resource_authority.clone(),
+            ))
         }))
         .on_request_fn(|http_req, extensions| {
             if let Some(auth) = http_req.extensions().get::<AuthContext>() {
@@ -258,6 +281,7 @@ mod tests {
         ManagedSessionManager,
         SessionManagerConfig,
     };
+    use crate::mcp::service::DEFAULT_RESOURCE_AUTHORITY;
 
     const ACCEPT_BOTH: &str = "application/json, text/event-stream";
     const ACCEPT_SSE: &str = "text/event-stream";
@@ -648,7 +672,9 @@ mod tests {
         let server_state = state.clone();
         let server = HttpServer::new(move || {
             App::new().service(create_scope(
-                create_endpoint(),
+                create_endpoint(
+                    DEFAULT_RESOURCE_AUTHORITY.to_string(),
+                ),
                 server_state.clone(),
                 session_manager.clone(),
             ))
@@ -988,7 +1014,7 @@ mod tests {
                         "---\n",
                         "mcp:\n",
                         "  primitive: resource\n",
-                        "  resource_id: docs/transport\n",
+                        "  resource_path: /docs/transport\n",
                         "  name: transport-resource\n",
                         "  description: transport resource description\n",
                         "  mime_type: text/plain\n",
@@ -1053,7 +1079,7 @@ mod tests {
             &"luwiki://local.luwiki/builtin/mcp-prompt-spec"
         ));
         assert!(uris.contains(
-            &"luwiki://local.luwiki/page/docs/transport"
+            &"luwiki://local.luwiki/docs/transport"
         ));
 
         /*
@@ -1064,7 +1090,7 @@ mod tests {
             "id": 3,
             "method": "resources/read",
             "params": {
-                "uri": "luwiki://local.luwiki/page/docs/transport",
+                "uri": "luwiki://local.luwiki/docs/transport",
             },
         })
         .to_string();
@@ -1086,7 +1112,7 @@ mod tests {
         assert_eq!(contents.len(), 1);
         assert_eq!(
             contents[0]["uri"],
-            "luwiki://local.luwiki/page/docs/transport",
+            "luwiki://local.luwiki/docs/transport",
         );
         assert_eq!(contents[0]["mimeType"], "text/plain");
         assert_eq!(
@@ -1117,7 +1143,7 @@ mod tests {
     ///
     /// # 注記
     /// 同一session上でtools、prompts、resourcesを交互に呼び出し、
-    /// resourcesのscope不足、path prefix秘匿、ReadOnly許可を検証する。
+    /// resourcesのscope不足、resource ACL秘匿、ReadOnly許可を検証する。
     ///
     #[actix_web::test]
     async fn resources_transport_honors_authorization_and_session_routing() {
@@ -1156,7 +1182,7 @@ mod tests {
                         "---\n",
                         "mcp:\n",
                         "  primitive: resource\n",
-                        "  resource_id: docs/routing\n",
+                        "  resource_path: /docs/routing\n",
                         "  name: routing-resource\n",
                         "  description: routing resource description\n",
                         "  mime_type: text/plain\n",
@@ -1231,7 +1257,7 @@ mod tests {
             "id": 5,
             "method": "resources/read",
             "params": {
-                "uri": "luwiki://local.luwiki/page/docs/routing",
+                "uri": "luwiki://local.luwiki/docs/routing",
             },
         })
         .to_string();
@@ -1306,7 +1332,7 @@ mod tests {
         }
 
         /*
-         * path prefix範囲外のページ由来resourceはnot_foundへ秘匿する
+         * ページ由来resourceはpath prefix範囲外でも取得できる
          */
         let prefix_context = spawn_test_server_with_auth(
             SessionManagerConfig::default(),
@@ -1328,7 +1354,7 @@ mod tests {
                         "---\n",
                         "mcp:\n",
                         "  primitive: resource\n",
-                        "  resource_id: docs/private\n",
+                        "  resource_path: /docs/private\n",
                         "  name: private-resource\n",
                         "  description: private resource description\n",
                         "---\n",
@@ -1337,6 +1363,27 @@ mod tests {
                     .to_string(),
                 )
                 .expect("create private resource failed");
+            state
+                .db()
+                .create_page(
+                    "/private/denied-resource",
+                    "alice",
+                    concat!(
+                        "---\n",
+                        "mcp:\n",
+                        "  primitive: resource\n",
+                        "  resource_path: /docs/denied\n",
+                        "  name: denied-resource\n",
+                        "  description: denied resource description\n",
+                        "  resource_acl:\n",
+                        "    default:\n",
+                        "      read: deny\n",
+                        "---\n",
+                        "denied body",
+                    )
+                    .to_string(),
+                )
+                .expect("create denied resource failed");
             state
                 .db()
                 .rebuild_resource_candidates()
@@ -1351,7 +1398,7 @@ mod tests {
             "id": 8,
             "method": "resources/read",
             "params": {
-                "uri": "luwiki://local.luwiki/page/docs/private",
+                "uri": "luwiki://local.luwiki/docs/private",
             },
         })
         .to_string();
@@ -1367,18 +1414,48 @@ mod tests {
             .await
             .expect("read prefix denied resource response failed");
         let prefix_json = parse_sse_payload(&prefix_text);
-        assert_eq!(prefix_json["error"]["code"], -32602);
         assert_eq!(
-            prefix_json["error"]["message"],
+            prefix_json["result"]["contents"][0]["text"],
+            "private body",
+        );
+        assert!(prefix_json["error"].is_null());
+
+        /*
+         * resource ACLで拒否されたページ由来resourceはnot_foundへ秘匿する
+         */
+        let denied_body = json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "resources/read",
+            "params": {
+                "uri": "luwiki://local.luwiki/docs/denied",
+            },
+        })
+        .to_string();
+        let denied_response = prefix_context
+            .post_json(&denied_body)
+            .header("mcp-session-id", &prefix_session)
+            .send()
+            .await
+            .expect("send ACL denied resource request failed");
+        assert_eq!(denied_response.status(), 200);
+        let denied_text = denied_response
+            .text()
+            .await
+            .expect("read ACL denied resource response failed");
+        let denied_json = parse_sse_payload(&denied_text);
+        assert_eq!(denied_json["error"]["code"], -32602);
+        assert_eq!(
+            denied_json["error"]["message"],
             "resource not found",
         );
         assert_eq!(
-            prefix_json["error"]["data"]["code"],
+            denied_json["error"]["data"]["code"],
             "not_found",
         );
-        let serialized_prefix = prefix_json.to_string();
-        assert!(!serialized_prefix.contains("/private/resource"));
-        assert!(!serialized_prefix.contains("private-resource"));
+        let serialized_denied = denied_json.to_string();
+        assert!(!serialized_denied.contains("/private/denied-resource"));
+        assert!(!serialized_denied.contains("denied-resource"));
 
         /*
          * ReadOnly属性ユーザでもread scopeならresourcesを利用できる
@@ -1404,7 +1481,7 @@ mod tests {
                         "---\n",
                         "mcp:\n",
                         "  primitive: resource\n",
-                        "  resource_id: docs/read-only\n",
+                        "  resource_path: /docs/read-only\n",
                         "  name: read-only-resource\n",
                         "  description: read only resource description\n",
                         "---\n",
@@ -1435,7 +1512,7 @@ mod tests {
                 "id": 10,
                 "method": "resources/read",
                 "params": {
-                    "uri": "luwiki://local.luwiki/page/docs/read-only",
+                    "uri": "luwiki://local.luwiki/docs/read-only",
                 },
             }),
         ] {

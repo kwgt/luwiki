@@ -231,7 +231,7 @@ fn init_database_creates_resource_candidate_table() {
 #[test]
 fn resource_candidate_entry_round_trips_via_redb_value() {
     let entry = ResourceCandidateEntry::new(
-        "docs/spec".to_string(),
+        "/docs/spec".to_string(),
         "spec".to_string(),
         "resource description".to_string(),
         Some("text/markdown".to_string()),
@@ -241,7 +241,7 @@ fn resource_candidate_entry_round_trips_via_redb_value() {
         <ResourceCandidateEntry as Value>::from_bytes(bytes.as_slice());
 
     assert_eq!(restored, entry);
-    assert_eq!(restored.resource_id(), "docs/spec");
+    assert_eq!(restored.resource_path(), "/docs/spec");
     assert_eq!(restored.name(), "spec");
     assert_eq!(restored.description(), "resource description");
     assert_eq!(restored.mime_type(), Some("text/markdown"));
@@ -271,14 +271,14 @@ fn list_resource_candidates_merges_latest_page_state() {
         .create_page(
             "/resources/original-list",
             "tester",
-            resource_source(Some("docs/list"), "list"),
+            resource_source(Some("/docs/list"), "list"),
         )
         .expect("create resource page failed");
     manager
         .insert_resource_candidate_for_test(
             &page_id,
             &ResourceCandidateEntry::new(
-                "docs/list".to_string(),
+                "/docs/list".to_string(),
                 "list".to_string(),
                 "description".to_string(),
                 None,
@@ -295,7 +295,7 @@ fn list_resource_candidates_merges_latest_page_state() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].page_id(), page_id);
     assert_eq!(entries[0].current_path(), "/resources/renamed-list");
-    assert_eq!(entries[0].resource_id(), "docs/list");
+    assert_eq!(entries[0].resource_path(), "/docs/list");
     assert_eq!(entries[0].name(), "list");
     assert_eq!(entries[0].description(), "description");
     assert_eq!(entries[0].mime_type(), "text/markdown");
@@ -342,7 +342,7 @@ fn sync_resource_candidate_for_page_inserts_and_updates_latest_source() {
         .create_page(
             "/resources/sync",
             "tester",
-            resource_source(Some("docs/sync-first"), "sync-first"),
+            resource_source(Some("/docs/sync-first"), "sync-first"),
         )
         .expect("create resource page failed");
 
@@ -350,14 +350,14 @@ fn sync_resource_candidate_for_page_inserts_and_updates_latest_source() {
         .sync_resource_candidate_for_page(&page_id)
         .expect("sync resource candidate failed")
         .expect("resource candidate missing");
-    assert_eq!(inserted.resource_id(), "docs/sync-first");
+    assert_eq!(inserted.resource_path(), "/docs/sync-first");
     assert_eq!(inserted.name(), "sync-first");
 
     manager
         .put_page(
             &page_id,
             "tester",
-            resource_source(Some("docs/sync-second"), "sync-second"),
+            resource_source(Some("/docs/sync-second"), "sync-second"),
             false,
         )
         .expect("put resource page failed");
@@ -366,7 +366,7 @@ fn sync_resource_candidate_for_page_inserts_and_updates_latest_source() {
         .expect("resync resource candidate failed")
         .expect("updated resource candidate missing");
 
-    assert_eq!(updated.resource_id(), "docs/sync-second");
+    assert_eq!(updated.resource_path(), "/docs/sync-second");
     assert_eq!(updated.name(), "sync-second");
     assert_eq!(updated.description(), "resource description");
     assert_eq!(
@@ -398,7 +398,7 @@ fn sync_resource_candidate_for_page_removes_disabled_resource() {
         .create_page(
             "/resources/removable-candidate",
             "tester",
-            resource_source(Some("docs/removable-candidate"), "removable"),
+            resource_source(Some("/docs/removable-candidate"), "removable"),
         )
         .expect("create resource page failed");
     manager
@@ -478,7 +478,7 @@ fn create_and_put_auto_sync_resource_candidate() {
         .create_page(
             "/resources/auto-sync",
             "tester",
-            resource_source(Some("docs/auto-sync"), "auto-sync"),
+            resource_source(Some("/docs/auto-sync"), "auto-sync"),
         )
         .expect("create resource page failed");
 
@@ -486,14 +486,14 @@ fn create_and_put_auto_sync_resource_candidate() {
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get created resource candidate failed")
         .expect("created resource candidate missing");
-    assert_eq!(created.resource_id(), "docs/auto-sync");
+    assert_eq!(created.resource_path(), "/docs/auto-sync");
     assert_eq!(created.name(), "auto-sync");
 
     manager
         .put_page(
             &page_id,
             "tester",
-            resource_source(Some("docs/auto-updated"), "auto-updated"),
+            resource_source(Some("/docs/auto-updated"), "auto-updated"),
             false,
         )
         .expect("put resource page failed");
@@ -501,7 +501,7 @@ fn create_and_put_auto_sync_resource_candidate() {
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get updated resource candidate failed")
         .expect("updated resource candidate missing");
-    assert_eq!(updated.resource_id(), "docs/auto-updated");
+    assert_eq!(updated.resource_path(), "/docs/auto-updated");
     assert_eq!(updated.name(), "auto-updated");
 
     manager
@@ -550,7 +550,7 @@ fn append_auto_syncs_resource_candidate() {
     let request = AppendPageRequest::new(
         page_id.clone(),
         "tester".to_string(),
-        resource_source(Some("docs/append-auto"), "append-auto"),
+        resource_source(Some("/docs/append-auto"), "append-auto"),
         1,
         false,
     );
@@ -565,7 +565,7 @@ fn append_auto_syncs_resource_candidate() {
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get appended resource candidate failed")
         .expect("appended resource candidate missing");
-    assert_eq!(candidate.resource_id(), "docs/append-auto");
+    assert_eq!(candidate.resource_path(), "/docs/append-auto");
     assert_eq!(candidate.name(), "append-auto");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -593,7 +593,7 @@ fn append_amend_auto_syncs_resource_candidate() {
     let request = AppendPageRequest::new(
         page_id.clone(),
         "tester".to_string(),
-        resource_source(Some("docs/amend-auto"), "amend-auto"),
+        resource_source(Some("/docs/amend-auto"), "amend-auto"),
         1,
         true,
     );
@@ -613,10 +613,10 @@ fn append_amend_auto_syncs_resource_candidate() {
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get amended resource candidate failed")
         .expect("amended resource candidate missing");
-    assert_eq!(candidate.resource_id(), "docs/amend-auto");
+    assert_eq!(candidate.resource_path(), "/docs/amend-auto");
     assert_eq!(candidate.name(), "amend-auto");
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/amend-auto"),
+        resource_uri_owner_for_test(&manager, "/docs/amend-auto"),
         Some(page_id),
     );
 
@@ -640,7 +640,7 @@ fn rollback_auto_syncs_resource_candidate() {
             "/resources/rollback-auto",
             "tester",
             resource_source(
-                Some("docs/rollback-original"),
+                Some("/docs/rollback-original"),
                 "rollback-original",
             ),
         )
@@ -668,7 +668,7 @@ fn rollback_auto_syncs_resource_candidate() {
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get rollback resource candidate failed")
         .expect("rollback resource candidate missing");
-    assert_eq!(candidate.resource_id(), "docs/rollback-original");
+    assert_eq!(candidate.resource_path(), "/docs/rollback-original");
     assert_eq!(candidate.name(), "rollback-original");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -691,7 +691,7 @@ fn resource_candidate_list_follows_rename_delete_and_undelete_state() {
         .create_page(
             "/resources/state-original",
             "tester",
-            resource_source(Some("docs/state"), "state"),
+            resource_source(Some("/docs/state"), "state"),
         )
         .expect("create resource page failed");
 
@@ -704,7 +704,7 @@ fn resource_candidate_list_follows_rename_delete_and_undelete_state() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].page_id(), page_id);
     assert_eq!(entries[0].current_path(), "/resources/state-renamed");
-    assert_eq!(entries[0].resource_id(), "docs/state");
+    assert_eq!(entries[0].resource_path(), "/docs/state");
 
     manager
         .delete_page_by_id(&page_id)
@@ -731,7 +731,7 @@ fn resource_candidate_list_follows_rename_delete_and_undelete_state() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].page_id(), page_id);
     assert_eq!(entries[0].current_path(), "/resources/state-restored");
-    assert_eq!(entries[0].resource_id(), "docs/state");
+    assert_eq!(entries[0].resource_path(), "/docs/state");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -752,7 +752,7 @@ fn hard_delete_removes_resource_uri_and_candidate() {
         .create_page(
             "/resources/hard-delete-candidate",
             "tester",
-            resource_source(Some("docs/hard-delete-candidate"), "hard"),
+            resource_source(Some("/docs/hard-delete-candidate"), "hard"),
         )
         .expect("create resource page failed");
     assert!(
@@ -769,7 +769,7 @@ fn hard_delete_removes_resource_uri_and_candidate() {
     assert_eq!(
         resource_uri_owner_for_test(
             &manager,
-            "docs/hard-delete-candidate",
+            "/docs/hard-delete-candidate",
         ),
         None,
     );
@@ -799,14 +799,14 @@ fn recursive_hard_delete_removes_resource_uris_and_candidates() {
         .create_page(
             "/resources/hard-tree",
             "tester",
-            resource_source(Some("docs/hard-tree"), "tree"),
+            resource_source(Some("/docs/hard-tree"), "tree"),
         )
         .expect("create parent resource page failed");
     let child_id = manager
         .create_page(
             "/resources/hard-tree/child",
             "tester",
-            resource_source(Some("docs/hard-tree-child"), "child"),
+            resource_source(Some("/docs/hard-tree-child"), "child"),
         )
         .expect("create child resource page failed");
 
@@ -814,9 +814,9 @@ fn recursive_hard_delete_removes_resource_uris_and_candidates() {
         .delete_pages_recursive_by_id(&parent_id, true)
         .expect("recursive hard delete failed");
 
-    assert_eq!(resource_uri_owner_for_test(&manager, "docs/hard-tree"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/docs/hard-tree"), None);
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/hard-tree-child"),
+        resource_uri_owner_for_test(&manager, "/docs/hard-tree-child"),
         None,
     );
     assert!(
@@ -856,21 +856,21 @@ fn resource_candidate_sync_failure_preserves_saved_page_state() {
         .create_page(
             "/resources/sync-failure",
             "tester",
-            resource_source(Some("docs/sync-before"), "before"),
+            resource_source(Some("/docs/sync-before"), "before"),
         )
         .expect("create resource page failed");
     let before_candidate = manager
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get resource candidate before failure failed")
         .expect("resource candidate before failure missing");
-    assert_eq!(before_candidate.resource_id(), "docs/sync-before");
+    assert_eq!(before_candidate.resource_path(), "/docs/sync-before");
 
     manager.set_resource_candidate_sync_failure_for_test(true);
     let error = manager
         .put_page(
             &page_id,
             "tester",
-            resource_source(Some("docs/sync-after"), "after"),
+            resource_source(Some("/docs/sync-after"), "after"),
             false,
         )
         .expect_err("resource candidate sync must fail");
@@ -888,13 +888,13 @@ fn resource_candidate_sync_failure_preserves_saved_page_state() {
         .get_page_source(&page_id, 2)
         .expect("get committed resource page source failed")
         .expect("committed resource page source missing");
-    assert!(page_source.source().contains("resource_id: docs/sync-after"));
+    assert!(page_source.source().contains("resource_path: /docs/sync-after"));
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/sync-before"),
+        resource_uri_owner_for_test(&manager, "/docs/sync-before"),
         None,
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/sync-after"),
+        resource_uri_owner_for_test(&manager, "/docs/sync-after"),
         Some(page_id.clone()),
     );
 
@@ -905,7 +905,7 @@ fn resource_candidate_sync_failure_preserves_saved_page_state() {
         .get_resource_candidate_by_page_id(&page_id)
         .expect("get stale resource candidate failed")
         .expect("stale resource candidate missing");
-    assert_eq!(stale_candidate.resource_id(), "docs/sync-before");
+    assert_eq!(stale_candidate.resource_path(), "/docs/sync-before");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -935,14 +935,14 @@ fn rebuild_resource_candidates_recreates_entries_from_latest_sources() {
         .create_page(
             "/resources/visible",
             "tester",
-            resource_source(Some("docs/visible"), "visible"),
+            resource_source(Some("/docs/visible"), "visible"),
         )
         .expect("create visible resource failed");
     let deleted_id = manager
         .create_page(
             "/resources/deleted",
             "tester",
-            resource_source(Some("docs/deleted"), "deleted"),
+            resource_source(Some("/docs/deleted"), "deleted"),
         )
         .expect("create deleted resource failed");
     manager
@@ -966,7 +966,7 @@ fn rebuild_resource_candidates_recreates_entries_from_latest_sources() {
         .insert_resource_candidate_for_test(
             &normal_id,
             &ResourceCandidateEntry::new(
-                "docs/stale".to_string(),
+                "/docs/stale".to_string(),
                 "stale".to_string(),
                 "stale description".to_string(),
                 None,
@@ -974,13 +974,13 @@ fn rebuild_resource_candidates_recreates_entries_from_latest_sources() {
         )
         .expect("insert stale candidate failed");
     manager
-        .set_resource_uri_owner_for_test("docs/visible", None)
+        .set_resource_uri_owner_for_test("/docs/visible", None)
         .expect("remove visible resource URI failed");
     manager
-        .set_resource_uri_owner_for_test("docs/deleted", None)
+        .set_resource_uri_owner_for_test("/docs/deleted", None)
         .expect("remove deleted resource URI failed");
     manager
-        .set_resource_uri_owner_for_test("docs/stale", Some(&normal_id))
+        .set_resource_uri_owner_for_test("/docs/stale", Some(&normal_id))
         .expect("insert stale resource URI failed");
     assert!(!manager
         .is_resource_uri_index_ready()
@@ -998,13 +998,13 @@ fn rebuild_resource_candidates_recreates_entries_from_latest_sources() {
         .get_resource_candidate_by_page_id(&visible_id)
         .expect("get visible candidate failed")
         .expect("visible candidate missing");
-    assert_eq!(visible_candidate.resource_id(), "docs/visible");
+    assert_eq!(visible_candidate.resource_path(), "/docs/visible");
     assert_eq!(visible_candidate.name(), "visible");
     let deleted_candidate = manager
         .get_resource_candidate_by_page_id(&deleted_id)
         .expect("get deleted candidate failed")
         .expect("deleted candidate missing");
-    assert_eq!(deleted_candidate.resource_id(), "docs/deleted");
+    assert_eq!(deleted_candidate.resource_path(), "/docs/deleted");
 
     for (page_id, label) in [
         (&draft_id, "draft"),
@@ -1020,14 +1020,14 @@ fn rebuild_resource_candidates_recreates_entries_from_latest_sources() {
         );
     }
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/visible"),
+        resource_uri_owner_for_test(&manager, "/docs/visible"),
         Some(visible_id.clone()),
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/deleted"),
+        resource_uri_owner_for_test(&manager, "/docs/deleted"),
         Some(deleted_id),
     );
-    assert_eq!(resource_uri_owner_for_test(&manager, "docs/stale"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/docs/stale"), None);
     assert!(manager
         .is_resource_uri_index_ready()
         .expect("get readiness after rebuild failed"));
@@ -1041,21 +1041,21 @@ fn rebuild_resource_candidates_recreates_entries_from_latest_sources() {
         .expect("list resource candidates failed");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].page_id(), visible_id);
-    assert_eq!(entries[0].resource_id(), "docs/visible");
+    assert_eq!(entries[0].resource_path(), "/docs/visible");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
 ///
-/// resource_id重複時にresource派生データと
+/// resource_path重複時にresource派生データと
 /// ページ正本を維持することを確認する。
 ///
 /// # 注記
-/// latest sourceへ重複resource_idを直接投入し、
+/// latest sourceへ重複resource_pathを直接投入し、
 /// 再構成失敗前後の状態を比較する。
 ///
 #[test]
-fn rebuild_resource_candidates_preserves_data_on_duplicate_resource_id() {
+fn rebuild_resource_candidates_preserves_data_on_duplicate_resource_path() {
     let (base_dir, db_path) = prepare_test_dirs();
     let asset_path = base_dir.join("assets");
     let manager = DatabaseManager::open(&db_path, &asset_path)
@@ -1067,20 +1067,20 @@ fn rebuild_resource_candidates_preserves_data_on_duplicate_resource_id() {
         .create_page(
             "/resources/first",
             "tester",
-            resource_source(Some("docs/first"), "first"),
+            resource_source(Some("/docs/first"), "first"),
         )
         .expect("create first resource failed");
     let second_id = manager
         .create_page(
             "/resources/second",
             "tester",
-            resource_source(Some("docs/second"), "second"),
+            resource_source(Some("/docs/second"), "second"),
         )
         .expect("create second resource failed");
     manager
         .rebuild_resource_candidates()
         .expect("initial rebuild resource candidates failed");
-    let duplicate_source = resource_source(Some("docs/first"), "duplicate");
+    let duplicate_source = resource_source(Some("/docs/first"), "duplicate");
     manager
         .replace_latest_page_source_for_resource_rebuild_test(
             &second_id,
@@ -1099,11 +1099,11 @@ fn rebuild_resource_candidates_preserves_data_on_duplicate_resource_id() {
      */
     let error = manager
         .rebuild_resource_candidates()
-        .expect_err("rebuild must reject duplicate resource_id");
+        .expect_err("rebuild must reject duplicate resource_path");
     assert!(
         error
             .to_string()
-            .contains("resource URI already exists: resource_id=docs/first")
+            .contains("resource URI already exists: resource_path=/docs/first")
     );
 
     /*
@@ -1122,11 +1122,11 @@ fn rebuild_resource_candidates_preserves_data_on_duplicate_resource_id() {
         second_candidate,
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/first"),
+        resource_uri_owner_for_test(&manager, "/docs/first"),
         Some(first_id),
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/second"),
+        resource_uri_owner_for_test(&manager, "/docs/second"),
         Some(second_id),
     );
     assert!(manager
@@ -1188,11 +1188,11 @@ fn rebuild_all_derived_data_rebuilds_resource_candidates() {
             prompt_source("all-api-prompt", "all api prompt"),
         )
         .expect("create prompt page failed");
-    let resource_id = manager
+    let resource_page_id = manager
         .create_page(
             "/resources/all-api",
             "tester",
-            resource_source(Some("docs/all-api-resource"), "all-api-resource"),
+            resource_source(Some("/docs/all-api-resource"), "all-api-resource"),
         )
         .expect("create resource page failed");
 
@@ -1210,10 +1210,10 @@ fn rebuild_all_derived_data_rebuilds_resource_candidates() {
         )
         .expect("remove prompt name owner failed");
     manager
-        .remove_resource_candidate_by_page_id(&resource_id)
+        .remove_resource_candidate_by_page_id(&resource_page_id)
         .expect("remove resource candidate failed");
     manager
-        .set_resource_uri_owner_for_test("docs/all-api-resource", None)
+        .set_resource_uri_owner_for_test("/docs/all-api-resource", None)
         .expect("remove resource URI owner failed");
 
     let counts = manager
@@ -1240,10 +1240,10 @@ fn rebuild_all_derived_data_rebuilds_resource_candidates() {
         "all-api-prompt",
     );
     let resource = manager
-        .get_resource_candidate_by_page_id(&resource_id)
+        .get_resource_candidate_by_page_id(&resource_page_id)
         .expect("get resource candidate failed")
         .expect("resource candidate missing");
-    assert_eq!(resource.resource_id(), "docs/all-api-resource");
+    assert_eq!(resource.resource_path(), "/docs/all-api-resource");
     assert_eq!(resource.name(), "all-api-resource");
     assert_eq!(
         manager
@@ -1255,8 +1255,8 @@ fn rebuild_all_derived_data_rebuilds_resource_candidates() {
         Some(prompt_id),
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/all-api-resource"),
-        Some(resource_id),
+        resource_uri_owner_for_test(&manager, "/docs/all-api-resource"),
+        Some(resource_page_id),
     );
     assert!(manager
         .is_mcp_primitive_name_index_ready()
@@ -1278,7 +1278,7 @@ fn merge_resource_list_entries_combines_builtin_and_page_resources() {
     let page_candidate = super::ResourceCandidateListEntry::new(
         page_id.clone(),
         "/resources/spec".to_string(),
-        "docs/spec".to_string(),
+        "/docs/spec".to_string(),
         "Spec".to_string(),
         "Page resource".to_string(),
         "application/json".to_string(),
@@ -1298,7 +1298,7 @@ fn merge_resource_list_entries_combines_builtin_and_page_resources() {
         vec![
             "luwiki://local.test/builtin/front-matter-spec",
             "luwiki://local.test/builtin/mcp-prompt-spec",
-            "luwiki://local.test/page/docs/spec",
+            "luwiki://local.test/docs/spec",
         ],
     );
     assert_eq!(entries[0].source(), ResourceListSource::Builtin);
@@ -1466,18 +1466,18 @@ fn init_database_creates_mcp_primitive_name_table() {
 
 ///
 /// DB初期化でresource URI逆引き索引テーブルを作成し、
-/// resource_idをcase-sensitiveに扱えることを確認する。
+/// resource_pathをcase-sensitiveに扱えることを確認する。
 ///
 #[test]
 fn init_database_creates_resource_uri_index_table() {
     /*
-     * DBと大文字小文字が異なるresource_idを準備する
+     * DBと大文字小文字が異なるresource_pathを準備する
      */
     let (base_dir, db_path) = prepare_test_dirs();
     let mut db = Database::create(&db_path).expect("create db failed");
     init_database(&mut db).expect("init db failed");
-    let upper_resource_id = "Resource".to_string();
-    let lower_resource_id = "resource".to_string();
+    let upper_resource_path = "Resource".to_string();
+    let lower_resource_path = "resource".to_string();
     let upper_id = PageId::new();
     let lower_id = PageId::new();
 
@@ -1490,16 +1490,16 @@ fn init_database_creates_resource_uri_index_table() {
             .open_table(RESOURCE_URI_INDEX_TABLE)
             .expect("open resource URI index table failed");
         table
-            .insert(upper_resource_id.clone(), upper_id.clone())
-            .expect("insert upper resource_id failed");
+            .insert(upper_resource_path.clone(), upper_id.clone())
+            .expect("insert upper resource_path failed");
         table
-            .insert(lower_resource_id.clone(), lower_id.clone())
-            .expect("insert lower resource_id failed");
+            .insert(lower_resource_path.clone(), lower_id.clone())
+            .expect("insert lower resource_path failed");
     }
     write_txn.commit().expect("commit failed");
 
     /*
-     * 各resource_idから対応するページIDを逆引きする
+     * 各resource_pathから対応するページIDを逆引きする
      */
     let read_txn = db.begin_read().expect("begin read failed");
     let table = read_txn
@@ -1507,17 +1507,17 @@ fn init_database_creates_resource_uri_index_table() {
         .expect("open resource URI index table failed");
     assert_eq!(
         table
-            .get(upper_resource_id)
-            .expect("get upper resource_id failed")
-            .expect("upper resource_id missing")
+            .get(upper_resource_path)
+            .expect("get upper resource_path failed")
+            .expect("upper resource_path missing")
             .value(),
         upper_id,
     );
     assert_eq!(
         table
-            .get(lower_resource_id)
-            .expect("get lower resource_id failed")
-            .expect("lower resource_id missing")
+            .get(lower_resource_path)
+            .expect("get lower resource_path failed")
+            .expect("lower resource_path missing")
             .value(),
         lower_id,
     );
@@ -1557,7 +1557,7 @@ fn init_database_creates_resource_uri_index_state_without_marker() {
 }
 
 ///
-/// resourceページ作成時に明示resource_idを
+/// resourceページ作成時に明示resource_pathを
 /// URI逆引き索引へ登録することを確認する。
 ///
 #[test]
@@ -1574,12 +1574,12 @@ fn create_resource_page_registers_explicit_resource_uri() {
         .create_page(
             "/resources/spec",
             "tester",
-            resource_source(Some("docs/spec"), "spec"),
+            resource_source(Some("/docs/spec"), "spec"),
         )
         .expect("create resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/spec"),
+        resource_uri_owner_for_test(&manager, "/docs/spec"),
         Some(page_id),
     );
 
@@ -1587,7 +1587,7 @@ fn create_resource_page_registers_explicit_resource_uri() {
 }
 
 ///
-/// resource_id省略時にcurrent path由来resource_idを
+/// resource_path省略時にcurrent path由来resource_pathを
 /// URI逆引き索引へ登録することを確認する。
 ///
 #[test]
@@ -1609,7 +1609,7 @@ fn create_resource_page_registers_path_derived_resource_uri() {
         .expect("create resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/path-derived"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/path-derived"),
         Some(page_id),
     );
 
@@ -1633,7 +1633,7 @@ fn put_page_removes_resource_uri_when_resource_is_disabled() {
         .create_page(
             "/resources/removable",
             "tester",
-            resource_source(Some("docs/removable"), "removable"),
+            resource_source(Some("/docs/removable"), "removable"),
         )
         .expect("create resource page failed");
 
@@ -1646,13 +1646,13 @@ fn put_page_removes_resource_uri_when_resource_is_disabled() {
         )
         .expect("put normal page failed");
 
-    assert_eq!(resource_uri_owner_for_test(&manager, "docs/removable"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/docs/removable"), None);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
 ///
-/// 別ページが使用中のresource_idを指定した作成を
+/// 別ページが使用中のresource_pathを指定した作成を
 /// 拒否することを確認する。
 ///
 #[test]
@@ -1668,7 +1668,7 @@ fn create_resource_page_rejects_duplicate_resource_uri() {
         .create_page(
             "/resources/first",
             "tester",
-            resource_source(Some("docs/duplicate"), "first"),
+            resource_source(Some("/docs/duplicate"), "first"),
         )
         .expect("create first resource page failed");
 
@@ -1676,25 +1676,25 @@ fn create_resource_page_rejects_duplicate_resource_uri() {
         .create_page(
             "/resources/second",
             "tester",
-            resource_source(Some("docs/duplicate"), "second"),
+            resource_source(Some("/docs/duplicate"), "second"),
         )
-        .expect_err("duplicate resource_id must be rejected");
+        .expect_err("duplicate resource_path must be rejected");
 
     assert!(
         err.to_string()
-            .contains("resource URI already exists: resource_id=docs/duplicate")
+            .contains("resource URI already exists: resource_path=/docs/duplicate")
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/duplicate"),
+        resource_uri_owner_for_test(&manager, "/docs/duplicate"),
         Some(first_id),
     );
-    assert_eq!(resource_uri_owner_for_test(&manager, "docs/second"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/docs/second"), None);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
 ///
-/// 同一ページが同じresource_idを維持する更新を
+/// 同一ページが同じresource_pathを維持する更新を
 /// 許可することを確認する。
 ///
 #[test]
@@ -1710,7 +1710,7 @@ fn put_page_allows_same_page_to_keep_resource_uri() {
         .create_page(
             "/resources/keep",
             "tester",
-            resource_source(Some("docs/keep"), "first"),
+            resource_source(Some("/docs/keep"), "first"),
         )
         .expect("create resource page failed");
 
@@ -1718,13 +1718,13 @@ fn put_page_allows_same_page_to_keep_resource_uri() {
         .put_page(
             &page_id,
             "tester",
-            resource_source(Some("docs/keep"), "second"),
+            resource_source(Some("/docs/keep"), "second"),
             false,
         )
-        .expect("put same resource_id failed");
+        .expect("put same resource_path failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/keep"),
+        resource_uri_owner_for_test(&manager, "/docs/keep"),
         Some(page_id),
     );
 
@@ -1732,7 +1732,7 @@ fn put_page_allows_same_page_to_keep_resource_uri() {
 }
 
 ///
-/// path由来resource_idがcase-sensitiveに扱われることを
+/// path由来resource_pathがcase-sensitiveに扱われることを
 /// 確認する。
 ///
 #[test]
@@ -1761,11 +1761,11 @@ fn path_derived_resource_uri_is_case_sensitive() {
         .expect("create lower resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "Resources/Spec"),
+        resource_uri_owner_for_test(&manager, "/pages/Resources/Spec"),
         Some(upper_id),
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/spec"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/spec"),
         Some(lower_id),
     );
 
@@ -1773,8 +1773,7 @@ fn path_derived_resource_uri_is_case_sensitive() {
 }
 
 ///
-/// path由来resource_idにも明示resource_idと同じ
-/// 値制約を適用することを確認する。
+/// root path由来resource_pathの不正を拒否することを確認する。
 ///
 #[test]
 fn create_resource_page_rejects_invalid_path_derived_resource_uri() {
@@ -1788,23 +1787,23 @@ fn create_resource_page_rejects_invalid_path_derived_resource_uri() {
 
     let err = manager
         .create_page(
-            "/builtin/spec",
+            "/",
             "tester",
-            resource_source(None, "builtin"),
+            resource_source(None, "root"),
         )
-        .expect_err("reserved path-derived resource_id must be rejected");
+        .expect_err("invalid path-derived resource_path must be rejected");
 
     assert!(
         err.to_string()
-            .contains("mcp.resource_id must not start with reserved prefix builtin/")
+            .contains("mcp.resource_path must not end with /")
     );
-    assert_eq!(resource_uri_owner_for_test(&manager, "builtin/spec"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/pages/"), None);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
 
 ///
-/// path由来resource_idを持つページのrenameで
+/// path由来resource_pathを持つページのrenameで
 /// URI逆引き索引が旧pathから新pathへ更新されることを確認する。
 ///
 #[test]
@@ -1829,11 +1828,11 @@ fn rename_path_derived_resource_page_updates_resource_uri() {
         .expect("rename resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/original"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/original"),
         None,
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/renamed"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/renamed"),
         Some(page_id),
     );
 
@@ -1841,7 +1840,7 @@ fn rename_path_derived_resource_page_updates_resource_uri() {
 }
 
 ///
-/// 明示resource_idを持つページのrenameでは
+/// 明示resource_pathを持つページのrenameでは
 /// URI逆引き索引のkeyが維持されることを確認する。
 ///
 #[test]
@@ -1857,7 +1856,7 @@ fn rename_explicit_resource_page_keeps_resource_uri() {
         .create_page(
             "/resources/original-explicit",
             "tester",
-            resource_source(Some("docs/stable"), "explicit resource"),
+            resource_source(Some("/docs/stable"), "explicit resource"),
         )
         .expect("create resource page failed");
 
@@ -1869,7 +1868,7 @@ fn rename_explicit_resource_page_keeps_resource_uri() {
         .expect("rename resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/stable"),
+        resource_uri_owner_for_test(&manager, "/docs/stable"),
         Some(page_id),
     );
 
@@ -1877,7 +1876,7 @@ fn rename_explicit_resource_page_keeps_resource_uri() {
 }
 
 ///
-/// path由来resource_idのrename先が別ページの予約と
+/// path由来resource_pathのrename先が別ページの予約と
 /// 衝突する場合にrenameを拒否することを確認する。
 ///
 #[test]
@@ -1898,11 +1897,14 @@ fn rename_path_derived_resource_page_rejects_resource_uri_conflict() {
         .expect("create source resource page failed");
     let owner_id = manager
         .create_page(
-            "/resources/owner",
+            "/resources/conflict",
             "tester",
-            resource_source(Some("resources/conflict"), "owner"),
+            resource_source(None, "owner"),
         )
         .expect("create owner resource page failed");
+    manager
+        .delete_page_by_id(&owner_id)
+        .expect("soft delete owner failed");
 
     let error = manager
         .rename_page("/resources/source", "/resources/conflict")
@@ -1911,14 +1913,14 @@ fn rename_path_derived_resource_page_rejects_resource_uri_conflict() {
     assert!(
         error
             .to_string()
-            .contains("resource URI already exists: resource_id=resources/conflict")
+            .contains("resource URI already exists: resource_path=/pages/resources/conflict")
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/source"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/source"),
         Some(page_id),
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/conflict"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/conflict"),
         Some(owner_id),
     );
 
@@ -1942,7 +1944,7 @@ fn hard_delete_releases_resource_uri_after_soft_delete_keeps_it() {
         .create_page(
             "/resources/reserved",
             "tester",
-            resource_source(Some("docs/reserved"), "reserved"),
+            resource_source(Some("/docs/reserved"), "reserved"),
         )
         .expect("create resource page failed");
 
@@ -1950,7 +1952,7 @@ fn hard_delete_releases_resource_uri_after_soft_delete_keeps_it() {
         .delete_page_by_id(&page_id)
         .expect("soft delete failed");
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/reserved"),
+        resource_uri_owner_for_test(&manager, "/docs/reserved"),
         Some(page_id.clone()),
     );
     assert!(
@@ -1958,7 +1960,7 @@ fn hard_delete_releases_resource_uri_after_soft_delete_keeps_it() {
             .create_page(
                 "/resources/conflict-after-soft-delete",
                 "tester",
-                resource_source(Some("docs/reserved"), "conflict"),
+                resource_source(Some("/docs/reserved"), "conflict"),
             )
             .is_err()
     );
@@ -1966,14 +1968,14 @@ fn hard_delete_releases_resource_uri_after_soft_delete_keeps_it() {
     manager
         .delete_page_by_id_hard(&page_id)
         .expect("hard delete failed");
-    assert_eq!(resource_uri_owner_for_test(&manager, "docs/reserved"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/docs/reserved"), None);
     manager
         .create_page(
             "/resources/reused-after-hard-delete",
             "tester",
-            resource_source(Some("docs/reserved"), "reused"),
+            resource_source(Some("/docs/reserved"), "reused"),
         )
-        .expect("reuse released resource_id failed");
+        .expect("reuse released resource_path failed");
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -1995,14 +1997,14 @@ fn recursive_hard_delete_releases_child_resource_uris() {
         .create_page(
             "/resources/tree",
             "tester",
-            resource_source(Some("docs/tree"), "tree"),
+            resource_source(Some("/docs/tree"), "tree"),
         )
         .expect("create parent resource page failed");
     manager
         .create_page(
             "/resources/tree/child",
             "tester",
-            resource_source(Some("docs/tree-child"), "child"),
+            resource_source(Some("/docs/tree-child"), "child"),
         )
         .expect("create child resource page failed");
 
@@ -2010,9 +2012,9 @@ fn recursive_hard_delete_releases_child_resource_uris() {
         .delete_pages_recursive_by_id(&parent_id, true)
         .expect("recursive hard delete failed");
 
-    assert_eq!(resource_uri_owner_for_test(&manager, "docs/tree"), None);
+    assert_eq!(resource_uri_owner_for_test(&manager, "/docs/tree"), None);
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/tree-child"),
+        resource_uri_owner_for_test(&manager, "/docs/tree-child"),
         None,
     );
 
@@ -2021,7 +2023,7 @@ fn recursive_hard_delete_releases_child_resource_uris() {
 
 ///
 /// undelete時に保持していたURI予約を確認し、
-/// 復帰先path由来resource_idへ同期することを確認する。
+/// 復帰先path由来resource_pathへ同期することを確認する。
 ///
 #[test]
 fn undelete_path_derived_resource_page_updates_resource_uri() {
@@ -2048,11 +2050,11 @@ fn undelete_path_derived_resource_page_updates_resource_uri() {
         .expect("undelete resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/deleted-path"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/deleted-path"),
         None,
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "resources/restored-path"),
+        resource_uri_owner_for_test(&manager, "/pages/resources/restored-path"),
         Some(page_id),
     );
 
@@ -2076,14 +2078,14 @@ fn undelete_resource_page_rejects_resource_uri_owner_mismatch() {
         .create_page(
             "/resources/deleted-explicit",
             "tester",
-            resource_source(Some("docs/deleted-explicit"), "deleted"),
+            resource_source(Some("/docs/deleted-explicit"), "deleted"),
         )
         .expect("create deleted resource page failed");
     let other_id = manager
         .create_page(
             "/resources/other-explicit",
             "tester",
-            resource_source(Some("docs/other-explicit"), "other"),
+            resource_source(Some("/docs/other-explicit"), "other"),
         )
         .expect("create other resource page failed");
 
@@ -2092,7 +2094,7 @@ fn undelete_resource_page_rejects_resource_uri_owner_mismatch() {
         .expect("soft delete failed");
     manager
         .set_resource_uri_owner_for_test(
-            "docs/deleted-explicit",
+            "/docs/deleted-explicit",
             Some(&other_id),
         )
         .expect("corrupt resource URI owner failed");
@@ -2103,7 +2105,7 @@ fn undelete_resource_page_rejects_resource_uri_owner_mismatch() {
     assert!(
         error
             .to_string()
-            .contains("resource URI already exists: resource_id=docs/deleted-explicit")
+            .contains("resource URI already exists: resource_path=/docs/deleted-explicit")
     );
     assert!(manager
         .get_page_id_by_path("/resources/restored-explicit")
@@ -2114,7 +2116,7 @@ fn undelete_resource_page_rejects_resource_uri_owner_mismatch() {
 }
 
 ///
-/// rollback先のresource_idが別ページと衝突する場合に
+/// rollback先のresource_pathが別ページと衝突する場合に
 /// rollbackを拒否し、latest revisionを維持することを確認する。
 ///
 #[test]
@@ -2130,14 +2132,14 @@ fn rollback_rejects_resource_uri_conflict_atomically() {
         .create_page(
             "/resources/rollback-target",
             "tester",
-            resource_source(Some("docs/rollback-old"), "old"),
+            resource_source(Some("/docs/rollback-old"), "old"),
         )
         .expect("create rollback target failed");
     manager
         .put_page(
             &page_id,
             "tester",
-            resource_source(Some("docs/rollback-new"), "new"),
+            resource_source(Some("/docs/rollback-new"), "new"),
             false,
         )
         .expect("put rollback target failed");
@@ -2145,7 +2147,7 @@ fn rollback_rejects_resource_uri_conflict_atomically() {
         .create_page(
             "/resources/rollback-owner",
             "tester",
-            resource_source(Some("docs/rollback-old"), "owner"),
+            resource_source(Some("/docs/rollback-old"), "owner"),
         )
         .expect("create rollback owner failed");
 
@@ -2156,7 +2158,7 @@ fn rollback_rejects_resource_uri_conflict_atomically() {
     assert!(
         error
             .to_string()
-            .contains("resource URI already exists: resource_id=docs/rollback-old")
+            .contains("resource URI already exists: resource_path=/docs/rollback-old")
     );
     let index = manager
         .get_page_index_by_id(&page_id)
@@ -2164,7 +2166,7 @@ fn rollback_rejects_resource_uri_conflict_atomically() {
         .expect("target index missing");
     assert_eq!(index.latest(), 2);
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/rollback-new"),
+        resource_uri_owner_for_test(&manager, "/docs/rollback-new"),
         Some(page_id),
     );
 
@@ -2172,7 +2174,7 @@ fn rollback_rejects_resource_uri_conflict_atomically() {
 }
 
 ///
-/// amendで別ページのresource_idへ変更しようとした場合に
+/// amendで別ページのresource_pathへ変更しようとした場合に
 /// 保存を拒否し、revisionを増やさないことを確認する。
 ///
 #[test]
@@ -2188,20 +2190,20 @@ fn append_amend_rejects_resource_uri_conflict_atomically() {
         .create_page(
             "/resources/amend-target",
             "tester",
-            resource_source(Some("docs/amend-target"), "target"),
+            resource_source(Some("/docs/amend-target"), "target"),
         )
         .expect("create amend target failed");
     manager
         .create_page(
             "/resources/amend-owner",
             "tester",
-            resource_source(Some("docs/amend-owner"), "owner"),
+            resource_source(Some("/docs/amend-owner"), "owner"),
         )
         .expect("create amend owner failed");
     let request = AppendPageRequest::new(
         page_id.clone(),
         "tester".to_string(),
-        resource_source(Some("docs/amend-owner"), "conflict"),
+        resource_source(Some("/docs/amend-owner"), "conflict"),
         1,
         true,
     );
@@ -2213,7 +2215,7 @@ fn append_amend_rejects_resource_uri_conflict_atomically() {
     assert!(
         error
             .to_string()
-            .contains("resource URI already exists: resource_id=docs/amend-owner")
+            .contains("resource URI already exists: resource_path=/docs/amend-owner")
     );
     let index = manager
         .get_page_index_by_id(&page_id)
@@ -2226,7 +2228,7 @@ fn append_amend_rejects_resource_uri_conflict_atomically() {
             .expect("page source lookup failed")
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/amend-target"),
+        resource_uri_owner_for_test(&manager, "/docs/amend-target"),
         Some(page_id),
     );
 
@@ -2254,17 +2256,17 @@ fn prompt_name_and_resource_uri_indexes_are_independent() {
             prompt_source("shared", "prompt"),
         )
         .expect("create prompt page failed");
-    let resource_id = manager
+    let resource_page_id = manager
         .create_page(
             "/resources/shared",
             "tester",
-            resource_source(Some("shared"), "shared"),
+            resource_source(Some("/shared"), "shared"),
         )
         .expect("create resource page failed");
 
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "shared"),
-        Some(resource_id),
+        resource_uri_owner_for_test(&manager, "/shared"),
+        Some(resource_page_id),
     );
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -3601,12 +3603,12 @@ fn import_rejects_duplicate_primitive_names_atomically() {
 /// 全体をrollbackすることを確認する。
 ///
 /// # 注記
-/// 同じresource_idを持つ2ページのbundleを低水準投入する。
+/// 同じresource_pathを持つ2ページのbundleを低水準投入する。
 ///
 #[test]
 fn import_rejects_duplicate_resource_uris_atomically() {
     /*
-     * 同じresource_idを持つimport bundleを準備する
+     * 同じresource_pathを持つimport bundleを準備する
      */
     let (base_dir, db_path) = prepare_test_dirs();
     let asset_path = base_dir.join("assets");
@@ -3646,7 +3648,7 @@ fn import_rejects_duplicate_resource_uris_atomically() {
             timestamp: timestamp.clone(),
             user: user_id.clone(),
             rename: None,
-            source: resource_source(Some("docs/import-duplicate"), path),
+            source: resource_source(Some("/docs/import-duplicate"), path),
         });
     }
     bundle.sync_manifest_counts();
@@ -3660,7 +3662,7 @@ fn import_rejects_duplicate_resource_uris_atomically() {
     assert!(
         error
             .to_string()
-            .contains("resource URI already exists: resource_id=docs/import-duplicate")
+            .contains("resource URI already exists: resource_path=/docs/import-duplicate")
     );
     assert!(
         manager
@@ -3675,7 +3677,7 @@ fn import_rejects_duplicate_resource_uris_atomically() {
             .is_none()
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/import-duplicate"),
+        resource_uri_owner_for_test(&manager, "/docs/import-duplicate"),
         None,
     );
 
@@ -3837,15 +3839,15 @@ fn prompt_source(name: &str, description: &str) -> String {
 /// テスト用resourceページソースを生成する。
 ///
 /// # 引数
-/// * `resource_id` - 明示resource_id。省略時はfront matterへ出力しない。
+/// * `resource_path` - 明示resource_path。省略時はfront matterへ出力しない。
 /// * `name` - resource名
 ///
 /// # 戻り値
 /// front matterと本文を含むページソースを返す。
 ///
-fn resource_source(resource_id: Option<&str>, name: &str) -> String {
-    let resource_id_line = resource_id
-        .map(|id| format!("  resource_id: {}\n", id))
+fn resource_source(resource_path: Option<&str>, name: &str) -> String {
+    let resource_path_line = resource_path
+        .map(|id| format!("  resource_path: {}\n", id))
         .unwrap_or_default();
     format!(
         concat!(
@@ -3858,7 +3860,7 @@ fn resource_source(resource_id: Option<&str>, name: &str) -> String {
             "---\n",
             "本文",
         ),
-        resource_id_line,
+        resource_path_line,
         name,
     )
 }
@@ -3868,17 +3870,17 @@ fn resource_source(resource_id: Option<&str>, name: &str) -> String {
 ///
 /// # 引数
 /// * `manager` - DBマネージャ
-/// * `resource_id` - 取得対象resource_id
+/// * `resource_path` - 取得対象resource_path
 ///
 /// # 戻り値
 /// 所有ページIDが存在する場合は`Some(PageId)`を返す。
 ///
 fn resource_uri_owner_for_test(
     manager: &DatabaseManager,
-    resource_id: &str,
+    resource_path: &str,
 ) -> Option<PageId> {
     manager
-        .get_resource_uri_owner_for_test(resource_id)
+        .get_resource_uri_owner_for_test(resource_path)
         .expect("get resource URI owner failed")
 }
 
@@ -4669,7 +4671,7 @@ fn rebuild_prompt_candidates_applies_page_state_and_kind_policy() {
             .to_string(),
         )
         .expect("create template page failed");
-    let resource_id = manager
+    let resource_page_id = manager
         .create_page(
             "/resources/spec",
             "user",
@@ -4715,7 +4717,7 @@ fn rebuild_prompt_candidates_applies_page_state_and_kind_policy() {
         (&draft_id, "draft"),
         (&normal_id, "normal"),
         (&template_id, "template"),
-        (&resource_id, "resource"),
+        (&resource_page_id, "resource"),
     ] {
         assert!(
             manager
@@ -6655,7 +6657,7 @@ fn export_import_low_level_db_api_works() {
         .create_page(
             "/tree/resource",
             "user",
-            resource_source(Some("docs/migrate-resource"), "migrate"),
+            resource_source(Some("/docs/migrate-resource"), "migrate"),
         )
         .expect("create resource page failed");
 
@@ -6715,7 +6717,7 @@ fn export_import_low_level_db_api_works() {
             .is_none()
     );
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/migrate-resource"),
+        resource_uri_owner_for_test(&manager, "/docs/migrate-resource"),
         None,
     );
     assert!(
@@ -6802,7 +6804,7 @@ fn import_bundle_and_asset_staging_api_work() {
         timestamp,
         user: user_id.clone(),
         rename: None,
-        source: resource_source(Some("docs/imported-resource"), "imported"),
+        source: resource_source(Some("/docs/imported-resource"), "imported"),
     });
     bundle.assets.push(ExportAsset {
         id: asset_id.clone(),
@@ -6845,10 +6847,10 @@ fn import_bundle_and_asset_staging_api_work() {
         .get_resource_candidate_by_page_id(&resource_page_id)
         .expect("get imported resource candidate failed")
         .expect("imported resource candidate missing");
-    assert_eq!(resource_candidate.resource_id(), "docs/imported-resource");
+    assert_eq!(resource_candidate.resource_path(), "/docs/imported-resource");
     assert_eq!(resource_candidate.name(), "imported");
     assert_eq!(
-        resource_uri_owner_for_test(&manager, "docs/imported-resource"),
+        resource_uri_owner_for_test(&manager, "/docs/imported-resource"),
         Some(resource_page_id),
     );
     assert_eq!(

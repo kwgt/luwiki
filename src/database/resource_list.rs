@@ -95,16 +95,16 @@ impl BuiltinResourceContents {
 ///
 /// # 引数
 /// * `authority` - resource authority
-/// * `resource_id` - resource 識別子
+/// * `resource_path` - resource path
 ///
 /// # 戻り値
 /// MCP公開URIを返す。
 ///
 pub(crate) fn page_resource_uri(
     authority: &str,
-    resource_id: &str,
+    resource_path: &str,
 ) -> String {
-    format!("luwiki://{}/page/{}", authority, resource_id)
+    format!("luwiki://{}{}", authority, resource_path)
 }
 
 ///
@@ -202,7 +202,7 @@ pub(crate) fn page_resource_list_entry(
     candidate: &ResourceCandidateListEntry,
 ) -> ResourceListEntry {
     ResourceListEntry::new(
-        page_resource_uri(authority, candidate.resource_id()),
+        page_resource_uri(authority, candidate.resource_path()),
         candidate.name().to_string(),
         candidate.description().to_string(),
         candidate.mime_type().to_string(),
