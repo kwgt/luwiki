@@ -141,6 +141,7 @@ fn payload_too_large_handler<B>(
 /// * `use_tls` - TLSを使用する場合は`true`
 /// * `cert_path` - 証明書ファイルパス
 /// * `cert_is_explicit` - 証明書パスが明示指定なら`true`
+/// * `key_path` - 分離した秘密鍵ファイルのパス
 /// * `audit_config` - 監査ログ設定
 /// * `mcp_endpoint` - 公開するMCP endpoint情報
 ///
@@ -160,6 +161,7 @@ pub(crate) fn run(
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
+    key_path: Option<PathBuf>,
     audit_config: Option<AuditLogConfig>,
     mcp_endpoint: Option<McpEndpoint>,
     shutdown_signal: Option<ShutdownSignal>,
@@ -220,6 +222,7 @@ pub(crate) fn run(
         use_tls,
         cert_path,
         cert_is_explicit,
+        key_path,
         mcp_endpoint,
         mcp_session_manager,
     )?;
@@ -328,6 +331,7 @@ fn run_audit_retention(config: &AuditLogConfig) -> Result<()> {
 /// * `use_tls` - TLSを利用する場合は`true`
 /// * `cert_path` - 証明書ファイルパス
 /// * `cert_is_explicit` - 証明書パスが明示指定なら`true`
+/// * `key_path` - 分離した秘密鍵ファイルのパス
 /// * `mcp_endpoint` - 公開するMCP endpoint情報
 ///
 /// # 戻り値
@@ -341,6 +345,7 @@ fn create_server(
     use_tls: bool,
     cert_path: PathBuf,
     cert_is_explicit: bool,
+    key_path: Option<PathBuf>,
     mcp_endpoint: Option<McpEndpoint>,
     mcp_session_manager: Option<Arc<ManagedSessionManager>>,
 ) -> Result<Server> {
@@ -405,7 +410,11 @@ fn create_server(
      */
     let bind_addr = format!("{}:{}", addr, port);
     let server = if use_tls {
-        let tls_config = tls::load_server_config(&cert_path, cert_is_explicit)?;
+        let tls_config = tls::load_server_config(
+            &cert_path,
+            cert_is_explicit,
+            key_path.as_deref(),
+        )?;
         server.bind_rustls_0_23(bind_addr, tls_config)?
     } else {
         server.bind(bind_addr)?
@@ -560,6 +569,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .expect("create server failed");
         let handle = server.handle();
@@ -622,6 +632,7 @@ mod tests {
             false,
             PathBuf::new(),
             false,
+            None,
             None,
             None,
         )
@@ -689,6 +700,7 @@ mod tests {
             false,
             PathBuf::new(),
             false,
+            None,
             None,
             None,
         )

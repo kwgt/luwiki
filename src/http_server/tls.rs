@@ -34,6 +34,7 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 /// # 引数
 /// * `cert_path` - 証明書ファイルのパス
 /// * `cert_is_explicit` - 証明書パスが明示指定か否か
+/// * `key_path` - 分離した秘密鍵ファイルのパス
 ///
 /// # 戻り値
 /// 設定に成功した場合はTLSサーバ設定を返す。
@@ -41,6 +42,7 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 pub(crate) fn load_server_config(
     cert_path: &Path,
     cert_is_explicit: bool,
+    key_path: Option<&Path>,
 ) -> Result<ServerConfig> {
     /*
      * 証明書ファイルの存在確認と生成
@@ -56,7 +58,7 @@ pub(crate) fn load_server_config(
     /*
      * PEMの読み込みとTLS設定の構築
      */
-    let (certs, key) = load_pem(cert_path)?;
+    let (certs, key) = load_pem(cert_path, key_path)?;
     log_certificate_info(&certs);
     build_server_config(certs, key)
 }
@@ -86,12 +88,14 @@ fn build_server_config(
 ///
 /// # 引数
 /// * `cert_path` - 証明書ファイルのパス
+/// * `key_path` - 分離した秘密鍵ファイルのパス
 ///
 /// # 戻り値
 /// 読み込みに成功した場合は証明書と秘密鍵を返す。
 ///
 fn load_pem(
     cert_path: &Path,
+    key_path: Option<&Path>,
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     /*
      * PEMの読み込み
@@ -113,11 +117,17 @@ fn load_pem(
     /*
      * 秘密鍵の抽出
      */
-    let mut key_reader = BufReader::new(Cursor::new(&pem));
+    let key_path = key_path.unwrap_or(cert_path);
+    let key_pem = if key_path == cert_path {
+        pem
+    } else {
+        fs::read(key_path)?
+    };
+    let mut key_reader = BufReader::new(Cursor::new(key_pem));
     let key = rustls_pemfile::private_key(&mut key_reader)
         .map_err(|err| anyhow!("read private key error: {}", err))?
         .ok_or_else(|| {
-            anyhow!("no private key found: {}", cert_path.display())
+            anyhow!("no private key found: {}", key_path.display())
         })?;
 
     Ok((certs, key))
@@ -323,7 +333,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let cert_path = temp_cert_path(&dir, "missing.pem");
 
-        let result = load_server_config(&cert_path, true);
+        let result = load_server_config(&cert_path, true, None);
         assert!(result.is_err());
         assert!(!cert_path.exists());
     }
@@ -344,7 +354,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let cert_path = temp_cert_path(&dir, "auto.pem");
 
-        let result = load_server_config(&cert_path, false);
+        let result = load_server_config(&cert_path, false, None);
         assert!(result.is_ok());
         assert!(cert_path.exists());
     }
@@ -372,7 +382,34 @@ mod tests {
         let cert_pem = cert.pem();
         fs::write(&cert_path, cert_pem).expect("write cert");
 
-        let result = load_server_config(&cert_path, true);
+        let result = load_server_config(&cert_path, true, None);
         assert!(result.is_err());
+    }
+
+    ///
+    /// 分離した証明書と秘密鍵を読み込めることを確認する
+    ///
+    /// # 注記
+    /// 1) 証明書のみのPEMと秘密鍵のみのPEMを作成する
+    /// 2) 分離秘密鍵を指定してTLS設定を読み込む
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn separate_certificate_and_private_key_are_loaded() {
+        let dir = TempDir::new().expect("temp dir");
+        let cert_path = temp_cert_path(&dir, "cert.pem");
+        let key_path = temp_cert_path(&dir, "key.pem");
+        let params = CertificateParams::new(vec!["localhost".to_string()])
+            .expect("params");
+        let key_pair = KeyPair::generate().expect("key");
+        let cert = params.self_signed(&key_pair).expect("cert");
+
+        fs::write(&cert_path, cert.pem()).expect("write cert");
+        fs::write(&key_path, key_pair.serialize_pem()).expect("write key");
+
+        let result = load_server_config(&cert_path, true, Some(&key_path));
+        assert!(result.is_ok());
     }
 }

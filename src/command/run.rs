@@ -55,6 +55,9 @@ pub(crate) struct RunCommandContext {
     /// サーバ証明書パスの明示指定フラグ
     cert_is_explicit: bool,
 
+    /// サーバ秘密鍵ファイルのパス
+    key_path: Option<PathBuf>,
+
     /// MCP有効フラグ
     mcp_enabled: bool,
 
@@ -120,6 +123,7 @@ impl RunCommandContext {
             use_tls: sub_opts.use_tls(),
             cert_path: sub_opts.cert_path(),
             cert_is_explicit: sub_opts.is_cert_path_explicit(),
+            key_path: sub_opts.key_path(),
             mcp_enabled: sub_opts.use_mcp(),
             mcp_authority: sub_opts.mcp_authority(),
             open_browser: sub_opts.is_browser_open(),
@@ -213,6 +217,7 @@ impl RunCommandContext {
             self.use_tls,
             self.cert_path.clone(),
             self.cert_is_explicit,
+            self.key_path.clone(),
             if self.mcp_enabled {
                 Some(self.audit_log_config.clone())
             } else {

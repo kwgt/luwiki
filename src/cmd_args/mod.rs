@@ -1230,6 +1230,7 @@ impl Command {
                 config.set_run_mcp_authority(opts.mcp_authority());
                 config.set_run_use_tls(opts.use_tls());
                 config.set_run_server_cert(opts.cert_path());
+                config.set_run_server_key(opts.key_path());
             }
             Self::User(user) => {
                 if let UserSubCommand::List(opts) = &user.subcommand {
@@ -1692,11 +1693,16 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn parse_tls_and_cert_options() {
+    fn parse_tls_certificate_and_key_options() {
         let dir = TempDir::new().expect("temp dir");
         let cert_path = dir.path().join("server.pem");
         let cert_arg = cert_path.to_string_lossy().to_string();
-        let args = ["luwiki", "run", "--tls", "--cert", &cert_arg];
+        let key_path = dir.path().join("server.key");
+        let key_arg = key_path.to_string_lossy().to_string();
+        let args = [
+            "luwiki", "run", "--tls", "--cert", &cert_arg, "--key",
+            &key_arg,
+        ];
 
         let opts = Options::try_parse_from(args).expect("parse failed");
         let run_opts = match opts.command {
@@ -1706,15 +1712,18 @@ mod tests {
         assert!(run_opts.use_tls());
         assert!(run_opts.is_cert_path_explicit());
         assert_eq!(run_opts.cert_path(), cert_path);
+        assert_eq!(run_opts.key_path(), Some(key_path));
     }
 
     #[test]
-    fn save_config_writes_tls_settings() {
+    fn save_config_writes_tls_certificate_and_key_settings() {
         let dir = TempDir::new().expect("temp dir");
         let config_path = dir.path().join("config.toml");
         let config_arg = config_path.to_string_lossy().to_string();
         let cert_path = dir.path().join("certs/server.pem");
         let cert_arg = cert_path.to_string_lossy().to_string();
+        let key_path = dir.path().join("certs/server.key");
+        let key_arg = key_path.to_string_lossy().to_string();
         let args = [
             "luwiki",
             "--config-path",
@@ -1723,6 +1732,8 @@ mod tests {
             "--tls",
             "--cert",
             &cert_arg,
+            "--key",
+            &key_arg,
         ];
 
         let opts = Options::try_parse_from(args).expect("parse failed");
@@ -1731,6 +1742,34 @@ mod tests {
         let config = config::load(&config_path).expect("load failed");
         assert_eq!(config.use_tls(), Some(true));
         assert_eq!(config.server_cert(), Some(cert_path));
+        assert_eq!(config.server_key(), Some(key_path));
+    }
+
+    ///
+    /// 証明書を指定せずに秘密鍵だけを指定した場合のエラーを確認する
+    ///
+    /// # 注記
+    /// 1) 秘密鍵だけを指定したrunオプションを解析する
+    /// 2) オプション整合性検証が失敗することを確認する
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn validate_rejects_key_without_certificate() {
+        let mut opts = Options::try_parse_from([
+            "luwiki",
+            "run",
+            "--key",
+            "server.key",
+        ])
+        .expect("parse failed");
+
+        let err = opts.validate().expect_err("validation must fail");
+        assert!(
+            err.to_string()
+                .contains("server key requires an explicit certificate path")
+        );
     }
 
     #[test]

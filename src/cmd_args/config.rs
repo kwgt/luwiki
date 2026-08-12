@@ -193,6 +193,20 @@ impl Config {
     }
 
     ///
+    /// runサブコマンドのサーバ秘密鍵パスを更新
+    ///
+    /// # 引数
+    /// * `path` - サーバ秘密鍵ファイルのパス
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    pub(super) fn set_run_server_key(&mut self, path: Option<PathBuf>) {
+        let run = self.ensure_run();
+        run.server_key = path;
+    }
+
+    ///
     /// runサブコマンドのMCP有効化フラグを更新
     ///
     pub(super) fn set_run_use_mcp(&mut self, use_mcp: bool) {
@@ -504,6 +518,28 @@ impl Config {
     }
 
     ///
+    /// サーバ秘密鍵パスへのアクセサ
+    ///
+    /// # 戻り値
+    /// 設定されている場合は、解決済みの秘密鍵ファイルパスを返す。
+    ///
+    pub(super) fn server_key(&self) -> Option<PathBuf> {
+        let run_value = self.run
+            .as_ref()
+            .and_then(|run| run.server_key.as_ref())
+            .map(|path| self.resolve_path(path));
+
+        if run_value.is_some() {
+            return run_value;
+        }
+
+        self.global
+            .as_ref()
+            .and_then(|global| global.server_key.as_ref())
+            .map(|path| self.resolve_path(path))
+    }
+
+    ///
     /// サブコマンドrunのバインドアドレスへのアクセサ
     ///
     pub(super) fn run_bind_addr(&self) -> Option<String> {
@@ -792,6 +828,7 @@ impl Config {
                 audit_rotate_size: None,
                 use_tls: None,
                 server_cert: None,
+                server_key: None,
             });
         }
 
@@ -883,6 +920,7 @@ impl Config {
                 mcp_authority: None,
                 use_tls: None,
                 server_cert: None,
+                server_key: None,
             });
         }
 
@@ -1114,6 +1152,7 @@ impl Default for Config {
                 ),
                 use_tls: None,
                 server_cert: None,
+                server_key: None,
             }),
 
             run: Some(RunInfo {
@@ -1123,6 +1162,7 @@ impl Default for Config {
                 mcp_authority: Some(DEFAULT_MCP_AUTHORITY.to_string()),
                 use_tls: Some(false),
                 server_cert: None,
+                server_key: None,
             }),
 
             user: Some(UserSection {
@@ -1226,6 +1266,9 @@ struct GlobalInfo {
 
     /// サーバ証明書ファイルのパス
     server_cert: Option<PathBuf>,
+
+    /// サーバ秘密鍵ファイルのパス
+    server_key: Option<PathBuf>,
 }
 
 ///
@@ -1263,6 +1306,9 @@ struct RunInfo {
 
     /// サーバ証明書ファイルのパス
     server_cert: Option<PathBuf>,
+
+    /// サーバ秘密鍵ファイルのパス
+    server_key: Option<PathBuf>,
 }
 
 ///
@@ -1592,6 +1638,7 @@ mod tests {
             wiki_icon = "icons/wiki.png"
             use_tls = true
             server_cert = "certs/server.pem"
+            server_key = "certs/server.key"
         "#;
 
         let mut config: Config =
@@ -1618,6 +1665,10 @@ mod tests {
         assert_eq!(
             config.server_cert(),
             Some(PathBuf::from("/tmp/config/certs/server.pem"))
+        );
+        assert_eq!(
+            config.server_key(),
+            Some(PathBuf::from("/tmp/config/certs/server.key"))
         );
     }
 

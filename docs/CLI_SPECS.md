@@ -156,6 +156,7 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 |       `--mcp` | MCP機能を有効化して起動する |
 | `-T`, `--tls` | サーバをHTTPSで起動させる |
 | `-C`, `--cert FILE` | HTTPS使用時の証明書ファイルのパスを指定する | $XDG_DATA_HOME/luwiki/server.pem
+| `-K`, `--key FILE` | HTTPS使用時の秘密鍵ファイルのパスを指定する |
 |       `--win-service` | Windowsサービス実行モードで起動する | Windows環境のみ
  
 #### 概要
@@ -163,7 +164,7 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 
 `--tls`オプションを指定した場合、サーバはHTTPSでの通信を行う。このとき`--cert`オプションで指定されたサーバ証明書を用いる。`--cert`が指定されていない場合は規定のパスに置かれた証明書を使用するが、このファイルも存在しない場合は証明書を自動的に生成する(`--cert`オプションが指定され、そのファイルが存在しない場合はエラー)。
 
-`--cert`で指定するファイルはPEM形式とする。PEMにはサーバ証明書と秘密鍵を含めるものとする。
+`--cert`で指定するファイルはPEM形式とする。`--key`を指定しない場合、`--cert`のPEMにはサーバ証明書と秘密鍵を含めるものとする。`--key`を指定した場合は、`--cert`から証明書チェーン、`--key`から秘密鍵を読み込む。`--key`だけを指定することはできない。
 証明書を自動生成する場合、生成物は`$XDG_DATA_HOME/luwiki/server.pem`（PEM）に保存する。PEM以外の補助ファイルが必要な場合は、`$XDG_DATA_HOME/luwiki/cert/`配下に保存する。
 
 `--open-browser`オプションが指定された場合は、同時に規定のブラウザを起動する（デスクトップ環境でのみ有効）。
@@ -1363,9 +1364,10 @@ luwiki [OPTIONS] import [OPTIONS] <INPUT>
 | `mcp_authority` | MCP resource URI の authority | なし | `local.luwiki`
 | `use_tls` | TLSの使用 | `--tls` | false
 | `server_cert` | 使用するサーバ証明書 | `--cert` | `$XDG_DATA_HOME/luwiki/server.pem`
+| `server_key` | 使用するサーバ秘密鍵 | `--key` |
  
 #### 注記
-- 互換性のために、`run`テーブルに値が無い場合は`global.use_tls`/`global.server_cert`を読み取って補完する。
+- 互換性のために、`run`テーブルに値が無い場合は`global.use_tls`/`global.server_cert`/`global.server_key`を読み取って補完する。
 - `mcp_authority`はconfig専用項目とし、空文字、前後空白、制御文字、非ASCII、scheme、`/`、`?`、`#`、`@`を含む値、253文字超、hostname風ではないラベル構造を拒否する。
 
 <a id="config-user-list"></a>

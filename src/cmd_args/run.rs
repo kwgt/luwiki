@@ -53,6 +53,10 @@ pub(crate) struct RunOpts {
     #[arg(short = 'C', long = "cert", value_name = "FILE")]
     cert_path: Option<PathBuf>,
 
+    /// TLS用のサーバ秘密鍵ファイルのパス
+    #[arg(short = 'K', long = "key", value_name = "FILE")]
+    key_path: Option<PathBuf>,
+
     /// Windowsサービスとして起動する
     #[cfg(windows)]
     #[arg(long = "win-service")]
@@ -136,6 +140,16 @@ impl RunOpts {
     }
 
     ///
+    /// サーバ秘密鍵ファイルのパスへのアクセサ
+    ///
+    /// # 戻り値
+    /// オプションで指定された秘密鍵パスを返す。未指定の場合は`None`を返す。
+    ///
+    pub(crate) fn key_path(&self) -> Option<PathBuf> {
+        self.key_path.clone()
+    }
+
+    ///
     /// Windowsサービスモード有効フラグへのアクセサ
     ///
     /// # 戻り値
@@ -208,6 +222,15 @@ impl Validate for RunOpts {
         validate_mcp_authority(&self.mcp_authority())?;
 
         /*
+         * 分離秘密鍵と証明書指定の整合性を確認
+         */
+        if self.key_path.is_some() && self.cert_path.is_none() {
+            return Err(anyhow!(
+                "server key requires an explicit certificate path"
+            ));
+        }
+
+        /*
          * 検証結果を返却
          */
         Ok(())
@@ -266,6 +289,10 @@ impl ApplyConfig for RunOpts {
             if let Some(path) = config.server_cert() {
                 self.cert_path = Some(path);
             }
+        }
+
+        if self.key_path.is_none() {
+            self.key_path = config.server_key();
         }
     }
 }
@@ -357,6 +384,7 @@ impl ShowOptions for RunOpts {
         println!("   mcp authority:  {}", self.mcp_authority());
         println!("   tls enabled:    {}", self.use_tls());
         println!("   cert path:      {}", self.cert_path().display());
+        println!("   key path:       {:?}", self.key_path());
         #[cfg(windows)]
         println!("   win service:    {}", self.is_win_service());
         println!("   bind:  {}:{}", self.bind_addr(), self.bind_port());
