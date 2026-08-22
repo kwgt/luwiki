@@ -1132,6 +1132,26 @@ token 系 CLI には混在させない。
 これにより、MCP transport 依存の文脈は `transport.rs` / `handler.rs` で閉じ、
 サービス層は業務ロジックに集中できる。
 
+#### 2.6.1 MCP session metadata 管理
+
+MCP session metadata は `ManagedSessionManager` が保持・更新し、
+path ベース業務サービス層および DB 層へ持ち込まない。
+
+`ManagedSessionManager` は少なくとも `last_access_at` を保持し、
+session idle 判定、background sweep、LRU eviction の判断材料として使用する。
+`last_access_at` の更新契機は以下とする。
+
+- `initialize_session()`、`create_stream()`、
+  `create_standalone_stream()`、`resume()`、`accept_message()`
+  が成功した時点で既存 touch を維持する
+- active SSE stream が存在し、その stream が生存している間は
+  Heartbeat として一定間隔で `last_access_at` を更新する
+- `has_session()` は存在確認のみとし、session を延命しない
+
+Heartbeat は `last_access_at` の更新を通じて既存 TTL / sweep / LRU と接続する。
+TTL / sweep / LRU の意味自体は変更せず、active stream 中でも
+session 上限制御による LRU eviction は起こり得る。
+
 ### 2.7 追加が必要な DB API
 
 橋渡し設計の成立には、少なくとも以下の DB 側補助 API を後続で設計する必要がある。
@@ -1770,6 +1790,8 @@ CLI / config 上の文字列表現とは分離する。
 - DB 層は page_id / prefix ベース API を維持し、必要な path 解決 API のみ追加する
 - list / search / create / update / append / rename ごとに橋渡し経路を明示する
 - `append` は path ベース公開、page_id ベース保存の二段構成とする
+- MCP session metadata は `ManagedSessionManager` の責務とし、
+  path ベース業務サービス層および DB 層へ持ち込まない
 
 ## 3. 更新系操作の共通化単位
 
@@ -1867,6 +1889,16 @@ create と update / append / rename のように
 - `revision` と `instance_id` を受け取る
 - 単一の編集操作を受け取り、最新本文へ部分編集を適用する
 - サービス層で最新 revision および最新 instance_id との一致確認を行う
+- revision / instance_id 整合性確認が成功した後に、operation の selector 解決と内容検証を行う
+- `replace_section` では、selector 解決後に対象見出しレベルを確定し、そのレベルに基づいて `content` の見出し行制約を検証する
+- `replace_section.title` 指定時は trim 後の値を使用し、対象見出しレベルを維持して見出し文字列だけを置換する
+- `replace_section.title` が空文字、改行、制御文字、Markdown ATX 見出し行である場合は拒否する
+- `replace_section.title` 未指定時は既存見出しを維持する
+- `replace_section.include_subsection` の実効値は未指定時 `false` とする
+- `include_subsection == false` では、対象見出し直後から最初の子見出し直前までを置換し、既存サブセクションを保持する
+- `include_subsection == false` では、`content` 内の Markdown 見出し行を拒否する
+- `include_subsection == true` では、対象セクション配下のサブセクションを含めて置換する
+- `include_subsection == true` では、対象セクションより深いレベルの見出し行だけを許可し、同階層以上の見出し行を拒否する
 - 本文編集後の保存自体は update 系と同じ保存経路へ橋渡しできるようにする
 
 #### 3.4.4 append
@@ -1928,6 +1960,18 @@ append では `summary` に amend 相当か新規 revision かを含める余地
 `edit_page` は、
 current page 解決と保存後応答生成は update 系共通処理を再利用しつつ、
 編集操作の適用と revision / instance_id 整合確認を追加責務として持つ。
+
+`edit_page` の処理順序は以下とする。
+
+1. current path から対象ページを解決し、認可と既存競合条件を確認する
+2. 最新 revision と latest instance_id を取得する
+3. 入力 `revision` と最新 revision を照合する
+4. 入力 `instance_id` と latest instance_id を照合する
+5. 整合性確認後に operation の selector 解決と内容検証を行う
+6. 編集後本文を update 系共通保存経路へ渡す
+
+`replace_section` の unknown field は、現行 serde 方針に合わせて
+MS2 では拒否強化しない。
 
 ### 3.7 更新系操作の共通化に関する設計判断
 

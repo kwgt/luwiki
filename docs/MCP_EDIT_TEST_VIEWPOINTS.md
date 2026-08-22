@@ -11,6 +11,8 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 「`update_page` / `append_page` との責務分離」「将来的な operation 種別増加への追従」
 を同時に満たす必要がある。
 そのため本書では、入力モデル、operation 別意味論、整合性失敗、エラー写像、保存結果まで含めて観点を整理する。
+特に `replace_section` では、見出し重複と意図しないサブセクション削除を抑止するため、
+`title` と `include_subsection` 拡張後の入力制約と回帰観点を明示する。
 
 ## 1. 参照仕様
 
@@ -75,9 +77,18 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 
 ### 5.1 `replace_section`
 
-1. 対象見出し行は保持し、本文部分のみを置き換えること
-2. 子見出しを含むセクション範囲の扱いが仕様どおりであること
-3. 存在しない対象セクションでは成功扱いにしないこと
+1. `title` 未指定時に対象見出し行のレベルと見出し文字列が維持されること
+2. `title` 指定時に対象見出し行のレベルが維持され、見出し文字列だけが置換されること
+3. `title` が trim 後の値で扱われること
+4. `title` が空文字、改行、制御文字、Markdown ATX 見出し行の場合に `invalid_input` になること
+5. `content` に対象セクション自身の見出し行を含めた場合に `invalid_input` になること
+6. `include_subsection` 未指定時に `false` と同じ扱いになること
+7. `include_subsection: false` で対象セクション直下本文だけが置換され、既存サブセクションが保持されること
+8. `include_subsection: false` で `content` 内に Markdown 見出し行を含めた場合に `invalid_input` になること
+9. `include_subsection: true` で現行相当の子セクション込み置換になること
+10. `include_subsection: true` で対象セクションより深い見出し行だけが許可されること
+11. `include_subsection: true` で対象セクションと同階層以上の見出し行を含めた場合に `invalid_input` になること
+12. 存在しない対象セクションでは成功扱いにしないこと
 
 ### 5.2 `insert_section`
 
@@ -120,6 +131,8 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 1. current path 解決後に最新 revision と最新本文が読み取られること
 2. `revision` / `instance_id` 整合確認失敗時に保存処理へ進まないこと
 3. 整合確認失敗時に部分保存や中途半端な書き換えが発生しないこと
+4. `revision` 不一致時に、operation 内容検証より先に `not_latest_revision` が返ること
+5. `instance_id` 不一致時に、operation 内容検証より先に `instance_id_not_match` が返ること
 
 ## 7. 競合・失敗分類の観点
 
@@ -156,6 +169,9 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 1. 全文置換を必要とするケースでは `edit_page` ではなく `update_page` を使う設計が維持されること
 2. 末尾単純追記を必要とするケースでは `edit_page` ではなく `append_page` を使う設計が維持されること
 3. `edit_page` が `update` スコープで扱われ、`append` スコープでは許可されないこと
+4. `replace_section` 拡張後も `insert_section`、`delete_section`、`replace_text` の意味論が崩れていないこと
+5. `replace_section` 拡張後も section selector の文字列指定、`by=id`、`by=title` が既存どおり動作すること
+6. `replace_section` 拡張後も selector 不正、同名 title 複数、section not found の失敗分類が既存どおりであること
 
 ### 9.2 将来拡張
 
@@ -169,17 +185,23 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
   - selector 解決失敗の分類
   - `revision` / `instance_id` 整合確認
   - operation ごとの本文変換
+  - `replace_section.title` の入力制約
+  - `include_subsection` 値別の見出し行制約
 - サービス層結合テスト向き
   - current path 解決から整合確認、保存までの一連フロー
   - ロック競合時の `conflict` 写像
   - 保存結果 `revision` / `instance_id` の返却
+  - `replace_section` による見出し文字列変更とサブセクション保持 / 置換範囲
+  - 整合性エラーが operation 内容検証より先に返る順序
 - MCP 統合テスト向き
   - `edit_page` の応答形
   - `not_latest_revision` / `instance_id_not_match` / `invalid_input` / `conflict` / `not_found` の写像
   - `update_page` / `append_page` との責務境界
+  - `tools/list` 上の `edit_page.replace_section` schema と説明文
 
 ## 11. 整理結果
 
 - `edit_page` 固有の責務である operation 解釈、部分編集、内容整合性確認を独立観点として整理した
 - `not_latest_revision` と `instance_id_not_match` を公開エラーとして確認する観点を整理した
 - operation 増加を見据え、共通観点と operation 個別観点を分離した構成にした
+- `replace_section` の `title`、`include_subsection`、見出し行制約、既存 edit operation 回帰観点を追加した

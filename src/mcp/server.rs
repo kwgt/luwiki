@@ -820,7 +820,7 @@ impl LuwikiMcpServer {
     ///
     #[tool(
         name = "edit_page",
-        description = "指定した path の Markdown 本文を単一操作で部分編集する。"
+        description = "指定した path の Markdown 本文を単一操作で部分編集する。replace_section では対象見出し行を content に含めず、見出し変更は title を使う。"
     )]
     async fn edit_page_tool(
         &self,
@@ -1009,7 +1009,7 @@ impl ServerHandler for LuwikiMcpServer {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Use Bearer authentication on every HTTP request.",
+                "Use Bearer authentication on every HTTP request. For edit_page.replace_section, do not include the target heading line in content; use title to rename the section; use include_subsection: true when replacing subsections too.",
             )
     }
 }
@@ -1918,6 +1918,37 @@ mod tests {
         assert!(!server.prompts_ready);
         assert!(info.capabilities.prompts.is_none());
         assert!(info.capabilities.tools.is_some());
+    }
+
+    #[test]
+    fn mcp_server_instructions_include_auth_and_replace_section_note() {
+        let dir = tempdir().expect("create tempdir failed");
+        let db_path = dir.path().join("database.redb");
+        let asset_path = dir.path().join("assets");
+        let index_path = dir.path().join("fts");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open database failed");
+        let state = Arc::new(RwLock::new(AppState::new(
+            manager,
+            FrontendConfig::default(),
+            FtsIndexConfig::new(index_path),
+            None,
+            "LUWIKI".to_string(),
+            None,
+            1024 * 1024,
+            None,
+        )));
+
+        let server = LuwikiMcpServer::new(state);
+        let info = server.get_info();
+        let instructions = info.instructions.as_deref().unwrap_or("");
+
+        assert!(instructions.contains(
+            "Use Bearer authentication on every HTTP request."
+        ));
+        assert!(instructions.contains(
+            "For edit_page.replace_section, do not include the target heading line in content; use title to rename the section; use include_subsection: true when replacing subsections too."
+        ));
     }
 
     ///

@@ -363,6 +363,12 @@
 - MCP は Bearer 認証を前提とし、Basic 認証は前提としない
 - MCP の認可は Bearer スコープに従い、path ベース操作では path prefix 制約にも従う
 - MCP では既存 REST API を内部的に呼び出す構成ではなく、共通処理を利用する専用ハンドラ層を設ける
+- MCP session は、長時間の作業中に active SSE stream が生存している場合、
+  session metadata の `last_access_at` を一定間隔で更新できること
+- MCP session 維持は Bearer トークン TTL とは別概念として扱い、
+  session TTL の単純延長または無期限化では実現しない
+- SSE 接続維持と MCP session metadata の Heartbeat は責務を分離し、
+  Heartbeat は `last_access_at` 更新によって既存の session TTL / sweep / LRU と接続する
 
 ### 12.2 初期実装で提供する機能
 
@@ -382,6 +388,21 @@
 - prompts 操作は LuWiki 独自 tool の `tools/call` ではなく、MCP 標準の prompts 操作として提供する
 - resources 操作は LuWiki 独自 tool の `tools/call` ではなく、MCP 標準の resources 操作として提供する
 - 初期実装の MCP では、削除済みページ参照、restore、アセット操作、ロック操作は提供しない
+
+### 12.2.1 edit_page の扱い
+
+- MCP の `edit_page` は、ページ本文の一部編集を行う操作として提供する
+- `edit_page.replace_section` は既存 operation の拡張として扱い、新しい operation は追加しない
+- `replace_section` の `content` には、対象セクション自身の Markdown 見出し行を含めない
+- `replace_section` で対象セクションの見出し文字列を変更する場合は、`content` ではなく `title` を使用する
+- `title` 未指定時は、対象セクションの既存見出しを維持する
+- `title` 指定時は、対象セクションの見出しレベルを維持し、見出し文字列だけを置換する
+- `title` が空文字、改行、制御文字、Markdown ATX 見出し行である場合は、入力不正として拒否する
+- `replace_section` の `include_subsection` は任意の真偽値とし、未指定時は `false` とする
+- `include_subsection` 未指定時または `false` の場合は、対象セクション直下本文だけを置換し、既存サブセクションを保持する
+- 対象セクション配下のサブセクションを含めて置換する場合は、`include_subsection: true` を明示する
+- `include_subsection` 未指定時または `false` の場合、`content` に Markdown 見出し行が含まれていれば入力不正として拒否する
+- `include_subsection` が `true` の場合、`content` には対象セクションより深いレベルの見出し行だけを許可し、同階層以上の見出し行は入力不正として拒否する
 
 ### 12.3 path ベース操作
 

@@ -268,13 +268,20 @@ pub(crate) enum EditPageReplaceTextOccurrence {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum EditPageToolOperation {
-    /// セクション本文の置換
+    /// セクション本文の置換。対象見出し行は content に含めず、見出し変更には title を使用する。
+    /// 既定では既存サブセクションを保持し、サブセクション込みで置換する場合は include_subsection に true を指定する。
     ReplaceSection {
         /// 対象セクション
         section: EditPageSectionSelector,
 
-        /// 置換後本文
+        /// 変更後の見出し文字列。未指定時は既存見出しを維持する。
+        title: Option<String>,
+
+        /// 置換後本文。対象セクション自身の Markdown 見出し行は含めない。
         content: String,
+
+        /// true の場合は対象セクション配下のサブセクションを含めて置換する。未指定時は false として扱う。
+        include_subsection: Option<bool>,
     },
 
     /// セクション挿入
@@ -445,6 +452,86 @@ mod tests {
             "unexpected error: {}",
             error.message(),
         );
+    }
+
+    #[test]
+    fn edit_page_replace_section_accepts_optional_title_and_include_subsection() {
+        let args = deserialize_edit_page_args(json!({
+            "path": "/docs/page",
+            "revision": 3,
+            "instance_id": "instance-1",
+            "operation": {
+                "type": "replace_section",
+                "section": "Overview",
+                "title": "Updated overview",
+                "content": "updated",
+                "include_subsection": true
+            }
+        }))
+        .expect("replace_section extension fields must deserialize");
+
+        match args.operation {
+            EditPageToolOperation::ReplaceSection {
+                section,
+                title,
+                content,
+                include_subsection,
+            } => {
+                match section {
+                    EditPageSectionSelector::Text(value) => {
+                        assert_eq!(value, "Overview");
+                    }
+                    EditPageSectionSelector::Structured(_) => {
+                        panic!("unexpected structured selector")
+                    }
+                }
+                assert_eq!(title.as_deref(), Some("Updated overview"));
+                assert_eq!(content, "updated");
+                assert_eq!(include_subsection, Some(true));
+            }
+            _ => panic!("unexpected operation"),
+        }
+    }
+
+    #[test]
+    fn edit_page_replace_section_rejects_invalid_include_subsection_type() {
+        let error = deserialize_edit_page_args(json!({
+            "path": "/docs/page",
+            "revision": 3,
+            "instance_id": "instance-1",
+            "operation": {
+                "type": "replace_section",
+                "section": "Overview",
+                "content": "updated",
+                "include_subsection": "true"
+            }
+        }))
+        .expect_err("invalid include_subsection type must fail");
+
+        assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        assert!(
+            error.message().contains("invalid type"),
+            "unexpected error: {}",
+            error.message(),
+        );
+    }
+
+    #[test]
+    fn edit_page_replace_section_schema_includes_extension_descriptions() {
+        let schema = rmcp::schemars::schema_for!(EditPageToolArgs);
+        let schema_text = serde_json::to_string(&schema)
+            .expect("edit_page schema must serialize");
+
+        assert!(schema_text.contains("title"));
+        assert!(schema_text.contains("include_subsection"));
+        let legacy_name = ["include", "sub", "section"].join("_");
+        assert!(!schema_text.contains(&legacy_name));
+        assert!(schema_text.contains(
+            "対象見出し行は content に含めず、見出し変更には title を使用する。"
+        ));
+        assert!(schema_text.contains(
+            "置換後本文。対象セクション自身の Markdown 見出し行は含めない。"
+        ));
     }
 
     #[test]

@@ -365,8 +365,14 @@ pub(crate) enum EditPageOperation {
         /// 対象セクション
         section: SectionSelector,
 
+        /// 変更後の見出し文字列
+        title: Option<String>,
+
         /// 置換後本文
         content: String,
+
+        /// サブセクションを含めて置換するかどうか
+        include_subsection: Option<bool>,
     },
 
     /// セクション挿入
@@ -3737,29 +3743,197 @@ impl McpService {
     }
 
     ///
+    /// ATX 見出し行なら見出しレベルを返す
+    ///
+    /// # 引数
+    /// * `line` - 判定対象行
+    ///
+    /// # 戻り値
+    /// ATX 見出し行なら見出しレベルを返す。
+    ///
+    fn atx_heading_line_level(&self, line: &str) -> Option<u32> {
+        let trimmed = line.trim_start();
+        let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+        if level == 0 || level > 6 {
+            return None;
+        }
+
+        match trimmed.chars().nth(level) {
+            None => Some(level as u32),
+            Some(ch) if ch.is_whitespace() => Some(level as u32),
+            Some(_) => None,
+        }
+    }
+
+    ///
+    /// `replace_section.title` を検証する
+    ///
+    /// # 引数
+    /// * `title` - 入力 title
+    ///
+    /// # 戻り値
+    /// trim 済み title を返す。
+    ///
+    fn validate_replace_section_title(
+        &self,
+        title: &str,
+    ) -> Result<String, McpError> {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "replace_section.title must not be empty",
+            ));
+        }
+        if trimmed.chars().any(char::is_control) {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "replace_section.title must not contain control characters",
+            ));
+        }
+        if self.atx_heading_line_level(trimmed).is_some() {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "replace_section.title must not be a Markdown heading line",
+            ));
+        }
+
+        Ok(trimmed.to_string())
+    }
+
+    ///
+    /// `replace_section.content` を検証する
+    ///
+    /// # 引数
+    /// * `content` - 入力 content
+    /// * `section` - 対象 section
+    /// * `effective_title` - 置換後に有効となる見出し文字列
+    /// * `include_subsection` - サブセクションを含めるかどうか
+    ///
+    /// # 戻り値
+    /// 検証成功時は `Ok(())` を返す。
+    ///
+    fn validate_replace_section_content(
+        &self,
+        content: &str,
+        section: &ParsedHeading,
+        effective_title: &str,
+        include_subsection: bool,
+    ) -> Result<(), McpError> {
+        let heading_line =
+            format!("{} {}", "#".repeat(section.level as usize), effective_title);
+        if content
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| line.trim() == heading_line)
+        {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "replace_section.content must not include the target heading line",
+            ));
+        }
+
+        for line in content.lines() {
+            let Some(level) = self.atx_heading_line_level(line) else {
+                continue;
+            };
+
+            if !include_subsection {
+                return Err(McpError::new(
+                    McpErrorCode::InvalidInput,
+                    "replace_section.content must not include Markdown heading lines",
+                ));
+            }
+            if level <= section.level {
+                return Err(McpError::new(
+                    McpErrorCode::InvalidInput,
+                    "replace_section.content must not include same or higher level headings",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    ///
+    /// `replace_section` の本文置換終了位置を返す
+    ///
+    /// # 引数
+    /// * `sections` - 解析済み section 一覧
+    /// * `section` - 対象 section
+    /// * `include_subsection` - サブセクションを含めるかどうか
+    ///
+    /// # 戻り値
+    /// 本文置換終了 byte offset を返す。
+    ///
+    fn resolve_replace_section_body_end(
+        &self,
+        sections: &[ParsedHeading],
+        section: &ParsedHeading,
+        include_subsection: bool,
+    ) -> usize {
+        if include_subsection {
+            return section.content_end;
+        }
+
+        sections
+            .iter()
+            .find(|candidate| {
+                candidate.heading_start >= section.content_start
+                    && candidate.heading_start < section.content_end
+                    && candidate.level > section.level
+            })
+            .map(|candidate| candidate.heading_start)
+            .unwrap_or(section.content_end)
+    }
+
+    ///
     /// section 本文を置き換える
     ///
     /// # 引数
     /// * `source` - Markdown 本文
+    /// * `sections` - 解析済み section 一覧
     /// * `section` - 置き換え対象 section
+    /// * `new_title` - 置き換え後見出し文字列
     /// * `new_content` - 置き換え後本文
+    /// * `include_subsection` - サブセクションを含めるかどうか
     ///
     /// # 戻り値
     /// 対象見出し行を保持し、本文部分だけを差し替えた Markdown 本文を返す。
     ///
-    /// # 注記
-    /// 対象 section の本文範囲は `content_start..content_end` で扱うため、
-    /// 子見出し配下も含めて置き換える。
-    ///
     fn replace_section_content(
         &self,
         source: &str,
+        sections: &[ParsedHeading],
         section: &ParsedHeading,
+        new_title: Option<&str>,
         new_content: &str,
-    ) -> String {
-        let before = &source[..section.content_start];
-        let target_body = &source[section.content_start..section.content_end];
-        let after = &source[section.content_end..];
+        include_subsection: bool,
+    ) -> Result<String, McpError> {
+        let effective_title = match new_title {
+            Some(title) => self.validate_replace_section_title(title)?,
+            None => section.title.clone(),
+        };
+        self.validate_replace_section_content(
+            new_content,
+            section,
+            &effective_title,
+            include_subsection,
+        )?;
+
+        let body_end = self.resolve_replace_section_body_end(
+            sections,
+            section,
+            include_subsection,
+        );
+        let heading_line_end = source[section.heading_start..]
+            .find('\n')
+            .map(|offset| section.heading_start + offset)
+            .unwrap_or(section.content_start);
+        let heading_line_break = &source[heading_line_end..section.content_start];
+        let before_heading = &source[..section.heading_start];
+        let target_body = &source[section.content_start..body_end];
+        let after = &source[body_end..];
 
         let leading_end = target_body
             .char_indices()
@@ -3778,20 +3952,26 @@ impl McpService {
         } else {
             &target_body[trailing_start..]
         };
+        let heading_line =
+            format!("{} {}", "#".repeat(section.level as usize), effective_title);
 
         let mut replaced = String::with_capacity(
-            before.len()
+            before_heading.len()
+                + heading_line.len()
+                + heading_line_break.len()
                 + leading_breaks.len()
                 + new_content.len()
                 + trailing_breaks.len()
                 + after.len(),
         );
-        replaced.push_str(before);
+        replaced.push_str(before_heading);
+        replaced.push_str(&heading_line);
+        replaced.push_str(heading_line_break);
         replaced.push_str(leading_breaks);
         replaced.push_str(new_content);
         replaced.push_str(trailing_breaks);
         replaced.push_str(after);
-        replaced
+        Ok(replaced)
     }
 
     ///
@@ -3912,11 +4092,23 @@ impl McpService {
         operation: &EditPageOperation,
     ) -> Result<String, McpError> {
         match operation {
-            EditPageOperation::ReplaceSection { section, content } => {
+            EditPageOperation::ReplaceSection {
+                section,
+                title,
+                content,
+                include_subsection,
+            } => {
                 let sections = self.parse_markdown_toc_sections(source)?;
                 let target =
                     self.resolve_section_selector(&sections, section.clone().into())?;
-                Ok(self.replace_section_content(source, &target, content))
+                self.replace_section_content(
+                    source,
+                    &sections,
+                    &target,
+                    title.as_deref(),
+                    content,
+                    include_subsection.unwrap_or(false),
+                )
             }
             EditPageOperation::InsertSection {
                 anchor,
@@ -5712,7 +5904,9 @@ mod tests {
                     instance_id.clone(),
                     EditPageOperation::ReplaceSection {
                         section: SectionSelector::ByTitle("Child".to_string()),
+                        title: None,
                         content: "updated".to_string(),
+                        include_subsection: None,
                     },
                 ),
             )
@@ -5817,6 +6011,317 @@ mod tests {
                 .to_string(),
             result.instance_id()
         );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_applies_replace_section_extension_fields() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        let renamed_page_id = manager
+            .create_page(
+                "/mcp/edit-replace-title",
+                "user",
+                "# Root\n\nintro\n\n## Child\n\nchild text\n".to_string(),
+            )
+            .expect("create page failed");
+        let renamed_source = manager
+            .get_page_source(&renamed_page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let renamed_result = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-title".to_string(),
+                    1,
+                    renamed_source
+                        .instance_id()
+                        .expect("instance_id missing")
+                        .to_string(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: Some("Renamed root".to_string()),
+                        content: "updated root body".to_string(),
+                        include_subsection: Some(false),
+                    },
+                ),
+            )
+            .expect("edit page should succeed");
+        let saved_renamed_source = manager
+            .get_page_source(&renamed_page_id, renamed_result.revision())
+            .expect("get saved source failed")
+            .expect("saved source missing");
+        assert_eq!(
+            saved_renamed_source.source(),
+            "# Renamed root\n\nupdated root body\n\n## Child\n\nchild text\n"
+        );
+
+        let kept_page_id = manager
+            .create_page(
+                "/mcp/edit-replace-keep-subsections",
+                "user",
+                "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n"
+                    .to_string(),
+            )
+            .expect("create page failed");
+        let kept_source = manager
+            .get_page_source(&kept_page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let kept_result = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-keep-subsections".to_string(),
+                    1,
+                    kept_source
+                        .instance_id()
+                        .expect("instance_id missing")
+                        .to_string(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: None,
+                        content: "updated root body".to_string(),
+                        include_subsection: Some(false),
+                    },
+                ),
+            )
+            .expect("edit page should succeed");
+        let saved_kept_source = manager
+            .get_page_source(&kept_page_id, kept_result.revision())
+            .expect("get saved source failed")
+            .expect("saved source missing");
+        assert_eq!(
+            saved_kept_source.source(),
+            "# Root\n\nupdated root body\n\n## Child\n\nchild text\n\n# Next\n\nnext\n"
+        );
+
+        let replaced_page_id = manager
+            .create_page(
+                "/mcp/edit-replace-subsections",
+                "user",
+                "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n"
+                    .to_string(),
+            )
+            .expect("create page failed");
+        let replaced_source = manager
+            .get_page_source(&replaced_page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let replaced_result = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-subsections".to_string(),
+                    1,
+                    replaced_source
+                        .instance_id()
+                        .expect("instance_id missing")
+                        .to_string(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: None,
+                        content: "updated root body".to_string(),
+                        include_subsection: Some(true),
+                    },
+                ),
+            )
+            .expect("edit page should succeed");
+        let saved_replaced_source = manager
+            .get_page_source(&replaced_page_id, replaced_result.revision())
+            .expect("get saved source failed")
+            .expect("saved source missing");
+        assert_eq!(
+            saved_replaced_source.source(),
+            "# Root\n\nupdated root body\n\n# Next\n\nnext\n"
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_validates_revision_and_instance_before_replace_section_content() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-replace-priority",
+                "user",
+                "# Root\n\nintro\n".to_string(),
+            )
+            .expect("create page failed");
+        manager
+            .put_page(&page_id, "user", "# Root\n\nlatest\n".to_string(), false)
+            .expect("put page failed");
+        let stale_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get stale source failed")
+            .expect("stale source missing");
+        let latest_source = manager
+            .get_page_source(&page_id, 2)
+            .expect("get latest source failed")
+            .expect("latest source missing");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        let stale_revision = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-priority".to_string(),
+                    1,
+                    stale_source
+                        .instance_id()
+                        .expect("stale instance_id missing")
+                        .to_string(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: None,
+                        content: "# Root\n\ninvalid".to_string(),
+                        include_subsection: Some(true),
+                    },
+                ),
+            )
+            .expect_err("stale revision should fail before content validation");
+        assert_eq!(stale_revision.code(), McpErrorCode::NotLatestRevision);
+
+        let mismatched_instance = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-priority".to_string(),
+                    2,
+                    "instance-mismatch".to_string(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: None,
+                        content: "# Root\n\ninvalid".to_string(),
+                        include_subsection: Some(true),
+                    },
+                ),
+            )
+            .expect_err("instance_id mismatch should fail before content validation");
+        assert_eq!(mismatched_instance.code(), McpErrorCode::InstanceIdNotMatch);
+
+        let latest_unchanged = manager
+            .get_page_source(&page_id, 2)
+            .expect("get latest source failed")
+            .expect("latest source missing");
+        assert_eq!(latest_unchanged.instance_id(), latest_source.instance_id());
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn edit_page_resolves_replace_section_selector_before_content_validation() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/edit-replace-selector-priority",
+                "user",
+                "# Root\n\nintro\n\n## Child\n\nfirst\n\n## Child\n\nsecond\n"
+                    .to_string(),
+            )
+            .expect("create page failed");
+        let latest_source = manager
+            .get_page_source(&page_id, 1)
+            .expect("get page source failed")
+            .expect("page source missing");
+        let instance_id = latest_source
+            .instance_id()
+            .expect("instance_id missing")
+            .to_string();
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        let missing_section = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-selector-priority".to_string(),
+                    1,
+                    instance_id.clone(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-999".to_string()),
+                        title: None,
+                        content: "# Missing\n\ninvalid".to_string(),
+                        include_subsection: Some(true),
+                    },
+                ),
+            )
+            .expect_err("missing section should fail before content validation");
+        assert_eq!(missing_section.code(), McpErrorCode::NotFound);
+
+        let empty_title_selector = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-selector-priority".to_string(),
+                    1,
+                    instance_id.clone(),
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ByTitle("   ".to_string()),
+                        title: None,
+                        content: "# Empty\n\ninvalid".to_string(),
+                        include_subsection: Some(true),
+                    },
+                ),
+            )
+            .expect_err("empty title selector should fail before content validation");
+        assert_eq!(empty_title_selector.code(), McpErrorCode::InvalidInput);
+
+        let ambiguous_title = service
+            .edit_page(
+                &auth,
+                &manager,
+                &EditPageRequest::new(
+                    "/mcp/edit-replace-selector-priority".to_string(),
+                    1,
+                    instance_id,
+                    EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ByTitle("Child".to_string()),
+                        title: None,
+                        content: "## Child\n\ninvalid".to_string(),
+                        include_subsection: Some(true),
+                    },
+                ),
+            )
+            .expect_err("ambiguous title should fail before content validation");
+        assert_eq!(ambiguous_title.code(), McpErrorCode::InvalidInput);
 
         fs::remove_dir_all(base_dir).expect("cleanup failed");
     }
@@ -6583,15 +7088,440 @@ mod tests {
 
         let replaced = service.replace_section_content(
             source,
+            &sections,
             &target,
+            None,
             "replaced root body",
-        );
+            true,
+        )
+        .expect("replace section content failed");
 
         assert!(replaced.starts_with("# Root\n"));
         assert!(replaced.contains("replaced root body"));
         assert!(!replaced.contains("intro"));
         assert!(!replaced.contains("## Child"));
         assert!(replaced.contains("# Next"));
+    }
+
+    #[test]
+    fn replace_section_content_renames_heading_and_keeps_subsections_by_default() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n";
+
+        let replaced = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("Renamed root".to_string()),
+                    content: "replaced root body".to_string(),
+                    include_subsection: None,
+                },
+            )
+            .expect("replace section should succeed");
+
+        assert!(replaced.starts_with("# Renamed root\n"));
+        assert!(replaced.contains("replaced root body"));
+        assert!(!replaced.contains("intro"));
+        assert!(replaced.contains("## Child\n\nchild text"));
+        assert!(replaced.contains("# Next\n\nnext"));
+    }
+
+    #[test]
+    fn replace_section_content_trims_title_and_allows_non_heading_marks() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n";
+
+        let trimmed_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("  Trimmed root  ".to_string()),
+                    content: "updated".to_string(),
+                    include_subsection: None,
+                },
+            )
+            .expect("trimmed title should succeed");
+        assert!(trimmed_title.starts_with("# Trimmed root\n"));
+        assert!(!trimmed_title.starts_with("#   Trimmed root"));
+
+        let hash_tag_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("#tag".to_string()),
+                    content: "updated".to_string(),
+                    include_subsection: None,
+                },
+            )
+            .expect("hash tag title should not be rejected");
+        assert!(hash_tag_title.starts_with("# #tag\n"));
+
+        let setext_like_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("Title ===".to_string()),
+                    content: "updated".to_string(),
+                    include_subsection: None,
+                },
+            )
+            .expect("setext-like title should not be rejected");
+        assert!(setext_like_title.starts_with("# Title ===\n"));
+    }
+
+    #[test]
+    fn replace_section_content_rejects_invalid_titles() {
+        let service = McpService::new();
+        let source = "# Root\n\nintro\n";
+
+        for title in [
+            "",
+            "   ",
+            "Root\nNext",
+            "Root\rNext",
+            "Root\u{0000}Next",
+            "# Root",
+            "## Root",
+        ] {
+            let error = service
+                .apply_edit_page_operation(
+                    source,
+                    &EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: Some(title.to_string()),
+                        content: "updated".to_string(),
+                        include_subsection: None,
+                    },
+                )
+                .expect_err("invalid title should fail");
+
+            assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn replace_section_content_treats_unspecified_and_false_include_subsection_equally() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n";
+        let operation = |include_subsection| {
+            service
+                .apply_edit_page_operation(
+                    source,
+                    &EditPageOperation::ReplaceSection {
+                        section: SectionSelector::ById("s-001".to_string()),
+                        title: None,
+                        content: "updated root body".to_string(),
+                        include_subsection,
+                    },
+                )
+                .expect("replace section should succeed")
+        };
+
+        let unspecified = operation(None);
+        let explicit_false = operation(Some(false));
+
+        assert_eq!(unspecified, explicit_false);
+        assert!(unspecified.contains("# Root\n\nupdated root body"));
+        assert!(unspecified.contains("## Child\n\nchild text"));
+        assert!(unspecified.contains("# Next\n\nnext"));
+    }
+
+    #[test]
+    fn replace_section_content_can_replace_subsections_when_requested() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n";
+
+        let replaced = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "replaced root body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect("replace section should succeed");
+
+        assert!(replaced.starts_with("# Root\n"));
+        assert!(replaced.contains("replaced root body"));
+        assert!(!replaced.contains("intro"));
+        assert!(!replaced.contains("## Child"));
+        assert!(replaced.contains("# Next\n\nnext"));
+    }
+
+    #[test]
+    fn replace_section_content_handles_sections_without_subsections() {
+        let service = McpService::new();
+        let source = "# Root\n\nroot body\n\n# Next\n\nnext body\n";
+
+        let replaced_false = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "updated root body".to_string(),
+                    include_subsection: Some(false),
+                },
+            )
+            .expect("replace section should succeed");
+        assert_eq!(
+            replaced_false,
+            "# Root\n\nupdated root body\n\n# Next\n\nnext body\n"
+        );
+
+        let replaced_true = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "updated root body\n\n## New child\n\nchild body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect("replace section should succeed");
+        assert_eq!(
+            replaced_true,
+            "# Root\n\nupdated root body\n\n## New child\n\nchild body\n\n# Next\n\nnext body\n"
+        );
+    }
+
+    #[test]
+    fn replace_section_content_handles_last_section_body_ranges() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nroot body\n\n# Last\n\nlast body\n\n## Child\n\nchild body\n";
+
+        let replaced_false = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ByTitle("Last".to_string()),
+                    title: None,
+                    content: "updated last body".to_string(),
+                    include_subsection: Some(false),
+                },
+            )
+            .expect("replace section should succeed");
+        assert_eq!(
+            replaced_false,
+            "# Root\n\nroot body\n\n# Last\n\nupdated last body\n\n## Child\n\nchild body\n"
+        );
+
+        let replaced_true = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ByTitle("Last".to_string()),
+                    title: None,
+                    content: "updated last body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect("replace section should succeed");
+        assert_eq!(
+            replaced_true,
+            "# Root\n\nroot body\n\n# Last\n\nupdated last body\n"
+        );
+    }
+
+    #[test]
+    fn replace_section_content_combines_title_change_and_body_range_selection() {
+        let service = McpService::new();
+        let source =
+            "# Root\n\nintro\n\n## Child\n\nchild text\n\n# Next\n\nnext\n";
+
+        let keep_children = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("Renamed root".to_string()),
+                    content: "updated root body".to_string(),
+                    include_subsection: Some(false),
+                },
+            )
+            .expect("replace section should succeed");
+        assert!(keep_children.starts_with("# Renamed root\n\nupdated root body"));
+        assert!(keep_children.contains("## Child\n\nchild text"));
+
+        let replace_children = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("Renamed root".to_string()),
+                    content: "updated root body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect("replace section should succeed");
+        assert!(replace_children.starts_with("# Renamed root\n\nupdated root body"));
+        assert!(!replace_children.contains("## Child"));
+    }
+
+    #[test]
+    fn replace_section_content_rejects_heading_misuse() {
+        let service = McpService::new();
+        let source = "# Root\n\nintro\n\n## Child\n\nchild text\n";
+
+        let invalid_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("# Root".to_string()),
+                    content: "updated".to_string(),
+                    include_subsection: None,
+                },
+            )
+            .expect_err("heading title must fail");
+        assert_eq!(invalid_title.code(), McpErrorCode::InvalidInput);
+
+        let invalid_content_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "updated\n\n## Unexpected\n".to_string(),
+                    include_subsection: None,
+                },
+            )
+            .expect_err("heading content must fail");
+        assert_eq!(invalid_content_heading.code(), McpErrorCode::InvalidInput);
+
+        let invalid_peer_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "updated\n\n# Peer\n".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect_err("same level heading content must fail");
+        assert_eq!(invalid_peer_heading.code(), McpErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn replace_section_content_rejects_target_heading_as_first_content_line() {
+        let service = McpService::new();
+        let source = "# Root\n\nintro\n\n## Child\n\nchild text\n";
+
+        let existing_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "\n\n# Root\n\nupdated".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect_err("existing heading line in content should fail");
+        assert_eq!(existing_heading.code(), McpErrorCode::InvalidInput);
+
+        let new_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: Some("Renamed root".to_string()),
+                    content: "\n# Renamed root\n\nupdated".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect_err("new heading line in content should fail");
+        assert_eq!(new_heading.code(), McpErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn replace_section_content_validates_content_heading_levels() {
+        let service = McpService::new();
+        let source = "# Root\n\nintro\n\n## Child\n\nchild text\n";
+
+        let allowed_deeper_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "updated\n\n## New child\n\nchild body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect("deeper heading should be allowed");
+        assert!(allowed_deeper_heading.contains("## New child\n\nchild body"));
+
+        let same_level_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-002".to_string()),
+                    title: None,
+                    content: "updated\n\n## Peer\n\npeer body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect_err("same level heading should fail");
+        assert_eq!(same_level_heading.code(), McpErrorCode::InvalidInput);
+
+        let shallower_heading = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-002".to_string()),
+                    title: None,
+                    content: "updated\n\n# Parent\n\nparent body".to_string(),
+                    include_subsection: Some(true),
+                },
+            )
+            .expect_err("shallower heading should fail");
+        assert_eq!(shallower_heading.code(), McpErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn replace_section_content_does_not_over_reject_non_heading_content() {
+        let service = McpService::new();
+        let source = "# Root\n\nintro\n\n# Next\n\nnext\n";
+
+        let hash_tag_content = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "Use #tag in plain text".to_string(),
+                    include_subsection: Some(false),
+                },
+            )
+            .expect("hash tag content should not be rejected");
+        assert!(hash_tag_content.contains("Use #tag in plain text"));
+
+        let setext_like_content = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::ReplaceSection {
+                    section: SectionSelector::ById("s-001".to_string()),
+                    title: None,
+                    content: "Setext-like title\n===\nplain body".to_string(),
+                    include_subsection: Some(false),
+                },
+            )
+            .expect("setext-like content should not be rejected");
+        assert!(setext_like_content.contains("Setext-like title\n===\nplain body"));
     }
 
     #[test]
@@ -6709,6 +7639,117 @@ mod tests {
     }
 
     #[test]
+    fn apply_edit_page_operation_preserves_edit_operation_representatives() {
+        let service = McpService::new();
+        let source = "# Root\n\nroot body\n\n# Next\n\nnext body\n";
+
+        let inserted_before = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::InsertSection {
+                    anchor: SectionSelector::ByTitle("Root".to_string()),
+                    placement: EditPageInsertSectionPlacement::Before,
+                    content: "# Before\n\nbefore body\n\n".to_string(),
+                },
+            )
+            .expect("insert before should succeed");
+        assert!(inserted_before.starts_with("# Before\n\nbefore body\n\n# Root"));
+
+        let inserted_after = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::InsertSection {
+                    anchor: SectionSelector::ById("s-001".to_string()),
+                    placement: EditPageInsertSectionPlacement::After,
+                    content: "# After\n\nafter body\n\n".to_string(),
+                },
+            )
+            .expect("insert after should succeed");
+        assert!(inserted_after.contains("# Root\n\nroot body\n\n# After"));
+        assert!(inserted_after.contains("after body\n\n# Next"));
+
+        let deleted = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::DeleteSection {
+                    section: SectionSelector::ByTitle("Root".to_string()),
+                },
+            )
+            .expect("delete section should succeed");
+        assert_eq!(deleted, "# Next\n\nnext body\n");
+
+        let replaced_first = service
+            .apply_edit_page_operation(
+                "alpha beta alpha",
+                &EditPageOperation::ReplaceText {
+                    old_text: "alpha".to_string(),
+                    new_text: "gamma".to_string(),
+                    occurrence: None,
+                },
+            )
+            .expect("replace first should succeed");
+        assert_eq!(replaced_first, "gamma beta alpha");
+
+        let replaced_all = service
+            .apply_edit_page_operation(
+                "alpha beta alpha",
+                &EditPageOperation::ReplaceText {
+                    old_text: "alpha".to_string(),
+                    new_text: "gamma".to_string(),
+                    occurrence: Some(EditPageReplaceTextOccurrence::All),
+                },
+            )
+            .expect("replace all should succeed");
+        assert_eq!(replaced_all, "gamma beta gamma");
+    }
+
+    #[test]
+    fn apply_edit_page_operation_preserves_selector_failure_classification() {
+        let service = McpService::new();
+        let source = "# Root\n\nbody\n\n## Child\n\nfirst\n\n## Child\n\nsecond\n";
+
+        let missing_by_id = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::DeleteSection {
+                    section: SectionSelector::ById("s-999".to_string()),
+                },
+            )
+            .expect_err("missing id should fail");
+        assert_eq!(missing_by_id.code(), McpErrorCode::NotFound);
+
+        let missing_by_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::DeleteSection {
+                    section: SectionSelector::ByTitle("Missing".to_string()),
+                },
+            )
+            .expect_err("missing title should fail");
+        assert_eq!(missing_by_title.code(), McpErrorCode::NotFound);
+
+        let empty_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::DeleteSection {
+                    section: SectionSelector::ByTitle("   ".to_string()),
+                },
+            )
+            .expect_err("empty title should fail");
+        assert_eq!(empty_title.code(), McpErrorCode::InvalidInput);
+
+        let ambiguous_title = service
+            .apply_edit_page_operation(
+                source,
+                &EditPageOperation::DeleteSection {
+                    section: SectionSelector::ByTitle("Child".to_string()),
+                },
+            )
+            .expect_err("ambiguous title should fail");
+        assert_eq!(ambiguous_title.code(), McpErrorCode::InvalidInput);
+    }
+
+    #[test]
     fn apply_edit_page_operation_classifies_section_operation_failures() {
         let service = McpService::new();
         let source = "# Root\n\nbody\n";
@@ -6718,7 +7759,9 @@ mod tests {
                 source,
                 &EditPageOperation::ReplaceSection {
                     section: SectionSelector::ById("s-999".to_string()),
+                    title: None,
                     content: "updated".to_string(),
+                    include_subsection: None,
                 },
             )
             .expect_err("missing replace target should fail");

@@ -93,6 +93,7 @@ front matter 起因のwrite系失敗は`invalid_input`として扱う。
   front matter を含む raw source 全体を受け付ける
 - `initialize.instructions`は、すべてのHTTP要求でBearer認証を使用する旨を
   案内する
+- `initialize.instructions`は、`edit_page.replace_section` の `content` に対象見出し行を含めず、見出し変更は `title`、サブセクション込み置換は `include_subsection: true` を使う旨を案内する
 - front matter詳細仕様およびMCP prompts仕様は、
   MCP標準resourcesの固定組み込みresourceとして参照できる
 - MCP promptsのfront matter、field、cursor、message、errorの外部契約は
@@ -789,7 +790,9 @@ properties:
 definitions:
   replace_section:
     description: >-
-      章の置き換え
+      章の置き換え。対象見出し行は `content` に含めず、見出し変更には
+      `title` を使う。既定では既存サブセクションを保持し、
+      サブセクション込み置換には `include_subsection: true` を指定する。
     type: "object"
     required:
       - "type"
@@ -808,11 +811,29 @@ definitions:
           指定を受け付け、文字列指定は見出し文字列指定として扱う。
         $ref : "#/definitions/section_selector"
 
+      title:
+        description: >-
+          置き換え後の見出し文字列。未指定時は既存見出しを維持する。
+          指定時は対象セクションの見出しレベルを維持し、見出し文字列だけを
+          置換する。空文字、改行、制御文字、Markdown ATX 見出し行は
+          受け付けない。
+        type: "string"
+
       content:
         description: >-
-          置き換え後のセクション本文。
-          対象見出し行は保持される。本文部分のみ置き換える。
+          置き換え後のセクション本文。対象セクション自身の見出し行は含めない。
+          `include_subsection` が未指定または false の場合、Markdown 見出し行は
+          受け付けない。`include_subsection` が true の場合、対象セクションより
+          深いレベルの見出し行だけを受け付け、同階層以上の見出し行は
+          受け付けない。
         type: "string"
+
+      include_subsection:
+        description: >-
+          対象セクション配下のサブセクションを置換範囲に含めるかを指定する。
+          未指定時は false とし、既存サブセクションを保持する。true の場合は
+          対象セクション配下のサブセクションを含めて置換する。
+        type: "boolean"
 
   insert_section:
     description: >-
@@ -986,6 +1007,9 @@ properties:
 - `invalid_input`
   - `path` が不正
   - `operation` の指定形式が不正
+  - `replace_section.title` が不正
+  - `replace_section.content` に許可されない Markdown 見出し行が含まれる
+  - `replace_section.include_subsection` の型が不正
 - `not_latest_revision`
   - `revision`が最新リビジョンを指していない
 - `instance_id_not_match`

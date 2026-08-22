@@ -730,6 +730,98 @@ mod tests {
         (body_json, payload_json)
     }
 
+    async fn assert_edit_tool_call_error(
+        context: &TestServerContext,
+        session_id: &str,
+        arguments: Value,
+        expected_code: &str,
+        expected_message: Option<&str>,
+    ) -> Value {
+        let request_body = build_tool_call_body("edit_page", arguments);
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", session_id)
+            .send()
+            .await
+            .expect("send edit_page error tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read edit_page error tool call response failed");
+        let (body_json, payload_json) = parse_tool_result_payload(&body_text);
+
+        assert_eq!(body_json["jsonrpc"], "2.0");
+        assert_eq!(body_json["id"], 2);
+        assert_eq!(body_json["result"]["isError"], true);
+        assert_eq!(body_json["result"]["content"][0]["type"], "text");
+        assert_eq!(payload_json["code"], expected_code);
+        if let Some(expected_message) = expected_message {
+            assert_eq!(payload_json["message"], expected_message);
+        }
+
+        payload_json
+    }
+
+    fn get_latest_page_source(context: &TestServerContext, path: &str) -> String {
+        let state = context.state.read().expect("lock app state failed");
+        let page_id = state
+            .db()
+            .get_page_id_by_path(path)
+            .expect("resolve page id failed")
+            .expect("page id missing");
+        let resolved = state
+            .db()
+            .get_current_page_state_by_path(path)
+            .expect("resolve current page failed")
+            .expect("current page missing");
+        let latest_revision = resolved
+            .latest_revision()
+            .expect("latest revision missing");
+
+        state
+            .db()
+            .get_page_source(&page_id, latest_revision)
+            .expect("get latest source failed")
+            .expect("latest source missing")
+            .source()
+            .to_string()
+    }
+
+    fn json_value_contains(value: &Value, needle: &str) -> bool {
+        match value {
+            Value::String(value) => value.contains(needle),
+            Value::Array(values) => values
+                .iter()
+                .any(|value| json_value_contains(value, needle)),
+            Value::Object(values) => values
+                .values()
+                .any(|value| json_value_contains(value, needle)),
+            _ => false,
+        }
+    }
+
+    fn json_value_has_required_fields(value: &Value, fields: &[&str]) -> bool {
+        match value {
+            Value::Array(values) => {
+                let required_matches = values.iter().all(|value| {
+                    value
+                        .as_str()
+                        .is_some_and(|required| fields.contains(&required))
+                }) && values.len() == fields.len();
+                required_matches
+                    || values
+                        .iter()
+                        .any(|value| json_value_has_required_fields(value, fields))
+            }
+            Value::Object(values) => values
+                .values()
+                .any(|value| json_value_has_required_fields(value, fields)),
+            _ => false,
+        }
+    }
+
     ///
     /// 標準 initialize request が成功し、
     /// JSON-RPC result と session ヘッダを返すことを確認する。
@@ -806,6 +898,19 @@ mod tests {
             body_json["result"]["serverInfo"]["version"],
             env!("CARGO_PKG_VERSION"),
         );
+        let instructions = body_json["result"]["instructions"]
+            .as_str()
+            .expect("initialize instructions missing");
+        assert!(instructions.contains(
+            "Use Bearer authentication on every HTTP request."
+        ));
+        assert!(instructions.contains(
+            "For edit_page.replace_section, do not include the target heading line in content"
+        ));
+        assert!(instructions.contains("use title to rename the section"));
+        assert!(instructions.contains(
+            "use include_subsection: true when replacing subsections too"
+        ));
 
         /*
          * セッションを明示的に閉じて background task を終了させる
@@ -852,6 +957,72 @@ mod tests {
         let body_json: Value = serde_json::from_str(&body_text)
             .expect("decode unauthorized response failed");
         assert_eq!(body_json["reason"], "missing bearer token for MCP");
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/list` 経由で公開される `edit_page.replace_section`
+    /// schema と説明文を確認する。
+    ///
+    #[actix_web::test]
+    async fn tools_list_exposes_replace_section_extension_schema() {
+        let context = spawn_test_server().await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        })
+        .to_string();
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send tools/list failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read tools/list response failed");
+        let body_json = parse_sse_payload(&body_text);
+        let tools = body_json["result"]["tools"]
+            .as_array()
+            .expect("tools result missing");
+        let edit_page_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "edit_page")
+            .expect("edit_page tool missing");
+        let schema = &edit_page_tool["inputSchema"];
+        let schema_text = serde_json::to_string(schema)
+            .expect("edit_page schema must serialize");
+
+        assert!(schema_text.contains("replace_section"));
+        assert!(schema_text.contains("title"));
+        assert!(schema_text.contains("include_subsection"));
+        let legacy_name = ["include", "sub", "section"].join("_");
+        assert!(!schema_text.contains(&legacy_name));
+        assert!(json_value_has_required_fields(
+            schema,
+            &["type", "section", "content"],
+        ));
+        assert!(json_value_contains(
+            schema,
+            "対象見出し行は content に含めず、見出し変更には title を使用する。",
+        ));
+        assert!(json_value_contains(
+            schema,
+            "置換後本文。対象セクション自身の Markdown 見出し行は含めない。",
+        ));
+        assert!(json_value_contains(
+            schema,
+            "true の場合は対象セクション配下のサブセクションを含めて置換する。",
+        ));
+
         context.shutdown().await;
     }
 
@@ -2638,6 +2809,369 @@ mod tests {
     }
 
     ///
+    /// `tools/call(edit_page)` 経由で `replace_section` 拡張の
+    /// 代表正常系が保存結果へ反映されることを確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_applies_replace_section_extension_fields() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        context.put_page(
+            "/mcp/page",
+            "alice",
+            concat!(
+                "# page\nintro\n\n",
+                "## Target\nold body\n\n",
+                "### Child\nchild body\n\n",
+                "## Next\nnext body\n",
+            ),
+        );
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        /*
+         * title と include_subsection:false の組み合わせで、
+         * 見出し変更と既存サブセクション保持を確認する
+         */
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        let rename_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Target",
+                    "title": "Renamed",
+                    "content": "new body",
+                    "include_subsection": false
+                }
+            }),
+        );
+        let rename_response = context
+            .post_json(&rename_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send replace_section rename request failed");
+        assert_eq!(rename_response.status(), 200);
+        let rename_text = rename_response
+            .text()
+            .await
+            .expect("read replace_section rename response failed");
+        let (_, rename_payload) = parse_tool_result_payload(&rename_text);
+        assert_eq!(rename_payload["path"], "/mcp/page");
+        assert!(rename_payload["instance_id"].is_string());
+        assert_eq!(rename_payload["summary"], "page edited");
+        assert_eq!(
+            get_latest_page_source(&context, "/mcp/page"),
+            concat!(
+                "# page\nintro\n\n",
+                "## Renamed\nnew body\n\n",
+                "### Child\nchild body\n\n",
+                "## Next\nnext body\n",
+            ),
+        );
+
+        /*
+         * include_subsection 未指定が false と同じく
+         * 既存サブセクションを保持することを確認する
+         */
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        let default_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Renamed",
+                    "content": "default body"
+                }
+            }),
+        );
+        let default_response = context
+            .post_json(&default_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send replace_section default request failed");
+        assert_eq!(default_response.status(), 200);
+        let default_text = default_response
+            .text()
+            .await
+            .expect("read replace_section default response failed");
+        let (_, default_payload) = parse_tool_result_payload(&default_text);
+        assert_eq!(default_payload["summary"], "page edited");
+        assert_eq!(
+            get_latest_page_source(&context, "/mcp/page"),
+            concat!(
+                "# page\nintro\n\n",
+                "## Renamed\ndefault body\n\n",
+                "### Child\nchild body\n\n",
+                "## Next\nnext body\n",
+            ),
+        );
+
+        /*
+         * include_subsection:true で対象配下の
+         * サブセクション込み置換を確認する
+         */
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        let include_body = build_tool_call_body(
+            "edit_page",
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Renamed",
+                    "content": "whole body\n\n### Replacement\nchild replaced",
+                    "include_subsection": true
+                }
+            }),
+        );
+        let include_response = context
+            .post_json(&include_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send replace_section include request failed");
+        assert_eq!(include_response.status(), 200);
+        let include_text = include_response
+            .text()
+            .await
+            .expect("read replace_section include response failed");
+        let (_, include_payload) = parse_tool_result_payload(&include_text);
+        assert_eq!(include_payload["summary"], "page edited");
+        assert_eq!(
+            get_latest_page_source(&context, "/mcp/page"),
+            concat!(
+                "# page\nintro\n\n",
+                "## Renamed\nwhole body\n\n",
+                "### Replacement\nchild replaced\n\n",
+                "## Next\nnext body\n",
+            ),
+        );
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/call(edit_page)` 経由で `replace_section.content` の
+    /// 見出し行制約違反が tool result 内の論理エラーになることを確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_rejects_invalid_replace_section_content() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        context.put_page(
+            "/mcp/page",
+            "alice",
+            concat!(
+                "# Root\nintro\n\n",
+                "## Child\nchild body\n\n",
+                "# Next\nnext body\n",
+            ),
+        );
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Root",
+                    "content": "\n# Root\nupdated",
+                    "include_subsection": true
+                }
+            }),
+            "invalid_input",
+            Some(
+                "replace_section.content must not include the target heading line",
+            ),
+        )
+        .await;
+
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Root",
+                    "title": "Renamed root",
+                    "content": "\n# Renamed root\nupdated",
+                    "include_subsection": true
+                }
+            }),
+            "invalid_input",
+            Some(
+                "replace_section.content must not include the target heading line",
+            ),
+        )
+        .await;
+
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Root",
+                    "content": "updated\n\n## Unexpected\nbody",
+                    "include_subsection": false
+                }
+            }),
+            "invalid_input",
+            Some(
+                "replace_section.content must not include Markdown heading lines",
+            ),
+        )
+        .await;
+
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": revision,
+                "instance_id": instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Child",
+                    "content": "updated\n\n## Peer\nbody",
+                    "include_subsection": true
+                }
+            }),
+            "invalid_input",
+            Some(
+                "replace_section.content must not include same or higher level headings",
+            ),
+        )
+        .await;
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `replace_section.content` が不正でも、既存の整合性確認と
+    /// selector 解決のエラー分類が優先されることを確認する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_tool_call_prioritizes_replace_section_existing_errors() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        context.put_page("/mcp/page", "alice", "# Root\nbody\n");
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let (stale_revision, stale_instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        context.put_page("/mcp/page", "alice", "# Root\nlatest\n");
+
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": stale_revision,
+                "instance_id": stale_instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Root",
+                    "content": "\n# Root\nupdated",
+                    "include_subsection": true
+                }
+            }),
+            "not_latest_revision",
+            Some("revision is not latest"),
+        )
+        .await;
+
+        let (latest_revision, _) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": latest_revision,
+                "instance_id": "instance-mismatch",
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Root",
+                    "content": "\n# Root\nupdated",
+                    "include_subsection": true
+                }
+            }),
+            "instance_id_not_match",
+            Some("instance_id does not match latest content"),
+        )
+        .await;
+
+        let (latest_revision, latest_instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        assert_edit_tool_call_error(
+            &context,
+            &session_id,
+            json!({
+                "path": "/mcp/page",
+                "revision": latest_revision,
+                "instance_id": latest_instance_id,
+                "operation": {
+                    "type": "replace_section",
+                    "section": "Missing",
+                    "content": "\n# Root\nupdated",
+                    "include_subsection": true
+                }
+            }),
+            "not_found",
+            Some("section not found: Missing"),
+        )
+        .await;
+
+        context.shutdown().await;
+    }
+
+    ///
     /// `tools/call(append_page)` 成功時に `instance_id` を返すことを確認する。
     ///
     #[actix_web::test]
@@ -3303,6 +3837,120 @@ mod tests {
     }
 
     ///
+    /// active GET stream 中は idle TTL 相当時間を超えても
+    /// session が維持されることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test
+    /// mcp::transport::tests::active_get_stream_keeps_session_alive`
+    /// で実行する。
+    ///
+    #[actix_web::test]
+    async fn active_get_stream_keeps_session_alive() {
+        let context = spawn_test_server_with_session_config(
+            SessionManagerConfig::new_with_heartbeat_interval(
+                Duration::from_millis(120),
+                Duration::from_millis(30),
+                Duration::from_millis(20),
+                8,
+            ),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        let stream_response = context
+            .get_stream()
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send active get stream request failed");
+        assert_eq!(stream_response.status(), 200);
+        let content_type = stream_response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.contains("text/event-stream"),
+            "expected event-stream, got {content_type}",
+        );
+
+        tokio::time::sleep(Duration::from_millis(220)).await;
+
+        let post_response = context
+            .post_json(GET_PAGE_TOOL_CALL_BODY)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send kept alive post request failed");
+        assert_eq!(post_response.status(), 200);
+
+        drop(stream_response);
+        let delete_response = context
+            .delete_session()
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send kept alive session delete request failed");
+        assert_eq!(delete_response.status(), 204);
+        context.shutdown().await;
+    }
+
+    ///
+    /// DELETE 後に active stream 由来の Heartbeat が
+    /// session を復活させないことを確認する。
+    ///
+    /// # 注記
+    /// `cargo test
+    /// mcp::transport::tests::delete_after_active_stream_does_not_restore_session`
+    /// で実行する。
+    ///
+    #[actix_web::test]
+    async fn delete_after_active_stream_does_not_restore_session() {
+        let context = spawn_test_server_with_session_config(
+            SessionManagerConfig::new_with_heartbeat_interval(
+                Duration::from_millis(120),
+                Duration::from_millis(30),
+                Duration::from_millis(20),
+                8,
+            ),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        let stream_response = context
+            .get_stream()
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send active get stream request failed");
+        assert_eq!(stream_response.status(), 200);
+
+        let delete_response = context
+            .delete_session()
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send active session delete request failed");
+        assert_eq!(delete_response.status(), 204);
+
+        tokio::time::sleep(Duration::from_millis(70)).await;
+
+        let post_response = context
+            .post_json(GET_PAGE_TOOL_CALL_BODY)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send deleted session post request failed");
+        assert_eq!(post_response.status(), 401);
+
+        drop(stream_response);
+        context.shutdown().await;
+    }
+
+    ///
     /// session 上限超過時に最古 session が eviction されることを確認する。
     ///
     /// # 注記
@@ -3334,6 +3982,61 @@ mod tests {
             .expect("send first session get request failed");
         assert_eq!(first_response.status(), 401);
 
+        let second_delete_response = context
+            .delete_session()
+            .header("mcp-session-id", &second_session_id)
+            .send()
+            .await
+            .expect("send second session delete request failed");
+        assert_eq!(second_delete_response.status(), 204);
+        context.shutdown().await;
+    }
+
+    ///
+    /// active GET stream 中でも session 上限制御による
+    /// LRU eviction が維持されることを確認する。
+    ///
+    /// # 注記
+    /// `cargo test
+    /// mcp::transport::tests::active_stream_does_not_prevent_session_limit_eviction`
+    /// で実行する。
+    ///
+    #[actix_web::test]
+    async fn active_stream_does_not_prevent_session_limit_eviction() {
+        let context = spawn_test_server_with_session_config(
+            SessionManagerConfig::new_with_heartbeat_interval(
+                Duration::from_secs(300),
+                Duration::from_secs(300),
+                Duration::from_millis(20),
+                1,
+            ),
+        )
+        .await;
+        let first_session_id = context.initialize_session().await;
+        context.send_initialized_notification(&first_session_id).await;
+
+        let stream_response = context
+            .get_stream()
+            .header("mcp-session-id", &first_session_id)
+            .send()
+            .await
+            .expect("send first active get stream request failed");
+        assert_eq!(stream_response.status(), 200);
+
+        let second_session_id = context.initialize_session().await;
+        assert_ne!(first_session_id, second_session_id);
+
+        tokio::time::sleep(Duration::from_millis(70)).await;
+
+        let first_response = context
+            .get_stream()
+            .header("mcp-session-id", &first_session_id)
+            .send()
+            .await
+            .expect("send evicted first session get request failed");
+        assert_eq!(first_response.status(), 401);
+
+        drop(stream_response);
         let second_delete_response = context
             .delete_session()
             .header("mcp-session-id", &second_session_id)

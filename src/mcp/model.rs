@@ -755,8 +755,14 @@ pub(crate) enum McpEditPageOperation {
         /// 対象セクション
         section: McpEditPageSectionSelector,
 
+        /// 変更後の見出し文字列
+        title: Option<String>,
+
         /// 置換後本文
         content: String,
+
+        /// サブセクションを含めて置換するかどうか
+        include_subsection: Option<bool>,
     },
 
     /// セクション挿入
@@ -1798,12 +1804,17 @@ impl From<EditPageReplaceTextOccurrence> for McpEditPageReplaceTextOccurrence {
 impl From<EditPageToolOperation> for McpEditPageOperation {
     fn from(operation: EditPageToolOperation) -> Self {
         match operation {
-            EditPageToolOperation::ReplaceSection { section, content } => {
-                Self::ReplaceSection {
-                    section: section.into(),
-                    content,
-                }
-            }
+            EditPageToolOperation::ReplaceSection {
+                section,
+                title,
+                content,
+                include_subsection,
+            } => Self::ReplaceSection {
+                section: section.into(),
+                title,
+                content,
+                include_subsection,
+            },
             EditPageToolOperation::InsertSection {
                 anchor,
                 placement,
@@ -1868,12 +1879,17 @@ impl From<McpEditPageReplaceTextOccurrence>
 impl From<McpEditPageOperation> for ServiceEditPageOperation {
     fn from(operation: McpEditPageOperation) -> Self {
         match operation {
-            McpEditPageOperation::ReplaceSection { section, content } => {
-                Self::ReplaceSection {
-                    section: section.into(),
-                    content,
-                }
-            }
+            McpEditPageOperation::ReplaceSection {
+                section,
+                title,
+                content,
+                include_subsection,
+            } => Self::ReplaceSection {
+                section: section.into(),
+                title,
+                content,
+                include_subsection,
+            },
             McpEditPageOperation::InsertSection {
                 anchor,
                 placement,
@@ -2037,6 +2053,63 @@ impl From<GetPageSectionResult> for GetPageSectionResponse {
             revision: result.revision(),
             section: McpSectionInfo::from(result.section()),
             content: result.content().to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EditPageSectionSelector,
+        EditPageToolOperation,
+        McpEditPageOperation,
+        McpEditPageSectionSelector,
+        SectionSelector,
+        ServiceEditPageOperation,
+    };
+
+    #[test]
+    fn edit_page_replace_section_conversion_preserves_extension_fields() {
+        let operation = EditPageToolOperation::ReplaceSection {
+            section: EditPageSectionSelector::Text("Overview".to_string()),
+            title: Some("Updated overview".to_string()),
+            content: "updated".to_string(),
+            include_subsection: Some(true),
+        };
+
+        let mcp_operation = McpEditPageOperation::from(operation);
+        match &mcp_operation {
+            McpEditPageOperation::ReplaceSection {
+                section,
+                title,
+                content,
+                include_subsection,
+            } => {
+                assert_eq!(
+                    *section,
+                    McpEditPageSectionSelector::Text("Overview".to_string()),
+                );
+                assert_eq!(title.as_deref(), Some("Updated overview"));
+                assert_eq!(content, "updated");
+                assert_eq!(*include_subsection, Some(true));
+            }
+            _ => panic!("unexpected operation"),
+        }
+
+        let service_operation = ServiceEditPageOperation::from(mcp_operation);
+        match service_operation {
+            ServiceEditPageOperation::ReplaceSection {
+                section,
+                title,
+                content,
+                include_subsection,
+            } => {
+                assert_eq!(section, SectionSelector::ByTitle("Overview".to_string()));
+                assert_eq!(title.as_deref(), Some("Updated overview"));
+                assert_eq!(content, "updated");
+                assert_eq!(include_subsection, Some(true));
+            }
+            _ => panic!("unexpected operation"),
         }
     }
 }

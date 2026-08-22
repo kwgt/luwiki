@@ -44,6 +44,8 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
   - 通知非対応
   - 監査
   - 再構成導線
+- `docs/MCP_EDIT_TEST_VIEWPOINTS.md`
+  - `replace_section` 拡張後の edit operation 回帰観点
 
 ## 2. 回帰確認の使い方
 
@@ -186,6 +188,10 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 10. 固定組み込み resource とページ由来 resource の path prefix 非適用境界
 11. `derived rebuild --target resources` / `all` 後に resources 候補と URI 索引を復元できること
 12. `resources.listChanged` を宣言せず通知しないこと
+13. active SSE stream 生存中の session 維持と `last_access_at` 更新
+14. SSE keep-alive、JSON-RPC message、SSE event payload、MCP handshake の互換維持
+15. stream 終了、DELETE close、sweep、LRU eviction と Heartbeat tick の競合
+16. `replace_section` 拡張後の既存 edit operation と既存 MCP tools / prompts / resources の代表回帰
 
 ## 12. 4.9.5 の整理結果
 
@@ -318,3 +324,63 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 6. pathベースtoolsには従来のprefix制約を維持すること
 7. promptsには引き続きページ用path prefix制約を適用しないこと
 8. REST APIの既存レスポンス形式とMCP標準resources応答を混同しないこと
+
+## 15. session Heartbeat 変更後の回帰範囲
+
+### 15.1 session維持
+
+1. active SSE stream 生存中に session metadata の `last_access_at` が更新されること
+2. active SSE stream 生存中、idle TTL 相当時間を超えても対象 session が維持されること
+3. 既存 `sse_keep_alive(Duration::from_secs(30))` による SSE response-level keep-alive が維持されること
+4. Heartbeat が JSON-RPC message、SSE event payload、MCP handshake を変更しないこと
+5. Heartbeat が Bearer 認証境界や Authorization header の扱いを変更しないこと
+
+### 15.2 session失効と非延命境界
+
+1. active SSE stream が存在しない session は従来どおり idle TTL で失効すること
+2. stream 終了、drop、error、close 後は Heartbeat が停止し、通常の idle TTL 判定へ戻ること
+3. `has_session()` 呼び出しだけでは `last_access_at` が更新されないこと
+4. 認証失敗、session ID 欠落、session not found request で session が延命されないこと
+5. DELETE `/mcp` 後に Heartbeat が session を復活させないこと
+6. session 期限切れ POST の HTTP 401 が維持されること
+
+### 15.3 上限制御と競合
+
+1. session 上限超過時の LRU eviction が引き続き機能すること
+2. active stream 中でも、上限超過時は設計どおり eviction され得ること
+3. sweep、LRU eviction、明示 close と Heartbeat tick が競合しても panic が発生しないこと
+4. sweep、LRU eviction、明示 close と Heartbeat tick が競合しても session metadata が不正に残留しないこと
+
+## 16. `replace_section` 拡張後の代表回帰範囲
+
+### 16.1 edit operation
+
+1. `replace_section` の `title` 未指定時に既存見出しが維持されること
+2. `replace_section` の `title` 指定時に見出しレベルが維持され、見出し文字列だけが置換されること
+3. `include_subsection` 未指定時が `false` と同じ挙動になること
+4. `include_subsection: false` で既存サブセクションが保持されること
+5. `include_subsection: true` で現行相当の子セクション込み置換になること
+6. `content` に許可されない Markdown 見出し行を含めた場合に `invalid_input` になること
+7. revision 不一致、instance_id 不一致が operation 内容検証より先に返ること
+
+### 16.2 既存 edit operation
+
+1. `insert_section` の before / after 挿入と見出し保持が壊れていないこと
+2. `delete_section` が対象セクション範囲だけを削除すること
+3. `replace_text` の first / all occurrence が壊れていないこと
+4. section selector の文字列指定、`by=id`、`by=title` が引き続き動作すること
+5. selector 不正、同名 title 複数、section not found の分類が既存どおりであること
+6. `edit_page` が `update` scope で扱われ、`append` scope では許可されないこと
+
+### 16.3 既存MCP公開面
+
+1. `tools/list` で既存 tools と `edit_page` schema が取得できること
+2. `edit_page` schema に `title` / `include_subsection` と説明文が反映されていること
+3. `create_page`、`update_page`、`append_page`、`rename_page`、
+   `get_page`、`get_page_toc`、`get_page_section`、`list_pages`、
+   `search_pages` の代表呼び出しが壊れていないこと
+4. write 系 tool の Bearer scope 判定が壊れていないこと
+5. `prompts/list`、`prompts/get`、`resources/list`、`resources/read` が
+   同じ handshake 済み session 上で tools と共存すること
+6. `initialize.instructions` が Bearer 認証注意を維持し、
+   `replace_section` 注意文を含むこと

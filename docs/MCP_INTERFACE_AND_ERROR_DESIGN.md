@@ -408,6 +408,31 @@ Markdown 解析結果から動的生成する revision-local な識別子とす�
 少なくとも `by=id` と `by=title` を受け付ける selector とし、
 文字列単独指定は `by=title` の省略形として扱う。
 
+`replace_section` は、既存 operation の schema 拡張として以下を受け付ける。
+
+- `section`
+  - 置換対象セクションを指定する
+- `title` 任意
+  - 未指定時は既存見出しを維持する
+  - 指定時は対象セクションの見出しレベルを維持し、見出し文字列だけを置換する
+  - 空文字、改行、制御文字、Markdown ATX 見出し行は `invalid_input` とする
+- `content`
+  - 対象セクション自身の見出し行を含めない
+  - `include_subsection` 未指定時または `false` の場合、Markdown 見出し行を含めると `invalid_input` とする
+  - `include_subsection` が `true` の場合、対象セクションより深いレベルの見出し行だけを許可し、同階層以上の見出し行は `invalid_input` とする
+- `include_subsection` 任意
+  - 真偽値として受け付ける
+  - 未指定時は `false`
+  - `false` の場合は既存サブセクションを保持する
+  - `true` の場合は対象セクション配下のサブセクションを含めて置換する
+
+`edit_page` では、`revision` / `instance_id` の内容整合性確認を
+operation 内容検証より先に行う。
+`revision` が最新 revision と一致しない場合は `not_latest_revision`、
+`instance_id` が最新内容の識別子と一致しない場合は
+`instance_id_not_match` を返し、
+その場合は `replace_section` の selector 解決や `title` / `content` 検証へ進まない。
+
 #### 3.4.8 `append_page`
 
 入力:
@@ -584,6 +609,9 @@ MCP ツールの失敗として扱う。
   - path 不正、検索式不正、section 指定不正
   - `create_page` `update_page` `append_page` に渡された
     raw source 内の front matter 構文不正またはスキーマ不正
+  - `edit_page.replace_section.title` が不正
+  - `edit_page.replace_section.content` に許可されない Markdown 見出し行が含まれる
+  - `edit_page.replace_section.include_subsection` の型が不正
 - `not_latest_revision`
   - 更新要求の `revision` が最新 revision と一致しない
 - `instance_id_not_match`
@@ -645,6 +673,9 @@ write 系および認可失敗系では、
 - 認可失敗はツール実行エラーとして `forbidden` へ写像する
 - DB 層やサービス層の詳細エラーは、そのまま外部へ露出しない
 - 外部へは論理区分 `code` と説明 `message` を返す
+- Heartbeat は MCP session metadata の内部更新であり、
+  外部 protocol message、JSON-RPC envelope、SSE response body、
+  Bearer 認証境界を変更しない
 
 ### 4.2 エラー処理の段階
 
@@ -670,6 +701,10 @@ MCP endpoint の失敗は、以下の 3 段階に分けて扱う。
 
 本章で定義する写像は 3 の範囲を対象とする。
 
+Heartbeat 導入後も、session 失効時の失敗は既存 transport / backend 準拠の
+挙動を維持する。Heartbeat のために独自 tool error、追加 JSON-RPC payload、
+LuWiki 独自 SSE event は導入しない。
+
 ### 4.3 論理エラー区分への写像
 
 内部エラーは、少なくとも以下の論理区分へ写像する。
@@ -692,6 +727,9 @@ MCP endpoint の失敗は、以下の 3 段階に分けて扱う。
   - rename 先指定不正
   - front matter 構文不正
   - front matter スキーマ不正
+  - `replace_section.title` 不正
+  - `replace_section.content` の許可されない Markdown 見出し行
+  - `replace_section.include_subsection` 型不正
 - `not_latest_revision`
   - 更新要求の `revision` が最新 revision と一致しない
 - `instance_id_not_match`
@@ -843,6 +881,8 @@ rename 先 path が不正な場合は `invalid_input` とする。
 - `not_latest_revision` と `instance_id_not_match` を更新系の公開整合性エラーとして扱う
 - 既存 DB / service 層の詳細失敗は外部へ直接露出しない
 - 外部応答は `code` と `message` を基本形とし、監査ログ用詳細分類とは分離する
+- Heartbeat は内部 session metadata 更新に限定し、
+  protocol message、JSON-RPC payload、SSE response body、Bearer 認証境界を変更しない
 
 ## 5. MCP promptsの入出力とprotocol error
 

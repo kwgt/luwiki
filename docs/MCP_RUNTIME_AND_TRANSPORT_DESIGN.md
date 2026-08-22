@@ -1085,6 +1085,7 @@ transport 再構築後の方針として、以下の構成を採用する。
 - `initialize`を含む標準MCP handshake、SSE response、session管理を使用する
 - endpoint は `/mcp` の単一 endpoint とする
 - `initialize.instructions`はBearer認証前提と固定組み込みresourceの導線を案内する
+- SSE 接続維持と session metadata の Heartbeat は責務を分離する
 
 この方針の目的は、MCP 互換性をアプリ固有実装より優先し、
 一般的な AI エージェントが `initialize` から接続できる状態を最小条件として固定することにある。
@@ -1155,6 +1156,8 @@ session と再接続用 cache がプロセス寿命まで残留し得る。
   Streamable HTTP の protocol 処理は引き続き公開クレートへ委譲する
 - TTL / LRU の判断は transport 境界で完結させ、
   `service.rs` へ持ち込まない
+- rmcp-actix-web の fork / patch / transport 独自化は採用せず、
+  session metadata 更新は `ManagedSessionManager` wrapper の範囲で扱う
 
 `ManagedSessionManager` が保持する metadata は少なくとも以下とする。
 
@@ -1168,6 +1171,9 @@ session と再接続用 cache がプロセス寿命まで残留し得る。
   `initialize_session`、`create_stream`、
   `create_standalone_stream`、`resume`、`accept_message`
   が成功した時点
+- Heartbeat として更新する:
+  active SSE stream が存在し、その stream が生存している間に
+  一定間隔で更新する
 - 更新しない:
   `has_session()`
 
@@ -1176,6 +1182,12 @@ session と再接続用 cache がプロセス寿命まで残留し得る。
 `has_session()` を呼ぶためである。
 ここで TTL を延命すると、
 実処理を伴わない polling だけで session が維持されてしまう。
+
+SSE 接続維持は既存の `sse_keep_alive(Duration::from_secs(30))` に任せる。
+この response-level の `:ping\n\n` 送信は、
+session metadata の `last_access_at` 更新契機として扱わない。
+Heartbeat は SSE response body へ LuWiki 独自 event を追加せず、
+`ManagedSessionManager` の stream wrapper で `last_access_at` を更新する。
 
 初期設定値は以下とする。
 
@@ -1196,6 +1208,10 @@ TTL / LRU の具体動作は以下とする。
 - forced close 後は metadata を除去し、
   以後の `GET` / `POST` / `DELETE` は
   backend 準拠で `session not found` 相当となる
+- Heartbeat は `last_access_at` の更新を通じて上記 TTL / LRU の判断へ接続し、
+  TTL / LRU そのものの意味は変更しない
+- active stream 中でも session 上限制御は維持し、
+  上限超過時は LRU eviction され得る
 
 background sweep task は
 HTTP server 全体で共有する `ManagedSessionManager` の生成時に
