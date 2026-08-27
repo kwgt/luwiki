@@ -75,7 +75,7 @@ policy:
 ```yaml
 ---
 name: luwiki
-description: Use Luwiki to find, read, create, edit, append, or rename Wiki pages, and to maintain project or agent scratchpad content.
+description: Use Luwiki whenever a request involves Wiki pages, Wiki content, Wiki paths or links, page sections, or project/agent scratchpad content. Use it for finding, reading, creating, localized section or text editing, full-page replacement, appending, and renaming Wiki pages. In particular, treat requests to modify part of an existing page, update a section, or replace specific text as Luwiki editing tasks.
 allowed-tools:
   - mcp__local_wiki__get_page
   - mcp__local_wiki__get_page_toc
@@ -95,18 +95,22 @@ allowed-tools:
 ## SKILL.md本文
 
 ````markdown
+# Luwiki MCP
 
-# Wiki MCP
+Luwiki is a Markdown-based Wiki system.
 
-Use the Wiki's MCP tools as the source of truth. Pass absolute Wiki paths to tool arguments. Do not expose or invent internal page IDs.
+Use Luwiki's MCP tools and their runtime results as the source of truth for current state and capabilities. This skill defines Luwiki-specific workflows, conventions, and expected tool roles, but does not by itself prove that a named tool is currently available.
 
-## Resolve Wiki paths
+Prefer the least-destructive tool that directly matches the requested operation. Do not emulate a narrow operation with a broader write operation when the narrow tool is available.
 
-Treat every Wiki page as both content and a container. Resolve a relative path from the current page path itself, not from the page's parent.
+## Resolve relative page paths
+
+Luwiki treats every Wiki page as both content and a container. Resolve a relative path from the current page path itself, not from the page's parent.
 
 - Current page `/a/b` + relative path `c/d` => `/a/b/c/d`
 - Do **not** resolve that example to `/a/c/d`; that is filesystem file semantics.
 - Keep an absolute path unchanged.
+- Do not create or request Wiki page paths that contain whitespace characters. Ask the user for a whitespace-free path when the intended path contains spaces, tabs, or other whitespace.
 - Establish the current page before resolving a relative reference. If the request does not identify it and context does not make it unambiguous, ask for the current page path.
 - Resolve relative references to absolute Wiki paths before calling a page tool.
 - Apply the server's documented path normalization and validation after selecting the current page as the base. Do not guess behavior for ambiguous dot segments or other syntax not defined by the Wiki contract.
@@ -123,14 +127,14 @@ Use the same rule for links found in page content, user-supplied relative page r
 | Browse a subtree | `list_pages` | Page through path-sorted results with `next_cursor` while `has_more` is true. |
 | Search by content | `search_pages` | Explicitly select one or more targets: `headings`, `body`, `code`, `front_matter`. This is top-N search, not cursor pagination. |
 | Create a page | `create_page` | Supply the final absolute destination path and complete initial raw Markdown. |
-| Replace a whole page | `update_page` | Use only when full-source replacement is intended. |
+| Replace a whole page | `update_page` | Use only when complete raw-source replacement is the intended operation. For a localized change, use it only as a last resort after `edit_page` has been specifically sought through the host's available tool-discovery mechanism and confirmed unavailable for reasons other than authorization or permission restrictions. |
 | Make a focused edit | `edit_page` | Prefer for section or text changes; first obtain current concurrency tokens. |
 | Add content at the end | `append_page` | Supply only the exact suffix, including any needed newlines. |
 | Change a page path | `rename_page` | Supply the final absolute destination in `rename_to`, not merely a parent path. |
 
 ## Read efficiently
 
-1. Resolve the requested Wiki path.
+1. Resolve the requested Wiki page path.
 2. For a small or necessarily complete page, call `get_page`.
 3. For a large page or a request about one topic, call `get_page_toc`, choose the section, then call `get_page_section` using `{ "by": "id", "value": "..." }` when possible.
 4. Treat section IDs as dynamic and valid only within the corresponding revision. Do not reuse one across revisions.
@@ -151,13 +155,17 @@ An empty result is a valid result, not an error.
 Before changing content, read enough of the current page to preserve unrelated Markdown and front matter.
 
 - Prefer `edit_page` for localized changes.
-- Use `update_page` only when replacing the complete raw source is deliberate.
+- Follow the tool-selection rules above. Never use a broader write tool to bypass an unavailable or unauthorized narrower operation.
 - Use `append_page` only for literal end-of-page additions. Include `\n` in `content` when line separation is required; the server does not add it.
 - Preserve existing front matter unless the request explicitly changes it. For `create_page` and `update_page`, `content` may be the complete raw source including front matter.
 - Do not use `append_page` to edit front matter.
 - Do not attempt restore, deleted-page access, asset operations, locks, templates, outgoing-link lists, or backlink lists; the initial tool set does not support them.
 
 ### Focused edits
+
+When a localized edit is requested, do not conclude that `edit_page` is unavailable merely because it was omitted from a previously exposed or discovered subset of MCP tools. Some hosts expose tools lazily or return only a filtered subset during tool discovery. Do not treat permission denial, authorization failure, or `forbidden` as tool unavailability. Never use `update_page` or another broader write tool to work around such a restriction.
+
+If `edit_page` is not currently available to call, use the host's tool discovery mechanism, when available, to look specifically for `edit_page` or localized Wiki editing before falling back to `update_page`.
 
 Immediately before `edit_page`, obtain the latest `revision` and `instance_id` from `get_page` or `get_page_toc`. Pass both values back unchanged with exactly one operation:
 
@@ -172,7 +180,7 @@ If `edit_page` returns `not_latest_revision` or `instance_id_not_match`, fetch t
 
 ## Rename safely
 
-Resolve both source and destination as absolute Wiki paths. Verify that `rename_to` is the final target. Do not rename the root page, and do not move a page beneath its own current path. Both paths must be permitted by the active path-prefix authorization.
+Resolve both source and destination as absolute Wiki page paths. Verify that `rename_to` is the final target. Do not rename the root page, and do not move a page beneath its own current path. Both paths must be permitted by the active path-prefix authorization.
 
 ## Handle errors
 
@@ -180,7 +188,7 @@ Resolve both source and destination as absolute Wiki paths. Verify that `rename_
 - `forbidden`: stop and report that the required scope or path-prefix permission is missing. Do not search around the restriction.
 - `conflict`: re-read state when useful; do not overwrite or rename blindly.
 - `invalid_input`: correct path, selector, limits, operation shape, Markdown heading constraints, or front matter before retrying.
-- `unsupported`: explain that the requested operation is outside the available Wiki tools.
+- `unsupported`: explain that the requested operation is outside the available Luwiki tools.
 - `internal_error`: report the failure without claiming the change succeeded; retry only when safe.
 
 After a write, use the returned `path`, `revision`, and `instance_id` as authoritative. Summarize what changed and clearly state any part that could not be completed.
