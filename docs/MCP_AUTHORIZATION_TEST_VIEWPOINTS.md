@@ -2,8 +2,9 @@
 
 本書は、MCPサーバ機能における認証・認可テストの観点を整理した独立したテスト観点書である。
 
-位置付けとしては、`docs/MCP_IMPLEMENTATION_DESIGN_TASKS.md` の 4.9.1 に対応する成果物であり、
-MCP 設計書群から参照される実装・テスト実装向け文書として扱う。
+位置付けとしては、`docs/REQUIREMENTS.md`の認証・認可要求と
+現行MCP設計書群に対応する
+実装・テスト実装向け文書として扱う。
 
 MCP では Basic認証を前提とせず Bearer認証を入口とし、
 認可では Bearer スコープと path prefix 制約を組み合わせて判定する。
@@ -16,7 +17,7 @@ MCP 公開層、path ベースサービス層、MCP 固有の失敗分類を中�
   - 12. MCPサーバ機能
   - 13. 監査ログ
 - `docs/MCP_INTERNAL_DESIGN.md`
-  - 5.1 認証・認可
+  - 6.1 認証・認可
 - `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`
   - 2.2 path 解決の共通処理
   - 2.3 操作種別ごとの橋渡し
@@ -32,6 +33,8 @@ MCP 公開層、path ベースサービス層、MCP 固有の失敗分類を中�
   - 5.6 エラー処理・テスト方針
 - `docs/MCP_RESOURCE_SPECS.md`
   - MCP resourcesの認証、認可、path prefix、秘匿方針
+- `docs/MCP_ASSET_TOOL_TEST_VIEWPOINTS.md`
+  - MCP アセット Tools固有の認可、payload、状態秘匿、DB接続観点
 
 ## 2. 観点の使い方
 
@@ -284,3 +287,58 @@ MCP 公開層、path ベースサービス層、MCP 固有の失敗分類を中�
   - HTTP 401、handshake済みsession、Bearerとsessionの組合せ
 - 既存tool回帰テスト
   - pathベースtoolsのprefix制約維持
+
+## 12. MCP アセット Toolsの認証・認可観点
+
+### 12.1 transport認証
+
+1. Authorization欠落をHTTP 401、reason `missing bearer token for MCP`で拒否すること
+2. 存在しないBearerおよび失効済みBearerをHTTP 401、
+   reason `unauthorized`で拒否すること
+3. transport認証失敗時はアセットtool handlerへ到達しないこと
+4. transport認証失敗時はJSON-RPC result・error、アセットmetadata、
+   `data_base64`、page path、file_nameを返さないこと
+
+### 12.2 scopeとReadOnly
+
+1. `list_page_assets`、`resolve_page_asset`、`get_page_asset_metadata`、
+   `get_page_asset_data` がread操作であること
+2. read scopeを持つ認証文脈で参照系4 toolを許可すること
+3. `upload_page_asset` がupdate操作であること
+4. update scopeを持つ認証文脈で `upload_page_asset` を許可すること
+5. `delete_page_asset` がdelete操作であること
+6. delete scopeを持つ認証文脈で `delete_page_asset` を許可すること
+7. legacy write scopeが参照系4 tool、upload、deleteのrequired scopeを満たすこと
+8. append scopeだけの認証文脈ではアセット6 toolを許可しないこと
+9. read scopeだけの認証文脈では `upload_page_asset` と
+   `delete_page_asset` を拒否すること
+10. update scopeだけの認証文脈では `delete_page_asset` を拒否すること
+11. delete scopeだけの認証文脈では `upload_page_asset` を拒否すること
+12. `ReadOnly`属性ユーザでもread scopeがあれば参照系4 toolを利用できること
+13. `ReadOnly`属性ユーザでは、update / delete / write scopeを持っていても
+    `upload_page_asset` と `delete_page_asset` を拒否すること
+14. scope不足と`ReadOnly`拒否がHTTP 401ではなくJSON-RPC `InvalidRequest`、
+    `forbidden`、`operation is not allowed`へ変換されること
+
+### 12.3 path prefix制約
+
+1. アセット6 toolでは、入力 `path` を正規化した後のpage pathを
+   path prefix制約の判定対象にすること
+2. `file_name`、`asset_id`、内部保存パスをpath prefix制約の判定対象にしないこと
+3. 許可prefix内の `path` では、対象assetのfile_nameにかかわらず
+   required scope判定後の処理へ進めること
+4. 許可prefix外の `path` では、page_id解決やasset解決より前に拒否すること
+5. path入力不正とpath prefix制約違反が別失敗分類として扱われること
+6. path prefix制約違反時に、削除済みasset、ゾンビasset、
+   所属ページ不一致assetの存在有無を外部へ漏らさないこと
+
+### 12.4 実施レイヤ分割
+
+- service単体・結合テスト
+  - required scope、legacy write包含、ReadOnly拒否、path prefix判定
+- serverテスト
+  - tool別required scopeとprotocol error変換
+- transport統合テスト
+  - HTTP 401、handshake済みsession、Bearerとsessionの組合せ
+- 既存tool回帰テスト
+  - pathベースtools、prompts、resourcesの認可境界維持

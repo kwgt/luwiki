@@ -26,12 +26,18 @@ use crate::markdown_source::front_matter::{
 };
 use crate::mcp::service::{
     AppendServiceResult,
+    DeletePageAssetResult,
     EditPageResult,
+    GetPageAssetDataResult,
+    GetPageAssetMetadataResult,
     GetPageResult,
     GetPageSectionResult,
     GetPageTocResult,
+    ListPageAssetsResult,
     ListPagesResult,
+    ResolvePageAssetResult,
     SearchPagesResult,
+    UploadPageAssetResult,
     WritePageResult,
 };
 
@@ -39,27 +45,34 @@ use super::auth::McpAuthGateway;
 use super::errors::McpError;
 use super::model::{
     AppendPageResponse,
+    DeletePageAssetResponse,
     EditPageRequest,
     EditPageResponse,
+    GetPageAssetDataResponse,
+    GetPageAssetMetadataResponse,
     GetPageRequest,
     GetPageResponse,
     GetPageSectionRequest,
     GetPageSectionResponse,
     GetPageTocRequest,
     GetPageTocResponse,
+    ListPageAssetsRequest,
+    ListPageAssetsResponse,
     GetPromptServiceResult,
     ListPagesRequest,
     ListPagesResponse,
     ListPromptsServiceResult,
     ListResourcesServiceResult,
     McpRequestEnvelope,
-    McpResponseEnvelope,
     McpToolRequest,
-    McpToolResponse,
+    PageAssetByFileRequest,
     RenamePageRequest,
+    ResolvePageAssetResponse,
     ReadResourceServiceResult,
     SearchPagesRequest,
     SearchPagesResponse,
+    UploadPageAssetRequest,
+    UploadPageAssetResponse,
     WritePageRequest,
     WritePageResponse,
 };
@@ -331,220 +344,6 @@ impl McpHandler {
         }
     }
 
-    ///
-    /// 認証済みMCP要求を処理する
-    ///
-    /// # 引数
-    /// * `auth` - 認証文脈
-    /// * `db` - データベースマネージャ
-    /// * `fts_config` - FTS設定
-    /// * `request` - 受理したMCP要求
-    ///
-    /// # 戻り値
-    /// ツール別の応答モデルを返す。
-    ///
-    pub(crate) fn handle(
-        &self,
-        auth: &AuthContext,
-        db: &DatabaseManager,
-        fts_config: &FtsIndexConfig,
-        address: Option<IpAddr>,
-        request: McpRequestEnvelope,
-    ) -> Result<McpResponseEnvelope, McpError> {
-        /*
-         * ツール別入力をサービス層へディスパッチする
-         */
-        let tool_name = request.tool_name();
-        let response = match request.request() {
-            McpToolRequest::GetPage(input) => McpToolResponse::GetPage(
-                self.audit_success(
-                    db,
-                    auth,
-                    address,
-                    build_get_page_audit_record,
-                    &request,
-                    self.service
-                    .get_page(auth, db, input.path(), input.revision())?
-                )?
-                .into(),
-            ),
-            McpToolRequest::GetPageToc(input) => {
-                McpToolResponse::GetPageToc(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_get_page_toc_audit_record,
-                        &request,
-                        self.service
-                        .get_page_toc(
-                            auth,
-                            db,
-                            input.path(),
-                            input.revision(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::ListPages(input) => {
-                McpToolResponse::ListPages(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_list_pages_audit_record,
-                        &request,
-                        self.service
-                        .list_pages(
-                            auth,
-                            db,
-                            input.prefix(),
-                            input.limit(),
-                            input.cursor(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::SearchPages(input) => {
-                McpToolResponse::SearchPages(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_search_pages_audit_record,
-                        &request,
-                        self.service
-                        .search_pages(
-                            auth,
-                            db,
-                            fts_config,
-                            input.query(),
-                            input.targets(),
-                            input.prefix(),
-                            input.limit(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::CreatePage(input) => {
-                McpToolResponse::CreatePage(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_write_page_audit_record,
-                        &request,
-                        self.service
-                        .create_page(
-                            auth,
-                            db,
-                            input.path(),
-                            input.content(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::UpdatePage(input) => {
-                McpToolResponse::UpdatePage(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_write_page_audit_record,
-                        &request,
-                        self.service
-                        .update_page(
-                            auth,
-                            db,
-                            input.path(),
-                            input.content(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::EditPage(input) => McpToolResponse::EditPage(
-                self.audit_success(
-                    db,
-                    auth,
-                    address,
-                    build_edit_page_audit_record,
-                    &request,
-                    self.service
-                    .edit_page(
-                        auth,
-                        db,
-                        &ServiceEditPageRequest::from(input.clone()),
-                    )?
-                )?
-                .into(),
-            ),
-            McpToolRequest::AppendPage(input) => {
-                McpToolResponse::AppendPage(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_append_page_audit_record,
-                        &request,
-                        self.service
-                        .append_page(
-                            auth,
-                            db,
-                            input.path(),
-                            input.content(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::RenamePage(input) => {
-                McpToolResponse::RenamePage(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_rename_page_audit_record,
-                        &request,
-                        self.service
-                        .rename_page(
-                            auth,
-                            db,
-                            input.path(),
-                            input.rename_to(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-            McpToolRequest::GetPageSection(input) => {
-                McpToolResponse::GetPageSection(
-                    self.audit_success(
-                        db,
-                        auth,
-                        address,
-                        build_get_page_section_audit_record,
-                        &request,
-                        self.service
-                        .get_page_section(
-                            auth,
-                            db,
-                            input.path(),
-                            input.section().clone().into(),
-                            input.revision(),
-                        )?
-                    )?
-                    .into(),
-                )
-            }
-        };
-
-        Ok(McpResponseEnvelope::new(tool_name, response))
-    }
 
     ///
     /// `get_page` を tool 単位入口として処理する
@@ -819,6 +618,312 @@ impl McpHandler {
                 auth,
                 address,
                 build_get_page_section_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
+    /// `list_page_assets` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `path` - 対象ページ path
+    ///
+    /// # 戻り値
+    /// `list_page_assets` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_list_page_assets(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        path: &str,
+    ) -> Result<ListPageAssetsResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::ListPageAssets,
+            McpToolRequest::ListPageAssets(ListPageAssetsRequest::new(
+                path.to_string(),
+            )),
+        );
+
+        let result = match self.service.list_page_assets(auth, db, path) {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_list_page_assets_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
+    /// `resolve_page_asset` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// `resolve_page_asset` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_resolve_page_asset(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        path: &str,
+        file_name: &str,
+    ) -> Result<ResolvePageAssetResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::ResolvePageAsset,
+            McpToolRequest::ResolvePageAsset(PageAssetByFileRequest::new(
+                path.to_string(),
+                file_name.to_string(),
+            )),
+        );
+
+        let result = match self
+            .service
+            .resolve_page_asset(auth, db, path, file_name)
+        {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_resolve_page_asset_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
+    /// `get_page_asset_metadata` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// `get_page_asset_metadata` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_get_page_asset_metadata(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        path: &str,
+        file_name: &str,
+    ) -> Result<GetPageAssetMetadataResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::GetPageAssetMetadata,
+            McpToolRequest::GetPageAssetMetadata(
+                PageAssetByFileRequest::new(
+                    path.to_string(),
+                    file_name.to_string(),
+                ),
+            ),
+        );
+
+        let result = match self
+            .service
+            .get_page_asset_metadata(auth, db, path, file_name)
+        {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_get_page_asset_metadata_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
+    /// `get_page_asset_data` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// `get_page_asset_data` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_get_page_asset_data(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        path: &str,
+        file_name: &str,
+    ) -> Result<GetPageAssetDataResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::GetPageAssetData,
+            McpToolRequest::GetPageAssetData(PageAssetByFileRequest::new(
+                path.to_string(),
+                file_name.to_string(),
+            )),
+        );
+
+        let result = match self
+            .service
+            .get_page_asset_data(auth, db, path, file_name)
+        {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_get_page_asset_data_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
+    /// `upload_page_asset` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `path` - 対象ページ path
+    /// * `file_name` - アップロードするアセットファイル名
+    /// * `mime_type` - アップロードするアセットの MIME 種別
+    /// * `data_base64` - base64 エンコード済みアセット本体
+    ///
+    /// # 戻り値
+    /// `upload_page_asset` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_upload_page_asset(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        path: &str,
+        file_name: &str,
+        mime_type: &str,
+        data_base64: &str,
+    ) -> Result<UploadPageAssetResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::UploadPageAsset,
+            McpToolRequest::UploadPageAsset(UploadPageAssetRequest::new(
+                path.to_string(),
+                file_name.to_string(),
+                mime_type.to_string(),
+                data_base64.to_string(),
+            )),
+        );
+
+        let result = match self.service.upload_page_asset(
+            auth,
+            db,
+            path,
+            file_name,
+            mime_type,
+            data_base64,
+        ) {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_upload_page_asset_audit_record,
+                &request,
+                result,
+            )?,
+            Err(error) => {
+                self.record_error(db, auth, address, &request, &error);
+                return Err(error);
+            }
+        };
+
+        Ok(result.into())
+    }
+
+    ///
+    /// `delete_page_asset` を tool 単位入口として処理する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `address` - 入力元アドレス
+    /// * `path` - 対象ページ path
+    /// * `file_name` - 削除するアセットファイル名
+    ///
+    /// # 戻り値
+    /// `delete_page_asset` の公開応答モデルを返す。
+    ///
+    pub(crate) fn handle_delete_page_asset(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        address: Option<IpAddr>,
+        path: &str,
+        file_name: &str,
+    ) -> Result<DeletePageAssetResponse, McpError> {
+        let request = McpRequestEnvelope::new(
+            super::tools::McpToolName::DeletePageAsset,
+            McpToolRequest::DeletePageAsset(PageAssetByFileRequest::new(
+                path.to_string(),
+                file_name.to_string(),
+            )),
+        );
+
+        let result = match self
+            .service
+            .delete_page_asset(auth, db, path, file_name)
+        {
+            Ok(result) => self.audit_success(
+                db,
+                auth,
+                address,
+                build_delete_page_asset_audit_record,
                 &request,
                 result,
             )?,
@@ -1183,8 +1288,8 @@ impl McpHandler {
                 return;
             }
         };
-        if let Err(err) = sink.record(record) {
-            warn!(error = %err, "audit log record failed");
+        if sink.record(record).is_err() {
+            warn!(failure = "record", "audit log operation failed");
         }
     }
 }
@@ -1196,11 +1301,11 @@ fn resolve_audit_user_id(
     match db.get_user_id_by_name(auth.user_id()) {
         Ok(Some(user_id)) => Some(user_id),
         Ok(None) => {
-            warn!(user = auth.user_id(), "audit user id not found");
+            warn!(failure = "not_found", "audit user id resolution failed");
             None
         }
-        Err(err) => {
-            warn!(user = auth.user_id(), error = %err, "audit user id lookup failed");
+        Err(_) => {
+            warn!(failure = "lookup", "audit user id resolution failed");
             None
         }
     }
@@ -1712,6 +1817,254 @@ fn build_get_page_section_audit_record(
     )
 }
 
+///
+/// list_page_assets成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `_request` - 対象要求
+/// * `result` - アセット一覧結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// アセット一覧成功監査レコードを返す。
+///
+fn build_list_page_assets_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &ListPageAssetsResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::ListPageAssets,
+        user_id,
+        auth,
+        address,
+        Some(result.path().to_string()),
+        None,
+        Some(format!("count={}", result.assets().len())),
+    )
+}
+
+///
+/// resolve_page_asset成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `_request` - 対象要求
+/// * `result` - アセット解決結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// アセット解決成功監査レコードを返す。
+///
+fn build_resolve_page_asset_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &ResolvePageAssetResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::ResolvePageAsset,
+        user_id,
+        auth,
+        address,
+        Some(result.path().to_string()),
+        None,
+        Some(page_asset_audit_summary(
+            result.asset().asset_id(),
+            result.asset().file_name(),
+            result.asset().mime_type(),
+            result.asset().size(),
+        )),
+    )
+}
+
+///
+/// get_page_asset_metadata成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `_request` - 対象要求
+/// * `result` - アセットmetadata取得結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// アセットmetadata取得成功監査レコードを返す。
+///
+fn build_get_page_asset_metadata_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &GetPageAssetMetadataResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::GetPageAssetMetadata,
+        user_id,
+        auth,
+        address,
+        Some(result.path().to_string()),
+        None,
+        Some(page_asset_audit_summary(
+            result.asset().asset_id(),
+            result.asset().file_name(),
+            result.asset().mime_type(),
+            result.asset().size(),
+        )),
+    )
+}
+
+///
+/// get_page_asset_data成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `_request` - 対象要求
+/// * `result` - アセット本体取得結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// アセット本体取得成功監査レコードを返す。
+///
+fn build_get_page_asset_data_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &GetPageAssetDataResult,
+    user_id: UserId,
+) -> AuditRecord {
+    build_success_record(
+        AuditOperation::GetPageAssetData,
+        user_id,
+        auth,
+        address,
+        Some(result.path().to_string()),
+        None,
+        Some(page_asset_audit_summary(
+            result.asset().asset_id(),
+            result.asset().file_name(),
+            result.asset().mime_type(),
+            result.asset().size(),
+        )),
+    )
+}
+
+///
+/// upload_page_asset成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `_request` - 対象要求
+/// * `result` - アセットアップロード結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// アセットアップロード成功監査レコードを返す。
+///
+fn build_upload_page_asset_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &UploadPageAssetResult,
+    user_id: UserId,
+) -> AuditRecord {
+    /*
+     * 公開済み結果から安全な監査項目を構築
+     */
+    let asset = result.asset();
+
+    build_success_record(
+        AuditOperation::UploadPageAsset,
+        user_id,
+        auth,
+        address,
+        Some(asset.path().to_string()),
+        None,
+        Some(format!(
+            "asset_id={} file_name={} mime_type={} size={} summary={}",
+            asset.asset_id(),
+            asset.file_name(),
+            asset.mime_type(),
+            asset.size(),
+            result.summary(),
+        )),
+    )
+}
+
+///
+/// delete_page_asset成功監査レコードを生成する
+///
+/// # 引数
+/// * `auth` - 認証文脈
+/// * `address` - 入力元IP address
+/// * `_request` - 対象要求
+/// * `result` - アセット削除結果
+/// * `user_id` - 操作主体ユーザID
+///
+/// # 戻り値
+/// アセット削除成功監査レコードを返す。
+///
+fn build_delete_page_asset_audit_record(
+    auth: &AuthContext,
+    address: Option<IpAddr>,
+    _request: &McpRequestEnvelope,
+    result: &DeletePageAssetResult,
+    user_id: UserId,
+) -> AuditRecord {
+    /*
+     * 公開済み結果から安全な監査項目を構築
+     */
+    build_success_record(
+        AuditOperation::DeletePageAsset,
+        user_id,
+        auth,
+        address,
+        Some(result.path().to_string()),
+        None,
+        Some(format!(
+            "asset_id={} file_name={} summary={}",
+            result.asset_id(),
+            result.file_name(),
+            result.summary(),
+        )),
+    )
+}
+
+///
+/// アセットmetadataの監査summaryを生成する
+///
+/// # 引数
+/// * `asset_id` - アセットID
+/// * `file_name` - アセットファイル名
+/// * `mime_type` - MIME種別
+/// * `size` - raw binary size
+///
+/// # 戻り値
+/// 監査summaryを返す。
+///
+fn page_asset_audit_summary(
+    asset_id: &str,
+    file_name: &str,
+    mime_type: &str,
+    size: u64,
+) -> String {
+    format!(
+        "asset_id={} file_name={} mime_type={} size={}",
+        asset_id,
+        file_name,
+        mime_type,
+        size,
+    )
+}
+
 fn build_error_audit_record(
     auth: &AuthContext,
     address: Option<IpAddr>,
@@ -1720,7 +2073,10 @@ fn build_error_audit_record(
     user_id: UserId,
 ) -> AuditRecord {
     let operation = audit_operation(request);
-    let result = audit_result_from_error(error);
+    let result = normalize_asset_update_audit_result(
+        operation,
+        audit_result_from_error(error),
+    );
     let target_path = match result {
         AuditResult::PathPrefixDenied => denied_path_from_error(error)
             .or_else(|| primary_target_path(request)),
@@ -1774,6 +2130,22 @@ fn audit_operation(request: &McpRequestEnvelope) -> AuditOperation {
         McpToolRequest::AppendPage(_) => AuditOperation::Append,
         McpToolRequest::RenamePage(_) => AuditOperation::Rename,
         McpToolRequest::GetPageSection(_) => AuditOperation::GetSection,
+        McpToolRequest::ListPageAssets(_) => AuditOperation::ListPageAssets,
+        McpToolRequest::ResolvePageAsset(_) => {
+            AuditOperation::ResolvePageAsset
+        }
+        McpToolRequest::GetPageAssetMetadata(_) => {
+            AuditOperation::GetPageAssetMetadata
+        }
+        McpToolRequest::GetPageAssetData(_) => {
+            AuditOperation::GetPageAssetData
+        }
+        McpToolRequest::UploadPageAsset(_) => {
+            AuditOperation::UploadPageAsset
+        }
+        McpToolRequest::DeletePageAsset(_) => {
+            AuditOperation::DeletePageAsset
+        }
     }
 }
 
@@ -1791,6 +2163,18 @@ fn primary_target_path(request: &McpRequestEnvelope) -> Option<String> {
         McpToolRequest::AppendPage(input) => Some(input.path().to_string()),
         McpToolRequest::RenamePage(input) => Some(input.path().to_string()),
         McpToolRequest::GetPageSection(input) => Some(input.path().to_string()),
+        McpToolRequest::ListPageAssets(input) => Some(input.path().to_string()),
+        McpToolRequest::ResolvePageAsset(input) => Some(input.path().to_string()),
+        McpToolRequest::GetPageAssetMetadata(input) => {
+            Some(input.path().to_string())
+        }
+        McpToolRequest::GetPageAssetData(input) => Some(input.path().to_string()),
+        McpToolRequest::UploadPageAsset(input) => {
+            Some(input.path().to_string())
+        }
+        McpToolRequest::DeletePageAsset(input) => {
+            Some(input.path().to_string())
+        }
     }
 }
 
@@ -1799,6 +2183,32 @@ fn denied_path_from_error(error: &McpError) -> Option<String> {
         .message()
         .strip_prefix("path prefix denied: ")
         .map(str::to_string)
+}
+
+///
+/// 更新系アセット操作の監査結果分類を
+/// 設計上の分類へ正規化する
+///
+/// # 引数
+/// * `operation` - 監査対象操作
+/// * `result` - 共通エラー分類から得た監査結果
+///
+/// # 戻り値
+/// 更新系アセット操作の ReadOnly 拒否だけを
+/// scope 拒否へ変換した結果を返す。
+///
+fn normalize_asset_update_audit_result(
+    operation: AuditOperation,
+    result: AuditResult,
+) -> AuditResult {
+    match (operation, result) {
+        (
+            AuditOperation::UploadPageAsset
+            | AuditOperation::DeletePageAsset,
+            AuditResult::ReadOnlyDenied,
+        ) => AuditResult::ScopeDenied,
+        (_, result) => result,
+    }
 }
 
 fn audit_result_from_error(error: &McpError) -> AuditResult {
@@ -1837,10 +2247,14 @@ fn audit_result_from_error(error: &McpError) -> AuditResult {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::fs;
-    use std::sync::{Arc, RwLock};
+    use std::sync::{Arc, Mutex, RwLock};
 
     use tempfile::tempdir;
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
 
     use super::*;
     use crate::audit::buffer::AppendAuditBuffer;
@@ -1852,12 +2266,79 @@ mod tests {
         BearerScopeSet,
         PathPrefixSet,
         TokenId,
+        UserAttribute,
+        UserAttributeSet,
     };
-    use crate::fts::FtsIndexConfig;
     use crate::mcp::errors::{McpErrorCode, McpErrorResponse};
-    use crate::mcp::model::{GetPageRequest, WritePageRequest};
+    use crate::mcp::model::WritePageRequest;
     use crate::mcp::service::McpService;
     use crate::mcp::tools::McpToolName;
+
+    ///
+    /// テスト中のtracing eventを収集するsubscriber
+    ///
+    #[derive(Clone, Default)]
+    struct RecordingSubscriber {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingSubscriber {
+        ///
+        /// 収集済みeventを1つの文字列として返す
+        ///
+        /// # 戻り値
+        /// 収集済みeventを改行区切りで返す。
+        ///
+        fn output(&self) -> String {
+            self.events
+                .lock()
+                .expect("lock recorded tracing events failed")
+                .join("\n")
+        }
+    }
+
+    impl Subscriber for RecordingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut output = String::new();
+            let _ = write!(output, "{} ", event.metadata().name());
+            event.record(&mut EventVisitor(&mut output));
+            self.events
+                .lock()
+                .expect("lock tracing events for record failed")
+                .push(output);
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    ///
+    /// tracing event fieldをテスト用文字列へ変換するvisitor
+    ///
+    struct EventVisitor<'a>(&'a mut String);
+
+    impl Visit for EventVisitor<'_> {
+        fn record_debug(
+            &mut self,
+            field: &Field,
+            value: &dyn std::fmt::Debug,
+        ) {
+            let _ = write!(self.0, "{}={value:?};", field.name());
+        }
+    }
 
     fn audit_sink_that_fails_to_write(
         dir: &tempfile::TempDir,
@@ -1873,6 +2354,18 @@ mod tests {
                 rotation_policy: AuditRotationPolicy::new(1024),
             }),
         )))
+    }
+
+    fn read_audit_records(dir: &tempfile::TempDir) -> Vec<AuditRecord> {
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+
+        body.lines()
+            .map(|line| {
+                serde_json::from_str::<AuditRecord>(line)
+                    .expect("decode audit record failed")
+            })
+            .collect()
     }
 
     ///
@@ -1916,6 +2409,38 @@ mod tests {
         assert_eq!(
             audit_result_from_error(&root_denied),
             AuditResult::Unsupported
+        );
+    }
+
+    ///
+    /// 更新系アセット操作だけが ReadOnly 拒否を
+    /// scope 拒否へ正規化することを確認する。
+    ///
+    /// 注記:
+    /// upload、delete、既存のページ更新操作へ
+    /// 同じ監査結果分類を与える。
+    ///
+    #[test]
+    fn asset_update_read_only_denial_is_normalized_to_scope_denial() {
+        for operation in [
+            AuditOperation::UploadPageAsset,
+            AuditOperation::DeletePageAsset,
+        ] {
+            assert_eq!(
+                normalize_asset_update_audit_result(
+                    operation,
+                    AuditResult::ReadOnlyDenied,
+                ),
+                AuditResult::ScopeDenied
+            );
+        }
+
+        assert_eq!(
+            normalize_asset_update_audit_result(
+                AuditOperation::Update,
+                AuditResult::ReadOnlyDenied,
+            ),
+            AuditResult::ReadOnlyDenied
         );
     }
 
@@ -1964,26 +2489,39 @@ mod tests {
         );
     }
 
+
     ///
-    /// 成功系操作が監査ログへ記録されることを確認する。
+    /// 参照系アセット一覧の成功監査ログを確認する。
     ///
-    /// 注記:
-    /// `get_page` 成功後に sink を flush し、JSONL の内容を検証する。
+    /// # 注記
+    /// テスト用assetを作成して `handle_list_page_assets()` を実行し、
+    /// 専用operation、正規化済みtarget_path、revisionなし、件数summaryを検証する。
     ///
     #[test]
-    fn handle_records_success_audit_log() {
+    fn handle_list_page_assets_records_success_audit_log() {
+        /*
+         * ページ、アセット、監査sinkを準備する
+         */
         let dir = tempdir().expect("tempdir failed");
-        let db_path = dir.path().join("handler.redb");
+        let db_path = dir.path().join("handler-assets.redb");
         let asset_path = dir.path().join("assets");
         let manager = DatabaseManager::open(&db_path, &asset_path)
             .expect("open manager failed");
         manager
             .add_user("alice", "pass", None)
             .expect("add user failed");
-        manager
-            .create_page("/mcp/page", "alice", "# page".to_string())
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
             .expect("create page failed");
-
+        manager
+            .create_asset(
+                &page_id,
+                "asset.bin",
+                "application/octet-stream",
+                "alice",
+                b"secret-payload",
+            )
+            .expect("create asset failed");
         let sink = Arc::new(RwLock::new(AuditSink::new(
             AppendAuditBuffer::new(),
             AuditWriter::new(AuditWriterConfig {
@@ -2002,25 +2540,18 @@ mod tests {
             PathPrefixSet::from_iter(["/mcp"]),
             Some(TokenId::new()),
         );
-        let request = McpRequestEnvelope::new(
-            McpToolName::GetPage,
-            McpToolRequest::GetPage(GetPageRequest::new(
-                "/mcp/page".to_string(),
-                None,
-            )),
-        );
 
-        let response = handler
-            .handle(
+        /*
+         * list_page_assets成功監査ログを検証する
+         */
+        handler
+            .handle_list_page_assets(
                 &auth,
                 &manager,
-                &FtsIndexConfig::new(dir.path().join("fts")),
                 None,
-                request,
+                "/mcp/assets/",
             )
-            .expect("handle must succeed");
-        assert_eq!(response.tool_name().as_str(), "get_page");
-
+            .expect("list page assets must succeed");
         sink.write()
             .expect("lock sink failed")
             .flush()
@@ -2033,11 +2564,1339 @@ mod tests {
         )
         .expect("decode audit record failed");
 
-        assert_eq!(record.operation, AuditOperation::Get);
+        assert_eq!(record.operation, AuditOperation::ListPageAssets);
         assert_eq!(record.result, AuditResult::Success);
-        assert_eq!(record.target_path.as_deref(), Some("/mcp/page"));
-        assert_eq!(record.revision, Some(1));
+        assert_eq!(record.target_path.as_deref(), Some("/mcp/assets"));
+        assert_eq!(record.revision, None);
+        assert_eq!(record.summary.as_deref(), Some("count=1"));
         assert_eq!(record.token_id, auth.token_id().cloned());
+    }
+
+    ///
+    /// アセット本体取得の成功監査summaryに本体情報が混入しないことを確認する。
+    ///
+    /// # 注記
+    /// `handle_get_page_asset_data()` を実行し、summary が metadata のみに限定され、
+    /// raw bytes相当文字列やbase64文字列を含まないことを検証する。
+    ///
+    #[test]
+    fn handle_get_page_asset_data_records_safe_success_summary() {
+        /*
+         * ページ、アセット、監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-asset-data.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "asset.bin",
+                "application/octet-stream",
+                "alice",
+                b"secret-payload",
+            )
+            .expect("create asset failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * get_page_asset_data成功監査ログを検証する
+         */
+        handler
+            .handle_get_page_asset_data(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets/",
+                "asset.bin",
+            )
+            .expect("get page asset data must succeed");
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+        let summary = record.summary.as_deref().expect("summary missing");
+
+        assert_eq!(record.operation, AuditOperation::GetPageAssetData);
+        assert_eq!(record.result, AuditResult::Success);
+        assert_eq!(record.target_path.as_deref(), Some("/mcp/assets"));
+        assert_eq!(record.revision, None);
+        assert!(summary.contains(&format!("asset_id={}", asset_id)));
+        assert!(summary.contains("file_name=asset.bin"));
+        assert!(summary.contains("mime_type=application/octet-stream"));
+        assert!(summary.contains("size=14"));
+        assert!(!summary.contains("secret-payload"));
+        assert!(!summary.contains("c2VjcmV0LXBheWxvYWQ="));
+    }
+
+    ///
+    /// 参照系アセット失敗が専用operationとして監査されることを確認する。
+    ///
+    /// # 注記
+    /// 不正な file_name で `handle_resolve_page_asset()` を失敗させ、
+    /// summary が公開message相当のみであることを検証する。
+    ///
+    #[test]
+    fn handle_reference_asset_failure_records_dedicated_operation() {
+        /*
+         * ページと監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-asset-error.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * resolve_page_asset失敗監査ログを検証する
+         */
+        let error = handler
+            .handle_resolve_page_asset(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets",
+                "dir/secret.bin",
+            )
+            .expect_err("invalid file_name must fail");
+        assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+
+        assert_eq!(record.operation, AuditOperation::ResolvePageAsset);
+        assert_eq!(record.result, AuditResult::InvalidInput);
+        assert_eq!(record.target_path.as_deref(), Some("/mcp/assets"));
+        assert_eq!(record.revision, None);
+        assert_eq!(record.summary.as_deref(), Some("file_name is invalid"));
+    }
+
+    ///
+    /// アセット本体サイズ超過が競合として監査されることを確認する。
+    ///
+    /// # 注記
+    /// 10MiBを超えるassetで `handle_get_page_asset_data()` を失敗させ、
+    /// 監査resultとsummaryが仕様どおりになることを検証する。
+    ///
+    #[test]
+    fn handle_get_page_asset_data_oversize_records_conflict() {
+        /*
+         * ページ、大きなアセット、監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-asset-large.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let data = vec![0_u8; 10 * 1024 * 1024 + 1];
+        manager
+            .create_asset(
+                &page_id,
+                "large.bin",
+                "application/octet-stream",
+                "alice",
+                &data,
+            )
+            .expect("create asset failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(1024),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * サイズ超過失敗監査ログを検証する
+         */
+        let error = handler
+            .handle_get_page_asset_data(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets",
+                "large.bin",
+            )
+            .expect_err("oversized asset must fail");
+        assert_eq!(error.code(), McpErrorCode::Conflict);
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        let body = fs::read_to_string(active_log_path(dir.path()))
+            .expect("read active log failed");
+        let record: AuditRecord = serde_json::from_str(
+            body.lines().next().expect("record line missing"),
+        )
+        .expect("decode audit record failed");
+
+        assert_eq!(record.operation, AuditOperation::GetPageAssetData);
+        assert_eq!(record.result, AuditResult::Conflict);
+        assert_eq!(record.target_path.as_deref(), Some("/mcp/assets"));
+        assert_eq!(record.revision, None);
+        assert_eq!(record.summary.as_deref(), Some("asset data too large"));
+    }
+
+    ///
+    /// 参照系アセット4 handler の成功監査ログを横断確認する。
+    ///
+    #[test]
+    fn handle_reference_asset_methods_record_safe_success_audit_logs() {
+        /*
+         * ページ、アセット、監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-asset-success-all.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "asset.bin",
+                "application/octet-stream",
+                "alice",
+                b"secret-payload",
+            )
+            .expect("create asset failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(4096),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * 参照系4 handler を成功させる
+         */
+        handler
+            .handle_list_page_assets(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets/",
+            )
+            .expect("list page assets must succeed");
+        handler
+            .handle_resolve_page_asset(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets/",
+                "asset.bin",
+            )
+            .expect("resolve page asset must succeed");
+        handler
+            .handle_get_page_asset_metadata(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets/",
+                "asset.bin",
+            )
+            .expect("get page asset metadata must succeed");
+        handler
+            .handle_get_page_asset_data(
+                &auth,
+                &manager,
+                None,
+                "/mcp/assets/",
+                "asset.bin",
+            )
+            .expect("get page asset data must succeed");
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 専用operation、成功result、正規化済みpath、revisionなし、秘匿summaryを検証する
+         */
+        let records = read_audit_records(&dir);
+        assert_eq!(records.len(), 4);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.operation)
+                .collect::<Vec<_>>(),
+            vec![
+                AuditOperation::ListPageAssets,
+                AuditOperation::ResolvePageAsset,
+                AuditOperation::GetPageAssetMetadata,
+                AuditOperation::GetPageAssetData,
+            ],
+        );
+
+        for record in &records {
+            assert_eq!(record.result, AuditResult::Success);
+            assert_eq!(record.target_path.as_deref(), Some("/mcp/assets"));
+            assert_eq!(record.revision, None);
+            assert_eq!(record.token_id, auth.token_id().cloned());
+        }
+
+        assert_eq!(records[0].summary.as_deref(), Some("count=1"));
+        for record in records.iter().skip(1) {
+            let summary = record.summary.as_deref().expect("summary missing");
+            assert!(summary.contains(&format!("asset_id={}", asset_id)));
+            assert!(summary.contains("file_name=asset.bin"));
+            assert!(summary.contains("mime_type=application/octet-stream"));
+            assert!(summary.contains("size=14"));
+            assert!(!summary.contains("data_base64"));
+            assert!(!summary.contains("secret-payload"));
+            assert!(!summary.contains("c2VjcmV0LXBheWxvYWQ="));
+            assert!(!summary.contains("Authorization"));
+            assert!(!summary.contains("Bearer"));
+            assert!(!summary.contains("handler-asset-success-all.redb"));
+            assert!(!summary.contains("assets/"));
+        }
+    }
+
+    ///
+    /// 参照系アセット handler 失敗監査ログの分類と秘匿を横断確認する。
+    ///
+    #[test]
+    fn handle_reference_asset_failures_record_safe_audit_results() {
+        /*
+         * 失敗ケース用のページ、アセット、監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-asset-failures.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let oversized_data = vec![0_u8; 10 * 1024 * 1024 + 1];
+        manager
+            .create_asset(
+                &page_id,
+                "large.bin",
+                "application/octet-stream",
+                "alice",
+                &oversized_data,
+            )
+            .expect("create large asset failed");
+        let missing_file_asset_id = manager
+            .create_asset(
+                &page_id,
+                "missing-file.bin",
+                "application/octet-stream",
+                "alice",
+                b"secret-payload",
+            )
+            .expect("create missing file asset failed");
+        fs::remove_file(manager.asset_file_path(&missing_file_asset_id))
+            .expect("remove asset file failed");
+
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(4096),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let read_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+        let no_read_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+        let outside_prefix_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/allowed"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * 代表的な失敗分類を発生させる
+         */
+        assert_eq!(
+            handler
+                .handle_list_page_assets(
+                    &no_read_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                )
+                .expect_err("scope denied must fail")
+                .code(),
+            McpErrorCode::Forbidden,
+        );
+        assert_eq!(
+            handler
+                .handle_resolve_page_asset(
+                    &outside_prefix_auth,
+                    &manager,
+                    None,
+                    "/secret/assets",
+                    "asset.bin",
+                )
+                .expect_err("path prefix denied must fail")
+                .code(),
+            McpErrorCode::Forbidden,
+        );
+        assert_eq!(
+            handler
+                .handle_get_page_asset_metadata(
+                    &read_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "dir/secret.bin",
+                )
+                .expect_err("invalid input must fail")
+                .code(),
+            McpErrorCode::InvalidInput,
+        );
+        assert_eq!(
+            handler
+                .handle_resolve_page_asset(
+                    &read_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "missing.bin",
+                )
+                .expect_err("missing asset must fail")
+                .code(),
+            McpErrorCode::NotFound,
+        );
+        assert_eq!(
+            handler
+                .handle_get_page_asset_data(
+                    &read_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "large.bin",
+                )
+                .expect_err("oversized asset must fail")
+                .code(),
+            McpErrorCode::Conflict,
+        );
+        assert_eq!(
+            handler
+                .handle_get_page_asset_data(
+                    &read_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "missing-file.bin",
+                )
+                .expect_err("missing asset file must fail")
+                .code(),
+            McpErrorCode::InternalError,
+        );
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 失敗時も専用operationと固定summaryで監査されることを検証する
+         */
+        let records = read_audit_records(&dir);
+        assert_eq!(records.len(), 6);
+        let expected = [
+            (
+                AuditOperation::ListPageAssets,
+                AuditResult::ScopeDenied,
+                Some("/mcp/assets"),
+                "required scope denied: read",
+            ),
+            (
+                AuditOperation::ResolvePageAsset,
+                AuditResult::PathPrefixDenied,
+                Some("/secret/assets"),
+                "path prefix denied: /secret/assets",
+            ),
+            (
+                AuditOperation::GetPageAssetMetadata,
+                AuditResult::InvalidInput,
+                Some("/mcp/assets"),
+                "file_name is invalid",
+            ),
+            (
+                AuditOperation::ResolvePageAsset,
+                AuditResult::NotFound,
+                Some("/mcp/assets"),
+                "asset not found",
+            ),
+            (
+                AuditOperation::GetPageAssetData,
+                AuditResult::Conflict,
+                Some("/mcp/assets"),
+                "asset data too large",
+            ),
+            (
+                AuditOperation::GetPageAssetData,
+                AuditResult::InternalError,
+                Some("/mcp/assets"),
+                "asset read failed",
+            ),
+        ];
+
+        for (record, expected) in records.iter().zip(expected.iter()) {
+            assert_eq!(record.operation, expected.0);
+            assert_eq!(record.result, expected.1);
+            assert_eq!(record.target_path.as_deref(), expected.2);
+            assert_eq!(record.revision, None);
+            assert_eq!(record.summary.as_deref(), Some(expected.3));
+            let summary = record.summary.as_deref().expect("summary missing");
+            assert!(!summary.contains("data_base64"));
+            assert!(!summary.contains("secret-payload"));
+            assert!(!summary.contains("c2VjcmV0LXBheWxvYWQ="));
+            assert!(!summary.contains("Authorization"));
+            assert!(!summary.contains("Bearer"));
+            assert!(!summary.contains("handler-asset-failures.redb"));
+            assert!(!summary.contains("assets/"));
+        }
+    }
+
+    ///
+    /// 更新系アセットhandlerの成功応答と監査ログを確認する。
+    ///
+    /// # 注記
+    /// uploadとdeleteを実行し、公開response、永続化operation、
+    /// 許可済みsummary、秘匿情報非記録を横断確認する。
+    ///
+    #[test]
+    fn handle_update_asset_methods_record_safe_success_audit_logs() {
+        /*
+         * ページ、監査sink、認証文脈を準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-update-asset-success.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(4096),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            Some(TokenId::new()),
+        );
+        let address = Some("127.0.0.1".parse().expect("parse address failed"));
+
+        /*
+         * uploadとdeleteの公開responseを検証する
+         */
+        let upload = handler
+            .handle_upload_page_asset(
+                &auth,
+                &manager,
+                address,
+                "/mcp/assets/",
+                "secret.bin",
+                "application/octet-stream",
+                "c2VjcmV0LXBheWxvYWQ=",
+            )
+            .expect("upload page asset failed");
+        assert!(!sink
+            .read()
+            .expect("lock sink failed")
+            .has_pending_appends());
+        let upload_json = serde_json::to_value(&upload)
+            .expect("encode upload response failed");
+        let asset_id = upload_json["asset"]["asset_id"]
+            .as_str()
+            .expect("upload asset id missing")
+            .to_string();
+
+        assert_eq!(upload_json["asset"]["path"], "/mcp/assets");
+        assert_eq!(upload_json["asset"]["file_name"], "secret.bin");
+        assert_eq!(
+            upload_json["asset"]["mime_type"],
+            "application/octet-stream",
+        );
+        assert_eq!(upload_json["asset"]["size"], 14);
+        assert_eq!(upload_json["summary"], "asset uploaded");
+        assert!(upload_json.get("data_base64").is_none());
+
+        let deleted = handler
+            .handle_delete_page_asset(
+                &auth,
+                &manager,
+                address,
+                "/mcp/assets/",
+                "secret.bin",
+            )
+            .expect("delete page asset failed");
+        assert!(!sink
+            .read()
+            .expect("lock sink failed")
+            .has_pending_appends());
+        let delete_json = serde_json::to_value(&deleted)
+            .expect("encode delete response failed");
+
+        assert_eq!(delete_json["asset_id"], asset_id);
+        assert_eq!(delete_json["path"], "/mcp/assets");
+        assert_eq!(delete_json["file_name"], "secret.bin");
+        assert_eq!(delete_json["summary"], "asset deleted");
+        assert_eq!(delete_json.as_object().map(|value| value.len()), Some(4));
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * 成功監査の共通項目と許可済みsummaryを検証する
+         */
+        let records = read_audit_records(&dir);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].operation, AuditOperation::UploadPageAsset);
+        assert_eq!(records[1].operation, AuditOperation::DeletePageAsset);
+
+        for record in &records {
+            assert_eq!(record.result, AuditResult::Success);
+            assert_eq!(record.target_path.as_deref(), Some("/mcp/assets"));
+            assert_eq!(record.revision, None);
+            assert_eq!(record.token_id, auth.token_id().cloned());
+            assert_eq!(record.address, address);
+        }
+
+        assert_eq!(
+            records[0].summary.as_deref(),
+            Some(format!(
+                concat!(
+                    "asset_id={} file_name=secret.bin ",
+                    "mime_type=application/octet-stream size=14 ",
+                    "summary=asset uploaded",
+                ),
+                asset_id,
+            )
+            .as_str()),
+        );
+        assert_eq!(
+            records[1].summary.as_deref(),
+            Some(format!(
+                concat!(
+                    "asset_id={} file_name=secret.bin ",
+                    "summary=asset deleted",
+                ),
+                asset_id,
+            )
+            .as_str()),
+        );
+
+        /*
+         * JSONL永続化名と秘匿情報非記録を検証する
+         */
+        let bytes = fs::read(active_log_path(dir.path()))
+            .expect("read active log failed");
+        assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+        assert!(bytes.ends_with(b"\n"));
+        assert!(!bytes.contains(&b'\r'));
+        let body = String::from_utf8(bytes)
+            .expect("audit log must be UTF-8");
+        let values = body
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .expect("decode audit JSON failed")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(values[0]["operation"], "upload_page_asset");
+        assert_eq!(values[1]["operation"], "delete_page_asset");
+        assert_eq!(values[0]["result"], "success");
+        assert_eq!(values[1]["result"], "success");
+        assert_eq!(values.len(), 2);
+        assert!(!body.contains("data_base64"));
+        assert!(!body.contains("c2VjcmV0LXBheWxvYWQ="));
+        assert!(!body.contains("secret-payload"));
+        assert!(!body.contains("Authorization"));
+        assert!(!body.contains("Bearer"));
+        assert!(!body.contains("lock_token"));
+    }
+
+    ///
+    /// 更新系アセットhandlerの失敗監査分類と秘匿を確認する。
+    ///
+    /// # 注記
+    /// 認可、競合、入力、対象不存在、内部失敗を発生させ、
+    /// operation、result、固定summaryを横断確認する。
+    ///
+    #[test]
+    fn handle_update_asset_failures_record_expected_audit_results() {
+        /*
+         * 通常ページ、ロック中ページ、監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-update-asset-failures.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let locked_page_id = manager
+            .create_page(
+                "/mcp/locked-assets",
+                "alice",
+                "# locked".to_string(),
+            )
+            .expect("create locked page failed");
+        let locked_asset_id = manager
+            .create_asset(
+                &locked_page_id,
+                "locked.bin",
+                "application/octet-stream",
+                "alice",
+                b"locked",
+            )
+            .expect("create locked asset failed");
+        manager
+            .acquire_page_lock(&locked_page_id, "alice")
+            .expect("acquire page lock failed");
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().to_path_buf(),
+                rotation_policy: AuditRotationPolicy::new(8192),
+            }),
+        )));
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(sink.clone()),
+        );
+
+        /*
+         * 認可条件別の認証文脈を準備する
+         */
+        let read_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+            Some(TokenId::new()),
+        );
+        let prefix_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/allowed"]),
+            Some(TokenId::new()),
+        );
+        let read_only_auth = AuthContext::new_with_attributes(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            Some(TokenId::new()),
+            None,
+        );
+        let write_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * 認可、競合、入力、対象不存在を発生させる
+         */
+        assert_eq!(
+            handler
+                .handle_upload_page_asset(
+                    &read_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "scope.bin",
+                    "application/octet-stream",
+                    "c2NvcGU=",
+                )
+                .expect_err("scope denied upload must fail")
+                .code(),
+            McpErrorCode::Forbidden,
+        );
+        assert_eq!(
+            handler
+                .handle_delete_page_asset(
+                    &prefix_auth,
+                    &manager,
+                    None,
+                    "/private/assets",
+                    "missing.bin",
+                )
+                .expect_err("prefix denied delete must fail")
+                .code(),
+            McpErrorCode::Forbidden,
+        );
+        assert_eq!(
+            handler
+                .handle_upload_page_asset(
+                    &read_only_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "read-only.bin",
+                    "application/octet-stream",
+                    "cmVhZC1vbmx5",
+                )
+                .expect_err("read only upload must fail")
+                .code(),
+            McpErrorCode::Forbidden,
+        );
+        assert_eq!(
+            handler
+                .handle_delete_page_asset(
+                    &write_auth,
+                    &manager,
+                    None,
+                    "/mcp/locked-assets",
+                    "locked.bin",
+                )
+                .expect_err("locked delete must fail")
+                .code(),
+            McpErrorCode::Conflict,
+        );
+        assert_eq!(
+            {
+                let error = handler
+                    .handle_upload_page_asset(
+                        &write_auth,
+                        &manager,
+                        None,
+                        "/mcp/assets",
+                        "invalid.bin",
+                        "application/octet-stream",
+                        "private:not-base64",
+                    )
+                    .expect_err("invalid upload must fail");
+                assert_eq!(error.message(), "data_base64 is invalid");
+                let response = McpErrorResponse::from(error.clone());
+                let response_json = serde_json::to_string(&response)
+                    .expect("encode public error failed");
+                assert_eq!(response.code(), "invalid_input");
+                assert_eq!(response.message(), "data_base64 is invalid");
+                assert!(!response_json.contains("private:not-base64"));
+                error.code()
+            },
+            McpErrorCode::InvalidInput,
+        );
+        assert_eq!(
+            handler
+                .handle_delete_page_asset(
+                    &write_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "missing.bin",
+                )
+                .expect_err("missing delete must fail")
+                .code(),
+            McpErrorCode::NotFound,
+        );
+
+        /*
+         * 再現不能なDB内部失敗を固定公開errorとして記録する
+         */
+        let internal_request = McpRequestEnvelope::new(
+            McpToolName::UploadPageAsset,
+            McpToolRequest::UploadPageAsset(
+                UploadPageAssetRequest::new(
+                    "/mcp/assets".to_string(),
+                    "internal.bin".to_string(),
+                    "application/octet-stream".to_string(),
+                    "private-internal-payload".to_string(),
+                ),
+            ),
+        );
+        handler.record_error(
+            &manager,
+            &write_auth,
+            None,
+            &internal_request,
+            &McpError::new(
+                McpErrorCode::InternalError,
+                "asset create failed",
+            ),
+        );
+        assert!(!sink
+            .read()
+            .expect("lock sink failed")
+            .has_pending_appends());
+        sink.write()
+            .expect("lock sink failed")
+            .flush()
+            .expect("flush sink failed");
+
+        /*
+         * operation、result、path、固定summaryを検証する
+         */
+        let records = read_audit_records(&dir);
+        assert_eq!(records.len(), 7);
+        let expected = [
+            (
+                AuditOperation::UploadPageAsset,
+                AuditResult::ScopeDenied,
+                Some("/mcp/assets"),
+                "required scope denied: update",
+            ),
+            (
+                AuditOperation::DeletePageAsset,
+                AuditResult::PathPrefixDenied,
+                Some("/private/assets"),
+                "path prefix denied: /private/assets",
+            ),
+            (
+                AuditOperation::UploadPageAsset,
+                AuditResult::ScopeDenied,
+                Some("/mcp/assets"),
+                "read only denied: write operation is not allowed",
+            ),
+            (
+                AuditOperation::DeletePageAsset,
+                AuditResult::Conflict,
+                Some("/mcp/locked-assets"),
+                "page is locked",
+            ),
+            (
+                AuditOperation::UploadPageAsset,
+                AuditResult::InvalidInput,
+                Some("/mcp/assets"),
+                "data_base64 is invalid",
+            ),
+            (
+                AuditOperation::DeletePageAsset,
+                AuditResult::NotFound,
+                Some("/mcp/assets"),
+                "asset not found",
+            ),
+            (
+                AuditOperation::UploadPageAsset,
+                AuditResult::InternalError,
+                Some("/mcp/assets"),
+                "asset create failed",
+            ),
+        ];
+
+        for (record, expected) in records.iter().zip(expected.iter()) {
+            assert_eq!(record.operation, expected.0);
+            assert_eq!(record.result, expected.1);
+            assert_eq!(record.target_path.as_deref(), expected.2);
+            assert_eq!(record.revision, None);
+            assert_eq!(record.summary.as_deref(), Some(expected.3));
+        }
+
+        /*
+         * 失敗監査とerror summaryの秘匿を検証する
+         */
+        let bytes = fs::read(active_log_path(dir.path()))
+            .expect("read active log failed");
+        assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+        assert!(bytes.ends_with(b"\n"));
+        assert!(!bytes.contains(&b'\r'));
+        let body = String::from_utf8(bytes)
+            .expect("audit log must be UTF-8");
+
+        assert!(!body.contains("private:not-base64"));
+        assert!(!body.contains("private-internal-payload"));
+        assert!(!body.contains("c2NvcGU="));
+        assert!(!body.contains("cmVhZC1vbmx5"));
+        assert!(!body.contains("Authorization"));
+        assert!(!body.contains("Bearer"));
+        assert!(!body.contains("lock_token"));
+        assert!(!body.contains("handler-update-asset-failures.redb"));
+        assert!(!body.contains("assets/"));
+        assert!(!body.contains(&locked_page_id.to_string()));
+        assert!(!body.contains(&locked_asset_id.to_string()));
+        assert!(!body.contains("locked.bin"));
+        assert!(!body.contains(&db_path.display().to_string()));
+        assert!(!body.contains(&asset_path.display().to_string()));
+
+        let values = body
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .expect("decode audit JSON failed")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 7);
+        assert_eq!(values[4]["operation"], "upload_page_asset");
+        assert_eq!(values[4]["result"], "invalid_input");
+        assert_eq!(values[5]["operation"], "delete_page_asset");
+        assert_eq!(values[5]["result"], "not_found");
+        assert_eq!(values[6]["operation"], "upload_page_asset");
+        assert_eq!(values[6]["result"], "internal_error");
+    }
+
+    ///
+    /// 更新系アセットhandlerが監査失敗を業務応答へ反映しないことを
+    /// 確認する。
+    ///
+    /// # 注記
+    /// ユーザID解決失敗、sink lock失敗、writer書込み失敗を発生させ、
+    /// 成功応答と本来の失敗応答が維持されることを検証する。
+    ///
+    #[test]
+    fn handle_update_asset_methods_ignore_audit_failures() {
+        /*
+         * ページと認証文脈を準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("handler-asset-audit-fail.redb");
+        let asset_path = dir.path().join("assets");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let write_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            Some(TokenId::new()),
+        );
+
+        /*
+         * writer失敗時も成功結果と本来の失敗結果を維持する
+         */
+        let writer_failure_handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(audit_sink_that_fails_to_write(&dir)),
+        );
+        let upload = writer_failure_handler
+            .handle_upload_page_asset(
+                &write_auth,
+                &manager,
+                None,
+                "/mcp/assets",
+                "writer-failure.bin",
+                "application/octet-stream",
+                "d3JpdGVyLWZhaWx1cmU=",
+            )
+            .expect("audit write failure must not fail upload");
+        let upload_json = serde_json::to_value(&upload)
+            .expect("encode upload response failed");
+        assert_eq!(upload_json["summary"], "asset uploaded");
+
+        let error = writer_failure_handler
+            .handle_delete_page_asset(
+                &write_auth,
+                &manager,
+                None,
+                "/mcp/assets",
+                "missing.bin",
+            )
+            .expect_err("missing asset must remain not found");
+        assert_eq!(error.code(), McpErrorCode::NotFound);
+        assert_eq!(error.message(), "asset not found");
+
+        /*
+         * sink lock失敗時も成功結果を維持する
+         */
+        let poisoned_sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(),
+            AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().join("poisoned-audit"),
+                rotation_policy: AuditRotationPolicy::new(4096),
+            }),
+        )));
+        let sink_for_thread = poisoned_sink.clone();
+        let poison_result = std::thread::spawn(move || {
+            let _guard = sink_for_thread
+                .write()
+                .expect("lock sink before poisoning");
+            panic!("poison audit sink lock");
+        })
+        .join();
+        assert!(poison_result.is_err());
+
+        let lock_failure_handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(poisoned_sink),
+        );
+        let upload = lock_failure_handler
+            .handle_upload_page_asset(
+                &write_auth,
+                &manager,
+                None,
+                "/mcp/assets",
+                "lock-failure.bin",
+                "application/octet-stream",
+                "bG9jay1mYWlsdXJl",
+            )
+            .expect("audit lock failure must not fail upload");
+        let upload_json = serde_json::to_value(&upload)
+            .expect("encode upload response failed");
+        assert_eq!(upload_json["summary"], "asset uploaded");
+
+        /*
+         * 監査ユーザID解決失敗時も本来の入力エラーを維持する
+         */
+        let unknown_user_auth = AuthContext::new(
+            AuthUser::new("unknown-audit-user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            Some(TokenId::new()),
+        );
+        let handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            None,
+        );
+        let error = handler
+            .handle_upload_page_asset(
+                &unknown_user_auth,
+                &manager,
+                None,
+                "/mcp/assets",
+                "invalid.bin",
+                "application/octet-stream",
+                "not-valid-base64",
+            )
+            .expect_err("invalid payload must remain invalid input");
+        assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        assert_eq!(error.message(), "data_base64 is invalid");
+    }
+
+    ///
+    /// 監査失敗時のtracing出力が
+    /// 内部詳細を秘匿することを確認する。
+    ///
+    /// # 注記
+    /// writer失敗と監査ユーザ解決失敗を発生させ、
+    /// 固定eventだけが記録されることと、
+    /// 元の業務応答が維持されることを検証する。
+    ///
+    #[test]
+    fn audit_failure_tracing_redacts_internal_details() {
+        const SECRET_USER: &str = "secret-audit-user";
+        const SECRET_PAYLOAD: &str = "c2VjcmV0LXRyYWNpbmctcGF5bG9hZA==";
+
+        /*
+         * ページ、認証文脈、失敗する監査sinkを準備する
+         */
+        let dir = tempdir().expect("tempdir failed");
+        let db_path = dir.path().join("secret-handler-database.redb");
+        let asset_path = dir.path().join("secret-assets-path");
+        let manager = DatabaseManager::open(&db_path, &asset_path)
+            .expect("open manager failed");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let write_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            Some(TokenId::new()),
+        );
+        let unknown_user_auth = AuthContext::new(
+            AuthUser::new(SECRET_USER.to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            Some(TokenId::new()),
+        );
+        let writer_failure_handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            Some(audit_sink_that_fails_to_write(&dir)),
+        );
+        let no_sink_handler = McpHandler::new(
+            McpAuthGateway::new(),
+            McpService::new(),
+            None,
+        );
+        let subscriber = RecordingSubscriber::default();
+        let captured = subscriber.clone();
+
+        /*
+         * tracing捕捉中に監査失敗を発生させる
+         */
+        tracing::subscriber::with_default(subscriber, || {
+            let upload = writer_failure_handler
+                .handle_upload_page_asset(
+                    &write_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "writer-failure.bin",
+                    "application/octet-stream",
+                    SECRET_PAYLOAD,
+                )
+                .expect("audit write failure must not fail upload");
+            let upload = serde_json::to_value(upload)
+                .expect("serialize upload response failed");
+            assert_eq!(upload["summary"], "asset uploaded");
+
+            let error = no_sink_handler
+                .handle_upload_page_asset(
+                    &unknown_user_auth,
+                    &manager,
+                    None,
+                    "/mcp/assets",
+                    "invalid.bin",
+                    "application/octet-stream",
+                    "not-valid-base64",
+                )
+                .expect_err("invalid payload must remain invalid input");
+            assert_eq!(error.code(), McpErrorCode::InvalidInput);
+            assert_eq!(error.message(), "data_base64 is invalid");
+        });
+
+        /*
+         * 固定eventと秘匿結果を検証する
+         */
+        let output = captured.output();
+        assert!(output.contains("audit log operation failed"));
+        assert!(output.contains("audit user id resolution failed"));
+        for secret in [
+            SECRET_USER.to_string(),
+            SECRET_PAYLOAD.to_string(),
+            "secret-handler-database.redb".to_string(),
+            "secret-assets-path".to_string(),
+            "audit-output-file".to_string(),
+            db_path.display().to_string(),
+            asset_path.display().to_string(),
+        ] {
+            assert!(!output.contains(&secret));
+        }
     }
 
     ///

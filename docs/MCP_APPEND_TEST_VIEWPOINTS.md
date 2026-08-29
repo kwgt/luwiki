@@ -28,6 +28,8 @@ revision 判定、ロック待機、再読込、エラー写像まで含めて�
   - 4.6 競合系の対応
 - `docs/REST_API_SPECS.md`
   - 既存ページ保存・ロック関連仕様
+- `docs/MCP_ASSET_TOOL_TEST_VIEWPOINTS.md`
+  - MCP アセット Toolsとappend競合制御の境界観点
 
 ## 2. 観点の使い方
 
@@ -188,3 +190,32 @@ revision 判定、ロック待機、再読込、エラー写像まで含めて�
 - 別ユーザ時の新規 revision の観点を、revision 増分、`amended = false` まで含めて定義した
 - ロック待機の観点を、明示ロック競合、待機、再読込、timeout 時 conflict まで含めて定義した
 - 競合失敗の観点を、latest revision 競合、待機上限超過、外部 `conflict` 写像まで含めて定義した
+
+## 12. MCP アセット Toolsとの境界観点
+
+### 12.1 append競合制御の非適用
+
+1. `list_page_assets`、`resolve_page_asset`、`get_page_asset_metadata`、
+   `get_page_asset_data` がappendの保存フロー、amend判定、latest revision
+   競合待機を使用しないこと
+2. `upload_page_asset` と `delete_page_asset` がappendの保存フロー、
+   amend判定、latest revision競合待機を使用しないこと
+3. アセットupload / deleteがページ本文revisionを更新結果として返さないこと
+4. アセットupload / deleteが `revision` / `instance_id` 入力を受け付けないこと
+5. アセットupload / deleteの結果をappendの `amended` 判定と混同しないこと
+
+### 12.2 ロック競合との接続
+
+1. `upload_page_asset` と `delete_page_asset` がlock token入力を公開しないこと
+2. ロック中ページへの `upload_page_asset` と `delete_page_asset` が
+   待機や割り込みを行わず `conflict` になること
+3. アセット参照系4 toolがページロックの影響を受けないこと
+4. appendのロック待機timeoutとアセットupload / deleteのロック中即時conflictが
+   テスト上で区別されること
+
+### 12.3 監査ログ集約との境界
+
+1. append成功イベントだけがappend集約対象であること
+2. アセット6 toolの成功・失敗監査がappend集約状態へ入らないこと
+3. アセットupload / deleteの監査`revision`が`null`であり、
+   append集約の初回revision維持規則へ依存しないこと

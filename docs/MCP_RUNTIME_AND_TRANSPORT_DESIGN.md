@@ -530,7 +530,7 @@ CLI 層では少なくとも「正規化済み絶対パスであること」ま�
 
 #### 2.3.23 `token list` の列構成
 
-`token list` は、`docs/MCP_DESIGN_INPUT_TASKS.md` の整理結果に従い、
+`token list` は、`docs/CLI_SPECS.md` と本節の現行設計に従い、
 一覧表示と詳細一覧表示で役割を分ける。
 
 短縮表示の列順は以下とする。
@@ -1252,6 +1252,8 @@ Actix への組み込みは `src/http_server/mod.rs` の `create_server()` 内�
 
 標準 MCP の envelope と handshake は公開クレートへ委譲し、
 このプロジェクト固有の認証・認可・業務呼び出しだけを残す。
+LuWiki toolのJSON payloadは、JSON objectをserializeした文字列として
+`result.content[0].text`へ格納し、`structuredContent`は返さない。
 
 固定組み込みresourceやページ由来resourceを配信する場合も、
 resource公開のprotocol / handshake自体は公開クレートへ委譲し、
@@ -1311,8 +1313,8 @@ MCP endpoint には、REST API 用 middleware を無条件には流用しない�
 - transport レベルの検証と業務エラーを明確に分離する
 - 既存の独自 `tool` / `arguments` JSON は廃止する
 
-具体的な再構築方針、移行順序、受け入れ条件は
-`docs/MCP_TRANSPORT_REBUILD_PLAN.md` を参照する。
+現行のtransport責務、検証方針、middleware境界、拡張方針は、
+本章3.5から3.9を正本とする。
 
 ## 4. MCP promptsのruntime・transport統合
 

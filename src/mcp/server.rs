@@ -51,23 +51,32 @@ use crate::mcp::handler::McpHandler;
 use crate::mcp::service::{DEFAULT_RESOURCE_AUTHORITY, McpService};
 use crate::mcp::tools::{
     EditPageToolArgs,
+    ListPageAssetsToolArgs,
     GetPageSectionToolArgs,
     GetPageTocToolArgs,
     GetPageToolArgs,
     ListPagesToolArgs,
+    PageAssetByFileToolArgs,
     RenamePageToolArgs,
     SearchPagesToolArgs,
+    UploadPageAssetToolArgs,
     WritePageToolArgs,
     append_page,
     create_page,
+    delete_page_asset,
     edit_page,
     get_page,
+    get_page_asset_data,
+    get_page_asset_metadata,
     get_page_section,
     get_page_toc,
     list_pages,
+    list_page_assets,
     rename_page,
+    resolve_page_asset,
     search_pages,
     update_page,
+    upload_page_asset,
 };
 
 ///
@@ -423,7 +432,7 @@ impl LuwikiMcpServer {
     {
         let state = self.state.read().map_err(|_| {
             McpProtocolError::internal_error(
-                "failed to lock app state",
+                "internal error",
                 None,
             )
         })?;
@@ -449,7 +458,7 @@ impl LuwikiMcpServer {
             .cloned()
             .ok_or_else(|| {
                 McpProtocolError::internal_error(
-                    "missing MCP auth context",
+                    "internal error",
                     None,
                 )
             })
@@ -485,11 +494,9 @@ impl LuwikiMcpServer {
         error: McpError,
     ) -> Result<CallToolResult, McpProtocolError> {
         let content = Content::json(McpErrorResponse::from(error))
-            .map_err(|serialize_error| {
+            .map_err(|_| {
                 McpProtocolError::internal_error(
-                    format!(
-                        "failed to serialize MCP tool error: {serialize_error}"
-                    ),
+                    "internal error",
                     None,
                 )
             })?;
@@ -888,6 +895,96 @@ impl LuwikiMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpProtocolError> {
         get_page_section::execute(self, params, context).await
+    }
+
+    ///
+    /// `list_page_assets` の tool 入口
+    ///
+    #[tool(
+        name = "list_page_assets",
+        description = "入力 path で指定されたページに紐付く通常アセットのメタ情報一覧を返す。"
+    )]
+    async fn list_page_assets_tool(
+        &self,
+        params: Parameters<ListPageAssetsToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        list_page_assets::execute(self, params, context).await
+    }
+
+    ///
+    /// `resolve_page_asset` の tool 入口
+    ///
+    #[tool(
+        name = "resolve_page_asset",
+        description = "入力 path で指定されたページ内で、file_name に一致する通常アセットを解決し、最小識別情報を返す。"
+    )]
+    async fn resolve_page_asset_tool(
+        &self,
+        params: Parameters<PageAssetByFileToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        resolve_page_asset::execute(self, params, context).await
+    }
+
+    ///
+    /// `get_page_asset_metadata` の tool 入口
+    ///
+    #[tool(
+        name = "get_page_asset_metadata",
+        description = "入力 path で指定されたページ内で、file_name に一致する通常アセットの詳細メタ情報を返す。"
+    )]
+    async fn get_page_asset_metadata_tool(
+        &self,
+        params: Parameters<PageAssetByFileToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        get_page_asset_metadata::execute(self, params, context).await
+    }
+
+    ///
+    /// `get_page_asset_data` の tool 入口
+    ///
+    #[tool(
+        name = "get_page_asset_data",
+        description = "入力 path で指定されたページ内で、file_name に一致する通常アセットのメタ情報と本体を返す。"
+    )]
+    async fn get_page_asset_data_tool(
+        &self,
+        params: Parameters<PageAssetByFileToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        get_page_asset_data::execute(self, params, context).await
+    }
+
+    ///
+    /// `upload_page_asset` の tool 入口
+    ///
+    #[tool(
+        name = "upload_page_asset",
+        description = "入力 path で指定されたページへ、新規アセットをアップロードする。"
+    )]
+    async fn upload_page_asset_tool(
+        &self,
+        params: Parameters<UploadPageAssetToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        upload_page_asset::execute(self, params, context).await
+    }
+
+    ///
+    /// `delete_page_asset` の tool 入口
+    ///
+    #[tool(
+        name = "delete_page_asset",
+        description = "入力 path で指定されたページ内で、file_name に一致する通常アセットを削除する。"
+    )]
+    async fn delete_page_asset_tool(
+        &self,
+        params: Parameters<PageAssetByFileToolArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        delete_page_asset::execute(self, params, context).await
     }
 }
 

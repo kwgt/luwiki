@@ -42,13 +42,17 @@
 
 ### 3.2 Windows環境に於けるツールチェイン
 
-本プロジェクトでは以下の条件を満たす環境で Rust のビルドを行う。
+Windows上でCargo系コマンドを実行する場合は、
+以下の条件を満たす環境を使用する。
 
 - Rust は **MSVC ツールチェイン**を使用する  
 - ビルドおよび `cargo` 操作は Visual Studio 2022 Developer Command Prompt 上で実行する  
 - Visual Studio 2026 付属の cl.exe を使用してはならない
 
-上記条件を満たさない環境で得られたビルド結果は無効とみなす。
+Windows上で上記条件を満たさずに得られたビルド結果は
+無効とみなす。
+Linux等の適合toolchainによる検証結果は、
+このWindows固有条件の対象外とする。
 
 VIsual Studio 2022環境はrustupで依存インストールされた物を使用すること。通常は "C:\Program Files (x86)\Microsoft Visual Studio\2022"にインストールされているので、これを元に必要なVsDevCmd.batを探し実行することを許可する。
 
@@ -87,8 +91,11 @@ cl
 
 例: `cmd /c "<VsDevCmd.batのフルパス> -arch=x64 -host_arch=x64 && cd /d <workspace> && cargo check"`
 
-AI/自動化を含む全ての実行者は、cargo系コマンドを必ず VsDevCmd.bat 経由で実行し、
-その前に cl のバージョン確認を行う。これに反する実行結果は無効とする。
+Windows上でCargo系コマンドを実行する
+AI/自動化を含む全ての実行者は、
+必ずVsDevCmd.bat経由で実行し、
+その前にclのバージョン確認を行う。
+Windows上でこれに反する実行結果は無効とする。
 
 ---
 

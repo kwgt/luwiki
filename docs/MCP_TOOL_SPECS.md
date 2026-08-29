@@ -11,8 +11,8 @@ promptsの外部契約は`docs/MCP_PROMPT_SPECS.md`を参照する。
 MCP標準`resources/list`と`resources/read`はtoolではなく標準resources操作である。
 resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 
-初期版MCPの外部仕様は、`docs/REQUIREMENTS.md`、`docs/MCP_SPEC_DECISION_TASKS.md`、
-および各設計分冊で確定した内容を本書へ集約する。
+初期版MCPの外部仕様は、`docs/REQUIREMENTS.md`および
+各設計分冊で確定した内容を本書へ集約する。
 
 ---
 
@@ -30,6 +30,12 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
   | `append_page` | [ページ追記](#tool-append-page)
   | `rename_page` | [ページリネーム](#tool-rename-page)
   | `get_page_section` | [特定セクション本文の取得](#tool-get-page-section)
+  | `list_page_assets` | [ページアセット一覧の取得](#tool-list-page-assets)
+  | `resolve_page_asset` | [ページアセットの解決](#tool-resolve-page-asset)
+  | `get_page_asset_metadata` | [ページアセットメタ情報の取得](#tool-get-page-asset-metadata)
+  | `get_page_asset_data` | [ページアセット本体の取得](#tool-get-page-asset-data)
+  | `upload_page_asset` | [ページアセットのアップロード](#tool-upload-page-asset)
+  | `delete_page_asset` | [ページアセットの削除](#tool-delete-page-asset)
 
 ---
 
@@ -39,8 +45,18 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 
 - MCP は `run` コマンドで明示的に有効化された場合のみ公開する
 - MCP は Bearer 認証を前提とし、Basic 認証は受け付けない
+- tool成功時のJSON payloadは、
+  JSON objectをserializeした文字列として
+  `result.content[0].text`へ格納し、`structuredContent`は返さない
 - 本書で定義するページtoolはpathベースで公開し、外部へ`page_id`を露出しない
 - pathベースtoolの認可はBearerスコープとpath prefix制約の両方で判定する
+- 本書で定義するアセットtoolは`path + file_name`を主入力として公開し、初期版では`asset_id`単独入力のtoolを公開しない
+- アセットtoolの認可はBearerスコープとpath prefix制約の両方で判定し、path prefix制約は正規化済みの入力`path`を対象とする
+- 一覧、解決、メタ情報取得系のアセットtoolはアセット本体を返さない
+- アセット本体は`get_page_asset_data`のみが`data_base64`として返す
+- `upload_page_asset`はローカルファイルパスを受け付けず、`data_base64`入力で完結する
+- アセットuploadと本体取得で扱うraw binary sizeの上限は10MiBとする
+- `data_base64`、アセット本体bytes、Bearer token、Authorization header、lock token、内部保存パス、DB内部詳細は監査ログ、tracing、エラーsummaryに含めない
 - MCP promptsはread scopeを要求するが、ページ用path prefix制約を適用しない
 - 監査ログは MCP 操作および関連する認可失敗を対象として記録する
 
@@ -58,6 +74,12 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 - `append_page`
 - `rename_page`
 - `get_page_section`
+- `list_page_assets`
+- `resolve_page_asset`
+- `get_page_asset_metadata`
+- `get_page_asset_data`
+- `upload_page_asset`
+- `delete_page_asset`
 
 ### 1.3 初期版から除外する機能
 
@@ -65,8 +87,16 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 
 - 削除済みページ参照
 - restore
-- アセット操作
 - ロック操作
+- `asset_id` 単独入力によるアセット解決、メタ情報取得、本体取得、削除
+- ローカルファイルパスを指定するアセット upload
+- 既存アセットの上書き upload
+- lock token 入力を受け付けるアセット upload / delete
+- 削除済みアセットの直接参照、列挙、復元、再削除
+- ゾンビアセットまたは所属ページ解決不能アセットの直接操作
+- 他ページ本文中の `asset:` 参照をたどって実体解決する専用 tool
+- REST API の redirect や条件付き GET をそのまま MCP tool として公開する操作
+- アセットのリネーム、コピー、移動、MIME 種別のみの更新
 - テンプレート指定作成
 - リンク先一覧取得
 - 被リンク一覧取得
@@ -1366,8 +1396,566 @@ properties:
 
 ---
 
+### アセット tool 共通仕様
+
+アセット tool のメタ情報 object は以下を基本とする。
+
+```yaml
+type: object
+required:
+  - asset_id
+  - path
+  - file_name
+  - mime_type
+  - size
+  - timestamp
+  - username
+properties:
+  asset_id:
+    description: >-
+      アセットID。REST API の id 相当を MCP 外部契約上明確化した名称。
+    type: string
+  path:
+    description: >-
+      アセットが紐付くページの現在有効な絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      ページ内のアセットファイル名。
+    type: string
+  mime_type:
+    description: >-
+      アセット本体の MIME 種別。
+    type: string
+  size:
+    description: >-
+      raw binary size。byte 単位。
+    type: number
+  timestamp:
+    description: >-
+      アセットがアップロードされたローカル日時。
+      timezone offsetを含まないYYYY-MM-DDTHH:MM:SS形式の
+      秒精度文字列とする。timezone offsetまたはZを含む
+      REST APIのRFC3339形式とは異なる。
+    type: string
+  username:
+    description: >-
+      アセットをアップロードしたユーザ名。
+    type: string
+  instance_id:
+    description: >-
+      アセット本体の内容識別子。存在する場合のみ返す任意項目。
+    type: string
+```
+
+- `path` は全アセット tool で必須とし、Wiki ページの絶対 path を表す
+- `file_name` は単一アセットを指定する tool で必須とし、空文字、`/`、バックスラッシュを許可しない
+- `mime_type` は `upload_page_asset` で必須とし、空文字を許可しない
+- `data_base64` は `upload_page_asset` の入力と `get_page_asset_data` の出力でのみ扱う
+- `asset_id` は初期版では入力項目として採用せず、レスポンス上の識別情報としてのみ扱う
+- `instance_id` は存在する場合のみ返し、欠損時は JSON 項目を省略する
+
+---
+
+<a id="tool-list-page-assets"></a>
+### 2.11 `list_page_assets`
+
+#### 概要
+
+入力 `path` で指定されたページに紐付く通常アセットのメタ情報一覧を返す。
+一覧にはアセット本体を含めない。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `read`
+- 認可判定対象 path は正規化後の入力 `path` とする
+
+#### 入力
+
+```yaml
+type: object
+required:
+  - path
+properties:
+  path:
+    description: >-
+      アセット一覧を取得するページの絶対 path 。
+    type: string
+```
+
+#### 出力
+
+```yaml
+type: object
+required:
+  - path
+  - items
+properties:
+  path:
+    description: >-
+      入力 path を正規化して解決された対象ページの絶対 path 。
+    type: string
+  items:
+    description: >-
+      対象ページに紐付く通常アセットのメタ情報一覧。
+    type: array
+    items:
+      description: >-
+        アセットメタ情報 object。
+      type: object
+```
+
+#### エラー
+
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が削除済みページとして解決された
+- `forbidden`
+  - `read` スコープ不足
+  - path prefix 制約違反
+- `invalid_input`
+  - `path` が不正
+- `internal_error`
+  - 一覧取得処理や内部処理で想定外の失敗が発生した
+
+#### 注記
+
+- 削除済みアセットは返さない
+- `data_base64` は返さない
+
+---
+
+<a id="tool-resolve-page-asset"></a>
+### 2.12 `resolve_page_asset`
+
+#### 概要
+
+入力 `path` で指定されたページ内で、`file_name` に一致する通常アセットを解決し、最小識別情報を返す。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `read`
+- 認可判定対象 path は正規化後の入力 `path` とする
+
+#### 入力
+
+```yaml
+type: object
+required:
+  - path
+  - file_name
+properties:
+  path:
+    description: >-
+      アセットが紐付くページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      解決対象のアセットファイル名。
+    type: string
+```
+
+#### 出力
+
+```yaml
+type: object
+required:
+  - asset_id
+  - path
+  - file_name
+properties:
+  asset_id:
+    description: >-
+      解決されたアセットID。
+    type: string
+  path:
+    description: >-
+      入力 path を正規化して解決された対象ページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      解決されたアセットファイル名。
+    type: string
+```
+
+#### エラー
+
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が削除済みページとして解決された
+  - 対象アセットが存在しない
+  - 対象アセットが削除済みである
+- `forbidden`
+  - `read` スコープ不足
+  - path prefix 制約違反
+- `invalid_input`
+  - `path` が不正
+  - `file_name` が不正
+- `internal_error`
+  - 解決処理や内部処理で想定外の失敗が発生した
+
+#### 注記
+
+- 詳細メタ情報は `get_page_asset_metadata` で取得する
+- `data_base64` は返さない
+
+---
+
+<a id="tool-get-page-asset-metadata"></a>
+### 2.13 `get_page_asset_metadata`
+
+#### 概要
+
+入力 `path` で指定されたページ内で、`file_name` に一致する通常アセットの詳細メタ情報を返す。
+アセット本体は返さない。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `read`
+- 認可判定対象 path は正規化後の入力 `path` とする
+
+#### 入力
+
+```yaml
+type: object
+required:
+  - path
+  - file_name
+properties:
+  path:
+    description: >-
+      アセットが紐付くページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      メタ情報を取得するアセットファイル名。
+    type: string
+```
+
+#### 出力
+
+```yaml
+type: object
+required:
+  - asset
+properties:
+  asset:
+    description: >-
+      アセットメタ情報 object。
+    type: object
+```
+
+#### エラー
+
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が削除済みページとして解決された
+  - 対象アセットが存在しない
+  - 対象アセットが削除済みである
+- `forbidden`
+  - `read` スコープ不足
+  - path prefix 制約違反
+- `invalid_input`
+  - `path` が不正
+  - `file_name` が不正
+- `unsupported`
+  - `asset_id` 単独入力によるメタ情報取得要求
+- `internal_error`
+  - メタ情報取得処理や内部処理で想定外の失敗が発生した
+
+#### 注記
+
+- `instance_id` は存在する場合のみ返す任意項目とし、欠損時は JSON 項目を省略する
+- `data_base64` は返さない
+
+---
+
+<a id="tool-get-page-asset-data"></a>
+### 2.14 `get_page_asset_data`
+
+#### 概要
+
+入力 `path` で指定されたページ内で、`file_name` に一致する通常アセットのメタ情報と本体を返す。
+本体は `data_base64` に base64 文字列として格納する。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `read`
+- 認可判定対象 path は正規化後の入力 `path` とする
+
+#### 入力
+
+```yaml
+type: object
+required:
+  - path
+  - file_name
+properties:
+  path:
+    description: >-
+      アセットが紐付くページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      本体を取得するアセットファイル名。
+    type: string
+```
+
+#### 出力
+
+```yaml
+type: object
+required:
+  - asset
+  - data_base64
+properties:
+  asset:
+    description: >-
+      アセットメタ情報 object。
+    type: object
+  data_base64:
+    description: >-
+      アセット本体 bytes を base64 エンコードした文字列。
+    type: string
+```
+
+#### エラー
+
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が削除済みページとして解決された
+  - 対象アセットが存在しない
+  - 対象アセットが削除済みである
+- `forbidden`
+  - `read` スコープ不足
+  - path prefix 制約違反
+- `conflict`
+  - 保存済みアセットの raw binary size が 10MiB を超過している
+  - MCP result size または transport payload の制約超過を返却前に検出した
+- `invalid_input`
+  - `path` が不正
+  - `file_name` が不正
+- `unsupported`
+  - `asset_id` 単独入力による本体取得要求
+  - 条件付き取得入力の要求
+- `internal_error`
+  - 本体取得、base64 encode、内部 I/O などで想定外の失敗が発生した
+  - transport 送信時または serialize 後に初めて payload 制約超過が判明した
+
+#### 注記
+
+- `data_base64` とアセット本体 bytes は監査ログ、tracing、エラー summary に含めない
+- REST API の redirect、ETag、条件付き GET は MCP tool の外部契約に持ち込まない
+
+---
+
+<a id="tool-upload-page-asset"></a>
+### 2.15 `upload_page_asset`
+
+#### 概要
+
+入力 `path` で指定されたページへ、新規アセットをアップロードする。
+アップロード対象の本体は `data_base64` 入力で受け取り、ローカルファイルパス入力は受け付けない。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `update`
+- 認可判定対象 path は正規化後の入力 `path` とする
+- `ReadOnly` ユーザでは拒否する
+
+#### 入力
+
+```yaml
+type: object
+required:
+  - path
+  - file_name
+  - mime_type
+  - data_base64
+properties:
+  path:
+    description: >-
+      アセットをアップロードするページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      アップロードするアセットファイル名。
+    type: string
+  mime_type:
+    description: >-
+      アップロードするアセットの MIME 種別。
+    type: string
+  data_base64:
+    description: >-
+      アセット本体 bytes を base64 エンコードした文字列。
+    type: string
+```
+
+#### 出力
+
+```yaml
+type: object
+required:
+  - asset
+  - summary
+properties:
+  asset:
+    description: >-
+      アセットメタ情報 object。
+    type: object
+  summary:
+    description: >-
+      実行結果の要約。
+    type: string
+```
+
+#### エラー
+
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が削除済みページとして解決された
+- `conflict`
+  - 同名アセットが既にページ内に存在する
+  - 対象ページがロック中
+- `forbidden`
+  - `update` スコープ不足
+  - path prefix 制約違反
+  - `ReadOnly` ユーザによる upload
+- `invalid_input`
+  - `path` が不正
+  - `file_name` が不正
+  - `mime_type` が不正
+  - `data_base64` が base64 として不正
+  - decode 後の raw binary size が 10MiB を超過した
+  - decode 前の `data_base64` byte 長が 13,981,016 bytes を超過した
+- `unsupported`
+  - ローカルファイルパス入力の要求
+  - 既存アセットの上書き upload 要求
+  - lock token 入力の要求
+- `internal_error`
+  - upload 処理、base64 decode、内部 I/O などで想定外の失敗が発生した
+
+#### 注記
+
+- 新規アセット upload のみ扱い、上書きは扱わない
+- ロック中ページへの upload では lock token 入力を受け付けず `conflict` とする
+- `data_base64` とアセット本体 bytes は監査ログ、tracing、エラー summary に含めない
+- 成功時 `summary` はサーバ生成の短い固定的な文言とし、入力本体や base64 を含めない
+
+---
+
+<a id="tool-delete-page-asset"></a>
+### 2.16 `delete_page_asset`
+
+#### 概要
+
+入力 `path` で指定されたページ内で、`file_name` に一致する通常アセットを削除する。
+
+#### 認可
+
+- Bearer 認証が必要
+- 必要スコープは `delete`
+- 認可判定対象 path は正規化後の入力 `path` とする
+- `ReadOnly` ユーザでは拒否する
+
+#### 入力
+
+```yaml
+type: object
+required:
+  - path
+  - file_name
+properties:
+  path:
+    description: >-
+      アセットが紐付くページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      削除するアセットファイル名。
+    type: string
+```
+
+#### 出力
+
+```yaml
+type: object
+required:
+  - asset_id
+  - path
+  - file_name
+  - summary
+properties:
+  asset_id:
+    description: >-
+      削除したアセットID。
+    type: string
+  path:
+    description: >-
+      入力 path を正規化して解決された対象ページの絶対 path 。
+    type: string
+  file_name:
+    description: >-
+      削除したアセットファイル名。
+    type: string
+  summary:
+    description: >-
+      実行結果の要約。
+    type: string
+```
+
+#### エラー
+
+主な失敗区分は以下とする。
+
+- `not_found`
+  - 対象ページが存在しない
+  - 対象 path が削除済みページとして解決された
+  - 対象アセットが存在しない
+  - 対象アセットが削除済みである
+- `conflict`
+  - 対象ページがロック中
+- `forbidden`
+  - `delete` スコープ不足
+  - path prefix 制約違反
+  - `ReadOnly` ユーザによる delete
+- `invalid_input`
+  - `path` が不正
+  - `file_name` が不正
+- `unsupported`
+  - `asset_id` 単独入力による削除要求
+  - lock token 入力の要求
+  - 物理削除、復元、再削除の要求
+- `internal_error`
+  - 削除処理や内部処理で想定外の失敗が発生した
+
+#### 注記
+
+- `path + file_name` で指定された通常アセットのみ削除する
+- ロック中ページへの delete では lock token 入力を受け付けず `conflict` とする
+- 成功時 `summary` はサーバ生成の短い固定的な文言とし、内部保存パスや削除済みアセットの内部状態を含めない
+
+---
+
 ## 3. 改訂方針
 
 - 7.1 `get_page_section` の仕様確定は、本書 2.2 および 2.10 を正式化する形で反映する
 - 7.2 `list_pages` / `search_pages` のページング仕様確定は、本書 2.3 と 2.4 を正式化する形で反映する
+- アセット 6 tool の追加は、MS1.2 の外部契約確定結果および MS1.3 の内部設計方針を本書へ反映する形で扱う
+- アセット tool の内部責務分割、serde での未知フィールド扱い、`instance_id` 欠損時の JSON 表現、decode 前 base64 文字列長の防御的上限、MCP result size 超過時の検出箇所、監査ログ内部分類は MS1.3 の方針に従う
 - 参照系・更新系の各ツール節は本書へ集約済みであり、今後の改訂は設計差し戻しまたは互換性を崩さない補足に限定する

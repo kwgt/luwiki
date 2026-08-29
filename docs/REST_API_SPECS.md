@@ -1363,7 +1363,11 @@ properties:
   | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>`ReadOnly` 属性により書き込み系操作が禁止されている<br>ロック解除認証に失敗した<br>ロック取得者と異なるユーザがアップロードしようとした
 
 #### 注記
-  - アセットデータのサイズ制限は10MiBまでとする。10MiBを超えるアセットデータを送信された場合は413を返す
+  - アセットデータのサイズ上限は、サーバに設定された値とする
+  - 未指定時は10MiB、設定可能な最大値は100MiBとする
+  - 上限を超えた場合は413を返す
+  - REST APIの設定可能な上限は、
+    MCPアセットtoolの固定10MiB上限とは独立する
   - ロックされているページへアップロードする場合、`X-Lock-Authentication`が必須となる
   - `X-Lock-Authentication`に指定するトークンは、`POST /api/pages/{page_id}/lock`および`PUT /api/pages/{page_id}/lock`で取得した解除用トークンを使用する
 
@@ -1705,7 +1709,7 @@ properties:
 #### 認証・権限
 
 - Basic 認証または Bearer 認証が必要
-- Bearer 認証時の必要スコープは `delete`
+- Bearer 認証時の必要スコープは `update`
 - ロックされているページへのアップロードでは、必要に応じて `X-Lock-Authentication` によるロック解除認証も必要
 
 #### クエリーパラメータ
@@ -1759,7 +1763,11 @@ properties:
   | 403 Forbidden | Bearer 認証時に必要スコープを満たさない<br>`ReadOnly` 属性により書き込み系操作が禁止されている<br>ロック解除認証に失敗した<br>ロック取得者と異なるユーザがアップロードしようとした
 
 #### 注記
-  - アセットデータのサイズ制限は10MiBまでとする。10MiBを超えるアセットデータを送信された場合は413を返す
+  - アセットデータのサイズ上限は、サーバに設定された値とする
+  - 未指定時は10MiB、設定可能な最大値は100MiBとする
+  - 上限を超えた場合は413を返す
+  - REST APIの設定可能な上限は、
+    MCPアセットtoolの固定10MiB上限とは独立する
   - ロックされているページへアップロードする場合、`X-Lock-Authentication`が必須となる
   - `X-Lock-Authentication`に指定するトークンは、`POST /api/pages/{page_id}/lock`および`PUT /api/pages/{page_id}/lock`で取得した解除用トークンを使用する
 

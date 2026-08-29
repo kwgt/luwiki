@@ -84,9 +84,10 @@ MCP は REST API の下位モジュールに入れず、
 - `src/mcp/transport.rs`
   - MCP transport / endpoint の Actix 接続
   - リクエスト受理から公開層への橋渡し
-- `src/mcp/tools.rs`
+- `src/mcp/tools/mod.rs` と `src/mcp/tools/` 配下のtool別module
   - 公開するツール一覧とツール定義
   - ツール名、入力スキーマ、出力スキーマの定義
+  - tool別実行入口の定義
 - `src/mcp/handler.rs`
   - ツール呼び出しおよび標準primitive操作単位の入口
   - 入力検証、サービス呼び出し、応答整形、監査ログ記録

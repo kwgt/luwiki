@@ -2,8 +2,9 @@
 
 本書は、MCP実装に伴う既存機能への回帰確認範囲を整理した独立した回帰確認文書である。
 
-位置付けとしては、`docs/MCP_IMPLEMENTATION_DESIGN_TASKS.md` の 4.9.5 に対応する成果物であり、
-MCP 設計書群から参照される実装・テスト実装向け文書として扱う。
+位置付けとしては、`docs/REQUIREMENTS.md`と
+現行MCP設計書群に対応する
+実装・テスト実装向け文書として扱う。
 
 MCP 追加は新規 endpoint 追加に留まらず、
 Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、`run` 起動経路、
@@ -13,9 +14,9 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 
 ## 1. 参照仕様
 
-- `docs/MCP_IMPLEMENTATION_DESIGN_TASKS.md`
-  - 4.8 CLI / 設定 / 起動経路の設計
-  - 4.9 テスト設計
+- `docs/REQUIREMENTS.md`
+  - MCPサーバ機能
+  - 認証・認可、監査ログ、アセット管理
 - `docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`
   - 2.3.39 から 2.3.43
   - 2.4 HTTP サーバへの反映
@@ -46,6 +47,8 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
   - 再構成導線
 - `docs/MCP_EDIT_TEST_VIEWPOINTS.md`
   - `replace_section` 拡張後の edit operation 回帰観点
+- `docs/MCP_ASSET_TOOL_TEST_VIEWPOINTS.md`
+  - MCP アセット Tools導入時の固有テスト観点
 
 ## 2. 回帰確認の使い方
 
@@ -384,3 +387,75 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
    同じ handshake 済み session 上で tools と共存すること
 6. `initialize.instructions` が Bearer 認証注意を維持し、
    `replace_section` 注意文を含むこと
+
+## 17. MCP アセット Tools導入時の回帰範囲
+
+### 17.1 capabilityとrouting
+
+1. tools capabilityが既存toolとアセット6 toolを同じ `tools/list` で公開できること
+2. `list_page_assets`、`resolve_page_asset`、`get_page_asset_metadata`、
+   `get_page_asset_data`、`upload_page_asset`、`delete_page_asset` のschemaが
+   既存tool schemaを壊さないこと
+3. 同じhandshake済みsession上で既存tools、prompts、resources、
+   アセット6 toolを交互に利用できること
+4. tools標準method、prompts標準method、resources標準method、
+   LuWiki tool callのroutingが混線しないこと
+5. `get_page_asset_data` のtool resultとresources標準methodの
+   `ResourceContents`を混同しないこと
+
+### 17.2 認証・認可
+
+1. アセット参照系4 tool追加後も既存pathベースtoolsのread scope判定が
+   維持されること
+2. `upload_page_asset` のupdate scope判定追加後も `update_page` と
+   `edit_page` のscope判定が維持されること
+3. `delete_page_asset` のdelete scope判定追加後も、既存REST APIの
+   Bearer認可が意図せず変化しないこと
+4. ReadOnly拒否追加後も、ReadOnlyユーザによるMCP read系、
+   prompts、resourcesの利用が維持されること
+5. アセットtoolのpath prefix判定追加後も、prompts/resourcesの
+   path prefix非適用境界が維持されること
+
+### 17.3 RESTアセットAPI
+
+1. RESTアセット一覧、メタ情報取得、本体取得、upload、deleteの既存endpointが
+   MCP アセット Tools追加後も従来どおり動作すること
+2. REST APIのredirect、ETag、条件付きGET、HTTP status codeが
+   MCP `get_page_asset_data` の仕様に引きずられて変化しないこと
+3. REST uploadのmultipart / body処理とMCP `data_base64` 入力処理が
+   混同されないこと
+4. REST APIの設定値
+   （未指定時10MiB、設定可能な最大値100MiB）と、
+   MCP固定10MiB / 13,981,016 bytes制限が
+   それぞれ独立して評価されること
+5. REST側のlock token headerや既存ロック応答が、
+   MCP upload / deleteのlock token非公開方針で壊れないこと
+
+### 17.4 DB・保存済みアセット
+
+1. 既存 `DatabaseManager` asset APIをMCP service層から直接利用しても、
+   REST handler経由の既存利用が維持されること
+2. 削除済みasset、ゾンビasset、所属ページ不一致assetの扱いが、
+   既存DB整合性やREST側の公開制御を壊さないこと
+3. 同名未削除asset重複の拒否が既存upload挙動と矛盾しないこと
+4. 削除済み同名assetが存在する場合の新規upload許可可否が、
+   DB APIの既存挙動に従うこと
+
+### 17.5 監査ログと秘匿
+
+1. アセット6 toolの監査operation追加後も、既存tools、prompts、
+   resourcesの監査operationが維持されること
+2. `data_base64`、アセット本体bytes、内部保存パス、DB内部詳細を
+   監査ログ、tracing、error summaryへ出力しないこと
+3. アセット6 toolがappend集約状態へ混入しないこと
+4. 監査ログbest-effort方針がアセットtool追加後も維持されること
+
+### 17.6 優先度の高い追加回帰セット
+
+1. `tools/list` にアセット6 toolが追加され、既存tool schemaが維持されること
+2. read / update / delete / write scopeとReadOnlyの代表ケースを確認すること
+3. path prefix範囲内外の代表ケースを確認すること
+4. RESTアセットAPIの代表read / upload / deleteが維持されること
+5. `get_page_asset_data` の10MiB超過と `upload_page_asset` の
+   decode前13,981,016 bytes超過が別入口で確認できること
+6. アセット6 toolの監査ログと秘匿情報非記録を確認すること

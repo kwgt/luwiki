@@ -2,8 +2,8 @@
 
 本書は、MCPサーバ機能の内部設計を整理するための文書である。
 
-本書では、`docs/REQUIREMENTS.md`、`docs/MCP_SPEC_DECISION_TASKS.md`、
-`docs/MCP_DESIGN_INPUT_TASKS.md`、`docs/BEARER_AUTH_DESIGN.md` を前提とし、
+本書では、`docs/REQUIREMENTS.md`、`docs/BEARER_AUTH_DESIGN.md`、
+およびMCP設計分冊を前提とし、
 MCP機能の責務配置、公開面、認証・認可、監査ログ、path ベースサービス層、
 データモデル拡張、CLI / 設定 / 起動経路への反映方針を定義する。
 
@@ -78,8 +78,8 @@ MCP 実装設計の文書配置は、
 |:--|:--|:--|
 | 4.2 全体アーキテクチャ設計 | `docs/MCP_ARCHITECTURE_DESIGN.md` | 2. 責務配置に関する設計判断 / 3. モジュール構成案 / 4. 既存 REST API 層との共通化方針 |
 | 4.3 MCP 公開面の設計 | `docs/MCP_TOOL_SPECS.md`、`docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`、`docs/MCP_INTERFACE_AND_ERROR_DESIGN.md` | 1. 共通事項 / 2. ツール仕様 / 2. MCP の公開条件と起動条件 / 3. MCP の transport / endpoint 構成 / 2. MCP のツール一覧と各ツールの責務 / 3. MCP の入出力データモデル / 4. MCP エラー応答と内部エラー分類の対応 |
-| 4.4 認証・認可設計 | `docs/MCP_INTERNAL_DESIGN.md`、`docs/MCP_SERVICE_AND_STORAGE_DESIGN.md` | 5.1 認証・認可 / 2. path ベースサービス層の橋渡し設計 / 2.4 Bearerトークン管理情報の拡張設計 / 2.5 ユーザ属性モデルの拡張設計 |
-| 4.5 監査ログ設計 | `docs/MCP_INTERNAL_DESIGN.md`、`docs/MCP_AUDIT_LOG_DESIGN.md` | 5.2 監査ログ / 2. 責務配置 / 3. 監査ログレコードモデル / 4. `append` 集約ロジックの状態管理 / 5. JSONL 保存形式とファイル分割ルール / 6. 保持期間超過ログの自動削除 / 7. `tracing` と既存アクセスログとの役割分担 |
+| 4.4 認証・認可設計 | 本書、service設計 | 6.1、2.2、2.4、2.5 |
+| 4.5 監査ログ設計 | 本書、監査設計 | 6.2、監査設計2～7章 |
 | 4.6 path ベースサービス層とデータモデル設計 | `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`、`docs/MCP_INTERFACE_AND_ERROR_DESIGN.md` | 2. path ベースサービス層の橋渡し設計 / 2.6 サービス層の入出力モデル / 2.7 追加が必要な DB API / 3. MCP の入出力データモデル |
 | 4.7 永続化・DBアクセス・運用値設計 | `docs/MCP_SERVICE_AND_STORAGE_DESIGN.md`、`docs/MCP_AUDIT_LOG_DESIGN.md`、`docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md` | 2.4 Bearerトークン管理情報の拡張設計 / 2.5 ユーザ属性モデルの拡張設計 / 2.7 追加が必要な DB API / 5. JSONL 保存形式とファイル分割ルール / 6. 保持期間超過ログの自動削除 / 2.3 CLI と設定ファイルの優先順位 |
 | 4.8 CLI / 設定 / 起動経路設計 | `docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md` | 2. MCP の公開条件と起動条件 / 3. MCP の transport / endpoint 構成 |
@@ -102,13 +102,19 @@ MCP 実装設計の文書配置は、
 - ページ追記
 - ページリネーム
 - セクション取得
+- ページアセット一覧取得
+- ページアセット解決
+- ページアセットメタ情報取得
+- ページアセット本体取得
+- ページアセットアップロード
+- ページアセット削除
 
 以下は初期実装の対象外とし、本書でも詳細設計の対象に含めない。
 
 - 削除済みページ参照
 - restore
-- アセット操作
 - ロック操作
+- 初期 MCP アセット Tools に含まれないアセット操作
 
 ## 2. 設計前提
 
@@ -136,8 +142,8 @@ MCP 実装設計の文書配置は、
 
 - 削除済みページ参照
 - restore
-- アセット操作
 - ロック操作
+- 初期 MCP アセット Tools に含まれないアセット操作
 
 各対象外事項の扱いは以下の通りとする。
 
@@ -147,9 +153,11 @@ MCP 実装設計の文書配置は、
 - restore
   - rename とは別操作として扱い、初期版では公開しない
   - rename 系入力に restore 相当の意味を持ち込まない
-- アセット操作
-  - MCP ツールとして公開しない
-  - ページ path ベース設計の対象に含めない
+- 初期 MCP アセット Tools に含まれないアセット操作
+  - 初期版では、ページに紐付く通常アセットを扱う tool として、一覧、解決、メタ情報取得、本体取得、upload、delete を公開する
+  - `asset_id` 単独入力、ローカルファイルパス入力、既存アセットの上書き upload、lock token 入力付き upload / delete は公開しない
+  - 削除済みアセットの直接参照・復元・再削除、ゾンビアセット操作、アセットの rename / copy / move / MIME 種別のみ更新は公開しない
+  - REST API の redirect、ETag、条件付き GET は MCP tool の外部契約へ持ち込まない
 - ロック操作
   - ロック取得・更新・解除・参照は公開しない
   - ただし内部実装では、競合検出や待機判定のため既存ロック基盤を再利用してよい
@@ -160,7 +168,7 @@ MCP 実装設計の文書配置は、
 
 - 削除済みページ専用参照
 - restore
-- アセット操作
+- MCP アセット Tools の拡張操作
 - ロック操作
 - transport の Streaming / SSE / session 管理拡張
 - 監査ログ基盤の他機能への横展開
@@ -233,9 +241,13 @@ MCP公開層は、MCP クライアントから見えるツール群と、
 - サービス層の結果を MCP 応答へ整形
 - 認証失敗、認可失敗、入力不正、競合などのエラー応答整形
 - 監査ログイベント生成の起点管理
+- アセット 6 tool の公開関数と tool 別 execute module の提供
+- `src/mcp/tools/mod.rs` におけるアセット tool 名、tool args、schema 生成の定義
 
 この層では `page_id` を扱わず、外部入力は path ベースで統一する。
 また、既存 REST API を内部 HTTP 呼び出しする構成は採らない。
+アセット本体を含む `data_base64` は、`get_page_asset_data` の成功応答と
+`upload_page_asset` の入力に限定し、ログやエラー summary へ流さない。
 
 ### 5.3 共通サービス層
 
@@ -249,6 +261,11 @@ MCP公開層は、MCP クライアントから見えるツール群と、
 - Bearer スコープ判定と path prefix 制約判定
 - list / search の prefix 検証と結果フィルタ
 - create / update / append / rename の業務フロー制御
+- アセット tool の `path` 検証、正規化、scope 判定、path prefix 判定、page_id 解決
+- `path + file_name` から `asset_id` と metadata を解決する共通 helper の提供
+- 削除済みアセット、ゾンビアセット、所属ページ不一致アセットの外部公開対象からの除外
+- `file_name`、`mime_type`、`data_base64`、raw binary size 10MiB の検証
+- upload / delete におけるページロック確認とロック中 `conflict` への写像
 - `append` の amend 相当判定および競合制御
 - 監査ログへ渡す業務結果情報の組み立て
 
@@ -268,6 +285,13 @@ HTTP や MCP の応答形式から独立した内部処理単位として設計�
 - ページ、リビジョン、ユーザ、トークンなどの永続化
 - Bearer トークン照合、TTL 延長、トークン管理情報の取得
 - ページ読取・更新・削除・リネームなど既存 DB API の提供
+- アセット一覧、解決、メタ情報取得、本体取得、作成、削除に関する既存 DB API の提供
+
+MCP アセット Tools からは、既存 `DatabaseManager` の asset API を直接利用する。
+REST API の handler、HTTP query、HTTP body、redirect、ETag、条件付き GET、
+lock token header には依存しない。
+DB 層は MCP 固有の外部応答や error code を意識せず、
+低水準整合性と保存処理に責務を限定する。
 - 必要に応じた path ベース支援 API や `append` 支援 API の追加
 
 この層は、MCP 専用の公開仕様を意識せず、
@@ -284,7 +308,7 @@ MCP で必要な認可判定を共通サービス層へ接続する。
 - MCP 固有の認可単位は、共通サービス層で操作種別ごとに判定する
 - path prefix 制約違反およびスコープ不足は、認可失敗として扱う
 
-#### 5.1.1 MCP 用 Bearer 認証入口の責務
+#### 6.1.1 MCP 用 Bearer 認証入口の責務
 
 MCP 用 Bearer 認証入口は、既存 REST API の Bearer 認証設計を流用しつつ、
 MCP 固有の transport 文脈を扱う薄い入口として設計する。
@@ -360,7 +384,7 @@ MCP ツール実行エラーへ混在させない。
 「Bearer 資格の真正性確認と認証文脈生成」に責務を限定し、
 MCP 固有の path ベース認可や監査ログ詳細判定は後段へ委ねる。
 
-#### 5.1.2 分解後 Bearer スコープ体系の内部実装方針
+#### 6.1.2 分解後 Bearer スコープ体系の内部実装方針
 
 MCP 用認可では、`read` / `write` / `create` / `update` / `append` / `delete`
 の分解後スコープ体系を、そのまま内部実装へ反映する。
@@ -451,7 +475,7 @@ MCP 設計として重要なのは、
 「required scope 判定結果としての実効権限」を混同しないことである。
 監査ログやエラー判定で参照するのは、常に required scope に対する判定結果とする。
 
-#### 5.1.3 path prefix 制約の内部表現と判定 API
+#### 6.1.3 path prefix 制約の内部表現と判定 API
 
 path prefix 制約は、Bearer トークンに付与される
 「操作可能な path 範囲」を表す認可データとして扱う。
@@ -542,7 +566,7 @@ MCP 側で必要になる判定 API は、単一 path 判定だけでは足り�
 
 本節では、その前提となる保持形式と単体判定規則を確定対象とする。
 
-#### 5.1.4 操作種別ごとの認可判定対象 path
+#### 6.1.4 操作種別ごとの認可判定対象 path
 
 MCP の path ベース認可では、
 「入力された path をそのまま見る操作」と
@@ -623,7 +647,7 @@ MCP の path ベース認可は、入力文字列ベースではなく、
 そのため、page_id 解決を内部で利用する場合でも、
 認可基準そのものは current path / target path / requested prefix のいずれかで説明可能な形を維持する。
 
-#### 5.1.5 `NoBasicAuth` / `ReadOnly` の反映箇所
+#### 6.1.5 `NoBasicAuth` / `ReadOnly` の反映箇所
 
 `NoBasicAuth` および `ReadOnly` は MCP 専用属性ではなく、
 ユーザ情報に付与される共通属性として設計する。
@@ -689,7 +713,7 @@ MCP 実装設計としての依存関係は以下の通りとする。
 「MCP の write 系操作で直接判定する共通認可属性」
 として扱う責務境界である。
 
-#### 5.1.6 認可失敗時の監査ログ連携点
+#### 6.1.6 認可失敗時の監査ログ連携点
 
 MCP では、認証失敗は監査ログ対象に含めず、
 認可失敗のみを監査ログ対象に含める。
@@ -786,7 +810,7 @@ struct AuditAuthorizationFailure {
 ### 6.2 監査ログ
 
 監査ログの詳細設計は、
-[MCP_AUDIT_LOG_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_AUDIT_LOG_DESIGN.md)
+[MCP_AUDIT_LOG_DESIGN.md](MCP_AUDIT_LOG_DESIGN.md)
 へ切り出す。
 
 本書では、MCP と監査ログ基盤の接続点だけを保持する。
@@ -794,14 +818,17 @@ struct AuditAuthorizationFailure {
 - MCP 公開層でイベント起点を捕捉し、共通サービス層で確定した業務結果と組み合わせて監査ログへ渡す
 - 認証失敗は監査ログではなく既存ログ責務に残し、認可失敗は監査ログ対象に含める
 - `append` は集約ルールを考慮した記録を行う
+- アセット 6 tool は専用 `AuditOperation` として記録し、成功時の `target_path` は正規化済み page path、`revision` は `null` とする
+- `data_base64`、アセット本体 bytes、Bearer token 平文、Authorization header、lock token、内部保存パス、DB 内部詳細は監査ログへ記録しない
 - 監査ログ基盤は `src/mcp/` 配下ではなく独立した `src/audit/` モジュールとして扱う
 
-別紙 [MCP_AUDIT_LOG_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_AUDIT_LOG_DESIGN.md)
+別紙 [MCP_AUDIT_LOG_DESIGN.md](MCP_AUDIT_LOG_DESIGN.md)
 では、以下を定義する。
 
 - 監査ログモジュールの責務配置
 - 監査ログレコードモデル
 - `append` 集約ロジックの状態管理
+- MCP アセット Tools の監査 operation、summary、記録禁止情報
 - JSONL 保存形式とファイル分割ルール
 - 保持期間超過ログの自動削除
 - `tracing` と既存アクセスログとの役割分担
@@ -809,7 +836,7 @@ struct AuditAuthorizationFailure {
 ## 7. 責務配置に関する設計判断
 
 責務配置、モジュール構成、既存 REST API 層との共通化方針の詳細は、
-[MCP_ARCHITECTURE_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_ARCHITECTURE_DESIGN.md)
+[MCP_ARCHITECTURE_DESIGN.md](MCP_ARCHITECTURE_DESIGN.md)
 を参照する。
 
 本書では、5章の責務分割を全体方針として保持し、
@@ -819,21 +846,21 @@ struct AuditAuthorizationFailure {
 
 `src/mcp/` の初期構成案、`src/http_server/` / `src/database/` /
 `src/cmd_args/` への反映箇所、監査ログ基盤の配置方針は、
-[MCP_ARCHITECTURE_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_ARCHITECTURE_DESIGN.md)
+[MCP_ARCHITECTURE_DESIGN.md](MCP_ARCHITECTURE_DESIGN.md)
 を参照する。
 
 ## 9. 既存 REST API 層との共通化方針
 
 再利用対象、共通サービス層へ引き上げる対象、
 MCP 専用に残す公開面、REST API 側へ残す HTTP 依存処理の切り分けは、
-[MCP_ARCHITECTURE_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_ARCHITECTURE_DESIGN.md)
+[MCP_ARCHITECTURE_DESIGN.md](MCP_ARCHITECTURE_DESIGN.md)
 を参照する。
 
 ## 10. path ベースサービス層の橋渡し設計
 
 path 妥当性検証、正規化、認可、`page_id` 解決、DB API 接続、
 Bearer トークン管理情報とユーザ属性の保存モデル拡張は、
-[MCP_SERVICE_AND_STORAGE_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_SERVICE_AND_STORAGE_DESIGN.md)
+[MCP_SERVICE_AND_STORAGE_DESIGN.md](MCP_SERVICE_AND_STORAGE_DESIGN.md)
 を参照する。
 
 本書では、5章および 6章で定義した責務境界と横断方針を前提に、
@@ -843,7 +870,7 @@ path ベース要求を共通サービス層で吸収する位置付けのみを
 
 create / update / append / rename の共通入力モデル、
 解決済みコンテキスト、共通出力モデル、`append` の内部位置付けは、
-[MCP_SERVICE_AND_STORAGE_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_SERVICE_AND_STORAGE_DESIGN.md)
+[MCP_SERVICE_AND_STORAGE_DESIGN.md](MCP_SERVICE_AND_STORAGE_DESIGN.md)
 を参照する。
 
 本書では、`append` を MCP 専用公開操作として維持しつつ、
@@ -857,10 +884,10 @@ create / update / append / rename の共通入力モデル、
 
 - `docs/REQUIREMENTS.md`
   - MCP 機能の正式な要求仕様
-- `docs/MCP_SPEC_DECISION_TASKS.md`
-  - Bearer スコープ分解、path prefix 制約、`append`、`rename`、監査ログの決定根拠
-- `docs/MCP_DESIGN_INPUT_TASKS.md`
-  - 監査ログ詳細、CLI 表示、保持運用などの設計インプット整理結果
+- `docs/MCP_TOOL_SPECS.md`
+  - MCP toolの公開契約
+- `docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`
+  - CLI、設定、起動経路、transportの現行設計
 - `docs/BEARER_AUTH_DESIGN.md`
   - Bearer 認証、`token_id`、path prefix 制約、`NoBasicAuth` の既存設計
 - `docs/BASE_DESIGN.md`
@@ -886,7 +913,7 @@ create / update / append / rename の共通入力モデル、
 
 `run` コマンドでの MCP 有効化、CLI / config への反映、
 HTTP サーバ起動時の設定伝播と監査ログのグローバル設定連動方針は、
-[MCP_RUNTIME_AND_TRANSPORT_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md)
+[MCP_RUNTIME_AND_TRANSPORT_DESIGN.md](MCP_RUNTIME_AND_TRANSPORT_DESIGN.md)
 を参照する。
 
 本書では、2章の設計前提として
@@ -896,15 +923,17 @@ HTTP サーバ起動時の設定伝播と監査ログのグローバル設定連
 
 `/mcp` endpoint の構成、Actix への組み込み位置、
 Streamable HTTP 前提の transport adapter 責務は、
-[MCP_RUNTIME_AND_TRANSPORT_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_RUNTIME_AND_TRANSPORT_DESIGN.md)
+[MCP_RUNTIME_AND_TRANSPORT_DESIGN.md](MCP_RUNTIME_AND_TRANSPORT_DESIGN.md)
 を参照する。
 
 ## 15. MCP のツール一覧と各ツールの責務
 
-初期版で公開する `get_page`、`list_pages`、`search_pages`、
-`create_page`、`update_page`、`edit_page`、`append_page`、`rename_page`、
-`get_page_section` の責務整理は、
-[MCP_INTERFACE_AND_ERROR_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_INTERFACE_AND_ERROR_DESIGN.md)
+初期版で公開する `get_page`、`get_page_toc`、`list_pages`、
+`search_pages`、`create_page`、`update_page`、`edit_page`、`append_page`、
+`rename_page`、`get_page_section`、`list_page_assets`、
+`resolve_page_asset`、`get_page_asset_metadata`、`get_page_asset_data`、
+`upload_page_asset`、`delete_page_asset` の責務整理は、
+[MCP_INTERFACE_AND_ERROR_DESIGN.md](MCP_INTERFACE_AND_ERROR_DESIGN.md)
 を参照する。
 
 MCP promptsはpathベースtoolsとは独立した標準primitiveとして扱い、
@@ -913,7 +942,7 @@ promptはpathやpage IDではなく`mcp.name`で識別し、Bearerのread scope�
 ページ用path prefix制約は適用しない。
 
 promptsの外部契約は
-[MCP_PROMPT_SPECS.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_PROMPT_SPECS.md)
+[MCP_PROMPT_SPECS.md](MCP_PROMPT_SPECS.md)
 を参照する。
 
 MCP resourcesはpathベースtoolsとは独立した標準primitiveとして扱い、
@@ -924,21 +953,21 @@ MCP resourcesはpathベースtoolsとは独立した標準primitiveとして扱�
 ページ用path prefix制約は適用しない。
 
 resourcesの外部契約は
-[MCP_RESOURCE_SPECS.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_RESOURCE_SPECS.md)
+[MCP_RESOURCE_SPECS.md](MCP_RESOURCE_SPECS.md)
 を参照する。
 
 ## 16. MCP の入出力データモデル
 
 path ベースの共通入力モデル、ツール別入出力、
 `page_id` 非公開を前提とした応答モデルは、
-[MCP_INTERFACE_AND_ERROR_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_INTERFACE_AND_ERROR_DESIGN.md)
+[MCP_INTERFACE_AND_ERROR_DESIGN.md](MCP_INTERFACE_AND_ERROR_DESIGN.md)
 を参照する。
 
 ## 17. MCP エラー応答と内部エラー分類の対応
 
 公開エラー表現、内部エラー分類との写像、transport エラーと
 ツール実行エラーの切り分けは、
-[MCP_INTERFACE_AND_ERROR_DESIGN.md](/home/kgt/dlp/private/sandbox/luwiki/docs/MCP_INTERFACE_AND_ERROR_DESIGN.md)
+[MCP_INTERFACE_AND_ERROR_DESIGN.md](MCP_INTERFACE_AND_ERROR_DESIGN.md)
 を参照する。
 
 ## 18. MCP promptsの内部位置付け
@@ -994,5 +1023,37 @@ resource候補、URI逆引き索引、保存後同期、初期構築、再構成
 transport、通知非対応は`MCP_RUNTIME_AND_TRANSPORT_DESIGN.md`を参照する。
 公開URI、field、cursor、contents、protocol errorは`MCP_RESOURCE_SPECS.md`を正本とし、
 内部変換は`MCP_INTERFACE_AND_ERROR_DESIGN.md`を参照する。
+
+## 20. MCP アセット Toolsの内部位置付け
+
+MCP アセット Toolsは次の責務境界で実装する。
+
+1. `src/mcp/tools/mod.rs`
+   - tool名、tool args、schema生成を定義する
+   - 未知フィールドは初期版では既存MCP toolと同様にserde既定挙動で無視する
+2. `src/mcp/server.rs` とtool別module
+   - `#[tool]`付きasync functionを公開し、tool別`execute()`へ委譲する
+3. `src/mcp/handler.rs`
+   - tool別`handle_*`でserviceを呼び出し、
+     成功・失敗監査を処理する
+   - `primary_target_path()`と`audit_operation()`を
+     監査用helperとして使用する
+   - uploadのrequest全体をdebug表示やsummary化しない
+4. `src/mcp/service.rs`
+   - `McpOperation`、required scope、ReadOnly拒否、path prefix判定、page_id解決、asset解決helper、size検証を処理する
+5. `src/mcp/model.rs`
+   - `McpToolRequest` / `McpToolResponse` とasset metadata応答モデルを定義する
+   - `instance_id`は`Option<String>`とし、欠損時はJSON項目を省略する
+6. database層
+   - 既存`DatabaseManager` asset APIを直接利用する
+   - rmcp公開型やMCP固有error codeを持ち込まない
+
+公開toolは`list_page_assets`、`resolve_page_asset`、
+`get_page_asset_metadata`、`get_page_asset_data`、`upload_page_asset`、
+`delete_page_asset`の6件とする。
+外部契約は`MCP_TOOL_SPECS.md`、入出力とエラー写像は
+`MCP_INTERFACE_AND_ERROR_DESIGN.md`、service / DB利用方針は
+`MCP_SERVICE_AND_STORAGE_DESIGN.md`、監査ログ方針は
+`MCP_AUDIT_LOG_DESIGN.md`を参照する。
 
 M4ではtagsの内部設計を先行確定しない。

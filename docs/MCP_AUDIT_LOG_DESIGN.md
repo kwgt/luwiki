@@ -203,6 +203,12 @@ struct AuditRecord {
 - `GetPrompt`
 - `ListResources`
 - `ReadResource`
+- `ListPageAssets`
+- `ResolvePageAsset`
+- `GetPageAssetMetadata`
+- `GetPageAssetData`
+- `UploadPageAsset`
+- `DeletePageAsset`
 - `Search`
 - `Create`
 - `Update`
@@ -237,12 +243,14 @@ JSONL 上の後方互換性を壊さないよう、初期実装では安定し�
   - 接続情報欠損時のみ `null` を許容する
 - `target_path`
   - `get` / `get_section` / `create` / `update` / `append` / `rename` では原則記録する
+  - アセット 6 tool では正規化済み page path を記録する
   - `list` / `search` は prefix 指定がある場合にその要求 prefix を記録し、prefix なしの場合は `null` を許容する
   - 認可失敗では、判定対象 path が定まる場合はその path を記録する
 - `revision`
   - `create` / `update` / `append` / `rename` 成功時は記録する
   - `append` 集約時も「操作対象指定時の revision」を記録する
   - `get` / `get_section` は、取得対象 revision が確定している場合のみ記録してよい
+  - アセット操作は page 本文 revision に直接対応しないため、成功時も `null` とする
   - `list` / `search`、認可失敗、入力不正、対象外操作では `null` を許容する
 - `summary`
   - rename の移動先補足
@@ -903,3 +911,90 @@ resources操作の成功・失敗結果を変更しない。
 - DB内部エラー
 - Bearer token平文、Authorization header
 - serialize済みrequest body
+
+## 10. MCP アセット Toolsの監査設計
+
+MCP アセット Toolsは、ページに紐付く通常アセットを扱う
+pathベースtoolとして監査する。
+`AuditOperation`の永続化名はtool名と同じsnake_caseとする。
+
+対象operationは以下とする。
+
+- `AuditOperation::ListPageAssets`: `list_page_assets`
+- `AuditOperation::ResolvePageAsset`: `resolve_page_asset`
+- `AuditOperation::GetPageAssetMetadata`: `get_page_asset_metadata`
+- `AuditOperation::GetPageAssetData`: `get_page_asset_data`
+- `AuditOperation::UploadPageAsset`: `upload_page_asset`
+- `AuditOperation::DeletePageAsset`: `delete_page_asset`
+
+### 10.1 参照系アセット tool
+
+`list_page_assets`、`resolve_page_asset`、`get_page_asset_metadata`、
+`get_page_asset_data` は参照系として扱う。
+
+成功時は次の内容を記録する。
+
+- `result = success`
+- `target_path = 正規化済み page path`
+- `revision = null`
+- `list_page_assets` の summary は `count=<返却件数>` とする
+- `resolve_page_asset`、`get_page_asset_metadata`、`get_page_asset_data` の summary には、`asset_id`、`file_name`、`mime_type`、`size` を記録してよい
+
+失敗時は次の結果分類を使用する。
+
+- scope不足: `scope_denied`
+- path prefix制約違反: `path_prefix_denied`
+- page / asset 不存在、削除済み asset、外部到達不能 asset: `not_found`
+- 入力不正: `invalid_input`
+- 保存済み asset 10MiB 超過、事前検出できる result / transport payload 上限超過: `conflict`
+- DB / FS / base64 encode などの想定外失敗: `internal_error`
+
+失敗時 summary は公開message相当の固定的・抽象的文言に限定する。
+
+### 10.2 更新系アセット tool
+
+`upload_page_asset` と `delete_page_asset` は更新系として扱う。
+
+成功時は次の内容を記録する。
+
+- `result = success`
+- `target_path = 正規化済み page path`
+- `revision = null`
+- `upload_page_asset` の summary には、`asset_id`、`file_name`、`mime_type`、`size`、`summary=asset uploaded` を記録してよい
+- `delete_page_asset` の summary には、`asset_id`、`file_name`、`summary=asset deleted` を記録してよい
+
+失敗時は次の結果分類を使用する。
+
+- scope不足: `scope_denied`
+- path prefix制約違反: `path_prefix_denied`
+- `ReadOnly` ユーザによる upload / delete: `scope_denied`
+- page / asset 不存在、削除済み asset、外部到達不能 asset: `not_found`
+- 同名アセット重複、ロック中ページ: `conflict`
+- path / file_name / mime_type / data_base64 不正、upload size 制約超過: `invalid_input`
+- 初期版対象外操作: `unsupported`
+- DB / FS などの想定外失敗: `internal_error`
+
+失敗時 summary は公開message相当の固定的・抽象的文言に限定する。
+ロック中ページへの upload / delete は lock token 入力を受け付けないため、
+`conflict` として即時監査対象にする。
+
+### 10.3 共通項目と記録禁止情報
+
+全アセット tool とも、ユーザID、token ID、取得可能な入力元IP address、
+timestampを既存共通項目として記録する。
+監査書込みはbest-effortとし、sink lock、書込み、ユーザID解決の失敗によって
+アセット操作の成功・失敗結果を変更しない。
+
+アセット操作はappend集約対象外とし、成功・失敗とも原則即時書き込みとする。
+
+次の情報は監査ログ、tracing、error summaryへ記録しない。
+
+- `data_base64`
+- アセット本体 bytes
+- serialize済みrequest body
+- Bearer token平文、Authorization header
+- lock token
+- 内部保存パス
+- DB内部エラー詳細
+- raw `data_base64` を含む upload 入力構造全体
+- 削除済み、ゾンビ、所属不一致として除外した asset の一覧や file_name

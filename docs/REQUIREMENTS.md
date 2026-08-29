@@ -381,13 +381,20 @@
   - ページ追記（append）
   - ページリネーム
   - セクション取得
+  - ページアセット一覧取得
+  - ページアセット解決
+  - ページアセットメタ情報取得
+  - ページアセット本体取得
+  - ページアセットアップロード
+  - ページアセット削除
   - MCP 標準の `prompts/list`
   - MCP 標準の `prompts/get`
   - MCP 標準の `resources/list`
   - MCP 標準の `resources/read`
 - prompts 操作は LuWiki 独自 tool の `tools/call` ではなく、MCP 標準の prompts 操作として提供する
 - resources 操作は LuWiki 独自 tool の `tools/call` ではなく、MCP 標準の resources 操作として提供する
-- 初期実装の MCP では、削除済みページ参照、restore、アセット操作、ロック操作は提供しない
+- 初期実装の MCP では、削除済みページ参照、restore、ロック操作は提供しない
+- 初期実装の MCP アセット操作では、`asset_id` 単独入力、ローカルファイルパス入力、既存アセットの上書き upload、lock token 入力付き upload / delete、アセットのリネーム・コピー・移動は提供しない
 
 ### 12.2.1 edit_page の扱い
 
@@ -414,6 +421,7 @@
 - MCP の append は対象ページの現在 path を基準に認可判定する
 - MCP の rename は移動元 path と移動先 path の両方が許可範囲内である場合にのみ許可する
 - MCP の検索・一覧で prefix 指定がある場合は、結果の後段フィルタだけでなく要求 prefix 自体も認可判定対象とする
+- MCP アセット Tools は、正規化済みの入力 `path` を基準に path prefix 制約を判定する
 - MCP resources では、ページ由来 resource の current path が path prefix 範囲外でも一覧・取得対象とする
 - rename 後の旧 path は自動追跡せず、旧 path 指定時は見つからないものとして扱う
 
@@ -588,6 +596,10 @@
   - ページ削除時の参照切り離し
   - 他ページからの参照維持
 - 内部的には (PageId → AssetId) の対応を管理し、逆引き (AssetId → PageId) は必要に応じて利用する
+- MCP 初期版のアセット操作は、ページの `path` とページ内 `file_name` を主入力として扱い、`asset_id` は出力上の識別情報として扱う
+- MCP 初期版では、アセット本体の取得は `get_page_asset_data` の `data_base64` 出力、アセット upload は `upload_page_asset` の `data_base64` 入力で扱う
+- MCP 初期版で取得または upload するアセット本体の raw binary size 上限は 10MiB とする
+- MCP 初期版の upload では、decode 前の `data_base64` byte 長上限を 13,981,016 bytes とし、decode 後の raw binary size も確認する
 
 ---
 

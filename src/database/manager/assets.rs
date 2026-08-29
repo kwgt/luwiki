@@ -131,6 +131,75 @@ impl DatabaseManager {
     }
 
     ///
+    /// テスト用アセット情報の強制更新
+    ///
+    #[cfg(test)]
+    pub(crate) fn force_update_asset_info_for_test<F>(
+        &self,
+        asset_id: &AssetId,
+        update: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(&mut AssetInfo),
+    {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+        let update_result = (|| -> Result<()> {
+            let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let mut asset_info = match info_table.get(asset_id.clone())? {
+                Some(info) => info.value(),
+                None => {
+                    return Err(anyhow!(
+                        crate::database::DbError::AssetNotFound
+                    ));
+                }
+            };
+
+            update(&mut asset_info);
+            info_table.insert(asset_id.clone(), asset_info)?;
+            Ok(())
+        })();
+
+        if let Err(err) = update_result {
+            return Err(err);
+        }
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(())
+    }
+
+    ///
+    /// テスト用アセット情報の強制削除
+    ///
+    #[cfg(test)]
+    pub(crate) fn force_remove_asset_info_for_test(
+        &self,
+        asset_id: &AssetId,
+    ) -> Result<()> {
+        /*
+         * 書き込みトランザクション開始
+         */
+        let txn = self.db.begin_write()?;
+        {
+            let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
+            let _ = info_table.remove(asset_id.clone())?;
+        }
+
+        /*
+         * コミット
+         */
+        txn.commit()?;
+
+        Ok(())
+    }
+
+    ///
     /// ページ所属アセット情報の一覧取得
     ///
     /// # 概要

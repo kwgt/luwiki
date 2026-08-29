@@ -10,14 +10,22 @@
 
 pub(crate) mod append_page;
 pub(crate) mod create_page;
+pub(crate) mod delete_page_asset;
 pub(crate) mod edit_page;
 pub(crate) mod get_page;
+pub(crate) mod get_page_asset_data;
+pub(crate) mod get_page_asset_metadata;
 pub(crate) mod get_page_section;
 pub(crate) mod get_page_toc;
 pub(crate) mod list_pages;
+pub(crate) mod list_page_assets;
 pub(crate) mod rename_page;
+pub(crate) mod resolve_page_asset;
 pub(crate) mod search_pages;
 pub(crate) mod update_page;
+pub(crate) mod upload_page_asset;
+
+use std::fmt;
 
 use rmcp::schemars;
 use serde::Deserialize;
@@ -58,6 +66,24 @@ pub(crate) enum McpToolName {
 
     /// セクション取得
     GetPageSection,
+
+    /// ページアセット一覧取得
+    ListPageAssets,
+
+    /// ページアセット解決
+    ResolvePageAsset,
+
+    /// ページアセットメタ情報取得
+    GetPageAssetMetadata,
+
+    /// ページアセット本体取得
+    GetPageAssetData,
+
+    /// ページアセットアップロード
+    UploadPageAsset,
+
+    /// ページアセット削除
+    DeletePageAsset,
 }
 
 impl McpToolName {
@@ -79,6 +105,12 @@ impl McpToolName {
             Self::AppendPage => "append_page",
             Self::RenamePage => "rename_page",
             Self::GetPageSection => "get_page_section",
+            Self::ListPageAssets => "list_page_assets",
+            Self::ResolvePageAsset => "resolve_page_asset",
+            Self::GetPageAssetMetadata => "get_page_asset_metadata",
+            Self::GetPageAssetData => "get_page_asset_data",
+            Self::UploadPageAsset => "upload_page_asset",
+            Self::DeletePageAsset => "delete_page_asset",
         }
     }
 
@@ -121,6 +153,67 @@ pub(crate) struct ListPagesToolArgs {
 
     /// 継続取得 cursor
     pub(crate) cursor: Option<String>,
+}
+
+///
+/// `list_page_assets` 用の tool 引数
+///
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ListPageAssetsToolArgs {
+    /// 対象ページの絶対 path
+    pub(crate) path: String,
+}
+
+///
+/// `resolve_page_asset` / `get_page_asset_metadata` /
+/// `get_page_asset_data` 用の共通 tool 引数
+///
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct PageAssetByFileToolArgs {
+    /// 対象ページの絶対 path
+    pub(crate) path: String,
+
+    /// 対象アセットファイル名
+    pub(crate) file_name: String,
+}
+
+///
+/// `upload_page_asset` 用の tool 引数
+///
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct UploadPageAssetToolArgs {
+    /// 対象ページの絶対 path
+    pub(crate) path: String,
+
+    /// アップロードするアセットファイル名
+    pub(crate) file_name: String,
+
+    /// アップロードするアセットの MIME 種別
+    pub(crate) mime_type: String,
+
+    /// base64 エンコード済みアセット本体
+    pub(crate) data_base64: String,
+}
+
+impl fmt::Debug for UploadPageAssetToolArgs {
+    ///
+    /// アセット本体を秘匿したデバッグ表現を生成する
+    ///
+    /// # 引数
+    /// * `formatter` - デバッグ出力先
+    ///
+    /// # 戻り値
+    /// デバッグ表現の生成結果を返す。
+    ///
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UploadPageAssetToolArgs")
+            .field("path", &self.path)
+            .field("file_name", &self.file_name)
+            .field("mime_type", &self.mime_type)
+            .field("data_base64", &"[REDACTED]")
+            .finish()
+    }
 }
 
 ///
@@ -369,7 +462,7 @@ mod tests {
 
     use super::{
         EditPageSectionSelector, EditPageSectionSelectorBy, EditPageToolArgs,
-        EditPageToolOperation,
+        EditPageToolOperation, UploadPageAssetToolArgs,
     };
 
     fn deserialize_edit_page_args(
@@ -381,6 +474,29 @@ mod tests {
                 format!("edit_page arguments are invalid: {error}"),
             )
         })
+    }
+
+    ///
+    /// upload tool引数のDebug表現がアセット本体を秘匿することを確認する。
+    ///
+    /// # 注記
+    /// secret sentinelがDebug出力へ現れず、固定表現へ置換されることを
+    /// 確認する。
+    ///
+    #[test]
+    fn upload_page_asset_tool_args_debug_redacts_data_base64() {
+        const SECRET_SENTINEL: &str = "secret-upload-tool-data-base64";
+
+        let args = UploadPageAssetToolArgs {
+            path: "/docs/page".to_string(),
+            file_name: "image.png".to_string(),
+            mime_type: "image/png".to_string(),
+            data_base64: SECRET_SENTINEL.to_string(),
+        };
+        let debug = format!("{args:?}");
+
+        assert!(!debug.contains(SECRET_SENTINEL));
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

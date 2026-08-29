@@ -22,6 +22,9 @@ use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde_json::Value;
 
+/// RESTアセットuploadの既定上限(10MiB)
+const ASSET_LIMIT_SIZE: usize = 10 * 1024 * 1024;
+
 #[test]
 ///
 /// POST: /api/assets でアセットを作成できることを確認する。
@@ -60,6 +63,89 @@ fn post_assets_creates_asset() {
      */
     assert!(!page_id.is_empty());
     assert!(!asset_id.is_empty());
+
+    fs::remove_dir_all(base_dir).expect("cleanup failed");
+}
+
+#[test]
+///
+/// POST: /api/assets の設定済みサイズ境界を確認する。
+///
+/// # 概要
+/// 既定上限ちょうどのupload成功と、上限+1の413応答、
+/// 拒否後のlookup不存在および
+/// 保存ファイル不増加を検証する。
+///
+/// # 戻り値
+/// なし
+///
+fn post_assets_enforces_configured_size_limit() {
+    /*
+     * テスト環境と対象ページを準備する
+     */
+    let (base_dir, db_path, assets_dir, config_path) = prepare_test_dirs();
+    let port = reserve_port();
+
+    run_add_user(&db_path, &assets_dir, &config_path);
+    let server = ServerGuard::start(port, &db_path, &assets_dir, &config_path);
+    let hello_url = format!("http://127.0.0.1:{}/api/hello", port);
+    wait_for_server(&hello_url, server.stderr_path());
+
+    let api_url = format!("http://127.0.0.1:{}/api", port);
+    let page_id = create_page(&api_url, "/assets-size-limit", "body");
+    let page_path = get_page_path(&api_url, &page_id);
+    let client = build_client();
+    let initial_file_count = count_files(&assets_dir);
+
+    /*
+     * 上限ちょうどのupload成功を検証する
+     */
+    let response = client
+        .post(&format!("{}/assets", api_url))
+        .query(&[("path", page_path.as_str()), ("file", "exact.bin")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "application/octet-stream")
+        .body(vec![0_u8; ASSET_LIMIT_SIZE])
+        .send()
+        .expect("upload exact limit asset failed");
+    assert_eq!(response.status().as_u16(), 201);
+    let exact_body = response.text().expect("read exact limit body failed");
+    let exact_value: Value = serde_json::from_str(&exact_body)
+        .expect("parse exact limit response failed");
+    assert!(exact_value["id"].as_str().is_some());
+    let file_count = count_files(&assets_dir);
+    assert_eq!(file_count, initial_file_count + 1);
+
+    /*
+     * 上限超過の固定413応答と非変更性を検証する
+     */
+    let response = client
+        .post(&format!("{}/assets", api_url))
+        .query(&[("path", page_path.as_str()), ("file", "too-large.bin")])
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("Content-Type", "application/octet-stream")
+        .body(vec![0_u8; ASSET_LIMIT_SIZE + 1])
+        .send()
+        .expect("upload over limit asset failed");
+    assert_eq!(response.status().as_u16(), 413);
+    let body = response.text().expect("read over limit body failed");
+    let value: Value =
+        serde_json::from_str(&body).expect("parse over limit response failed");
+    assert_eq!(
+        value,
+        serde_json::json!({ "reason": "payload too large" }),
+    );
+    assert_eq!(count_files(&assets_dir), file_count);
+
+    let response = client
+        .get(&format!(
+            "{}/assets?path={}&file=too-large.bin",
+            api_url, page_path,
+        ))
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .send()
+        .expect("lookup rejected asset failed");
+    assert_eq!(response.status().as_u16(), 404);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }
@@ -362,6 +448,29 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     fs::write(&config_path, "[global]\nuse_tls = false\n").expect("write config failed");
 
     (base_dir, db_path, assets_dir, config_path)
+}
+
+///
+/// ディレクトリ配下のファイル数を再帰的に数える
+///
+/// # 引数
+/// * `path` - 集計対象ディレクトリ
+///
+/// # 戻り値
+/// 子ディレクトリを含むファイル数を返す。
+///
+fn count_files(path: &Path) -> usize {
+    fs::read_dir(path)
+        .expect("read asset directory failed")
+        .map(|entry| {
+            let child = entry.expect("read asset entry failed").path();
+            if child.is_dir() {
+                count_files(&child)
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 ///

@@ -57,11 +57,9 @@ pub(crate) async fn execute(
 
     match result {
         Ok(response) => {
-            let content = Content::json(response).map_err(|error| {
+            let content = Content::json(response).map_err(|_| {
                 McpProtocolError::internal_error(
-                    format!(
-                        "failed to serialize edit_page response: {error}"
-                    ),
+                    "internal error",
                     None,
                 )
             })?;

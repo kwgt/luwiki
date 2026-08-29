@@ -48,7 +48,7 @@
 ### 2.1 基本方針
 
 初期版 MCP のツールは、
-`docs/REQUIREMENTS.md` および `docs/MCP_SPEC_DECISION_TASKS.md` で確定した
+`docs/REQUIREMENTS.md` および `docs/MCP_TOOL_SPECS.md` で確定した
 対象機能を、そのまま path ベースの操作単位へ対応付ける。
 
 ツール設計では以下を守る。
@@ -56,6 +56,10 @@
 - 外部へ `page_id` を公開しない
 - ツール名は path ベース操作であることが分かる粒度にする
 - read 系、write 系、補助系を分ける
+- アセット tool はページ path に紐付く通常アセットを扱う path ベース tool とする
+- アセット tool の入力識別子は `path + file_name` を主とし、初期版では `asset_id` 単独入力を採用しない
+- アセット本体を返す tool は `get_page_asset_data` のみに限定する
+- アセット upload は `data_base64` 入力で完結させ、ローカルファイルパス入力は受け付けない
 - 対象外機能をツールへ混在させない
 
 ### 2.2 初期版で公開するツール
@@ -82,6 +86,18 @@
   - 指定 path のページを別 path へ移動する
 - `get_page_section`
   - 指定 path のページから特定セクションを取得する
+- `list_page_assets`
+  - 指定ページに紐付く通常アセットのメタ情報一覧を取得する
+- `resolve_page_asset`
+  - 指定ページ内の `file_name` から通常アセットを解決し、最小識別情報を返す
+- `get_page_asset_metadata`
+  - 指定ページ内アセットの詳細メタ情報を返す
+- `get_page_asset_data`
+  - 指定ページ内アセットのメタ情報と本体を `data_base64` で返す
+- `upload_page_asset`
+  - 指定ページへ新規アセットをアップロードする
+- `delete_page_asset`
+  - 指定ページ内の通常アセットを削除する
 
 ### 2.3 各ツールの責務
 
@@ -165,6 +181,53 @@
 - `get_page_toc` が返す `section_id` による指定を第一の機械向け経路とする
 - 見出し文字列指定は人間向けの補助入口として扱う
 
+#### 2.3.11 `list_page_assets`
+
+- `path` でページを指定する
+- read scope と正規化済み入力 `path` への path prefix 認可を要求する
+- 対象ページに紐付く通常アセットの metadata 一覧を返す
+- 削除済み、ゾンビ、所属ページ不一致のアセットは返さない
+- `data_base64` は返さない
+
+#### 2.3.12 `resolve_page_asset`
+
+- `path + file_name` でアセットを指定する
+- read scope と正規化済み入力 `path` への path prefix 認可を要求する
+- `asset_id`、`path`、`file_name` の最小識別情報を返す
+- 詳細 metadata と本体は返さない
+
+#### 2.3.13 `get_page_asset_metadata`
+
+- `path + file_name` でアセットを指定する
+- read scope と正規化済み入力 `path` への path prefix 認可を要求する
+- `asset_id`、`path`、`file_name`、`mime_type`、`size`、`timestamp`、`username`、任意 `instance_id` を含む metadata を返す
+- `data_base64` は返さない
+
+#### 2.3.14 `get_page_asset_data`
+
+- `path + file_name` でアセットを指定する
+- read scope と正規化済み入力 `path` への path prefix 認可を要求する
+- metadata と `data_base64` を返す
+- raw bytes が 10MiB を超える保存済みアセットは返却対象外とし、`conflict` とする
+- REST API の redirect、ETag、条件付き GET は扱わない
+
+#### 2.3.15 `upload_page_asset`
+
+- `path`、`file_name`、`mime_type`、`data_base64` を入力とする
+- update scope と正規化済み入力 `path` への path prefix 認可を要求する
+- `ReadOnly` ユーザでは拒否する
+- 新規 upload のみ扱い、既存アセットの上書きは扱わない
+- ロック中ページでは lock token 入力を受け付けず、`conflict` とする
+- decode 前 base64 byte 長と decode 後 raw bytes 10MiB 上限を検証する
+
+#### 2.3.16 `delete_page_asset`
+
+- `path + file_name` でアセットを指定する
+- delete scope と正規化済み入力 `path` への path prefix 認可を要求する
+- `ReadOnly` ユーザでは拒否する
+- ロック中ページでは lock token 入力を受け付けず、`conflict` とする
+- 削除後は本体を返さず、対象識別情報と summary を返す
+
 ### 2.4 セクション取得補助ツールの設計方針
 
 `get_page_section` はトークン消費削減を意図した部分取得ツールだが、
@@ -247,8 +310,16 @@ Markdown 解析結果から動的生成する revision-local な識別子とす�
 
 - deleted ページ参照
 - restore
-- アセット操作
 - ロック操作
+- `asset_id` 単独入力によるアセット解決、メタ情報取得、本体取得、削除
+- ローカルファイルパスを指定する upload
+- 既存アセットの上書き upload
+- lock token 入力を受け付ける upload / delete
+- 削除済みアセットの直接参照、列挙、復元、再削除
+- ゾンビアセットや所属ページ解決不能アセットの直接操作
+- 他ページ本文中の `asset:` 参照をたどって実体解決する専用 tool
+- REST API の redirect、ETag、条件付き GET をそのまま MCP tool として公開する操作
+- アセット rename / copy / move / MIME 種別のみ更新
 - テンプレート指定作成
 - リンク先一覧取得
 - 被リンク一覧取得
@@ -334,10 +405,22 @@ Markdown 解析結果から動的生成する revision-local な識別子とす�
   - 取得または更新後の本文
 - `summary`
   - 人間向けの簡潔な結果説明
+- `asset_id`
+  - アセットID。初期版では入力には採用せず、応答上の識別情報としてのみ扱う
+- `file_name`
+  - ページ内の単一アセット名
+- `mime_type`
+  - アセット本体の MIME 種別
+- `size`
+  - raw binary size。byte 単位
+- `data_base64`
+  - アセット本体 bytes を base64 エンコードした文字列
 
 `edit_page` へ安全に接続できるよう、
 ページ内容を返す read 系および更新結果を返す write 系では
 `instance_id` を必須出力として返す。
+アセット metadata の `instance_id` はページ本文の整合性 token とは別の任意項目とし、
+欠損時は JSON 項目を省略する。
 
 ### 3.4 ツール別入力モデル
 
@@ -461,6 +544,38 @@ operation 内容検証より先に行う。
 `section` は、
 少なくとも `by=id` と `by=title` を受け付ける selector とし、
 文字列単独指定は `by=title` の省略形として扱う。
+
+#### 3.4.11 アセット tool
+
+入力:
+
+- `list_page_assets`
+  - `path`
+- `resolve_page_asset`
+  - `path`
+  - `file_name`
+- `get_page_asset_metadata`
+  - `path`
+  - `file_name`
+- `get_page_asset_data`
+  - `path`
+  - `file_name`
+- `upload_page_asset`
+  - `path`
+  - `file_name`
+  - `mime_type`
+  - `data_base64`
+- `delete_page_asset`
+  - `path`
+  - `file_name`
+
+アセット tool の未知フィールドは、初期版では既存 MCP tool と同様に
+serde 既定挙動で無視する。
+`file_name` は空文字、`/`、バックスラッシュを許可しない。
+`mime_type` は空文字を許可しない。
+`data_base64` は空文字、decode 失敗、decode 前 byte 長 13,981,016 超過、
+decode 後 raw bytes 10MiB 超過を不正または制約超過として扱う。
+`asset_id` は初期版では入力に採用しない。
 
 ### 3.5 ツール別出力モデル
 
@@ -592,6 +707,42 @@ rename 前 path は `summary` または監査ログ側で扱い、
 次に現れる同レベル以上の見出し直前までを返す。
 子見出し配下の本文は含める。
 
+#### 3.5.11 アセット tool
+
+アセット metadata は以下の情報を持つ。
+
+- `asset_id`
+- `path`
+- `file_name`
+- `mime_type`
+- `size`
+- `timestamp`
+- `username`
+- `instance_id` 任意
+
+tool 別出力は以下とする。
+
+- `list_page_assets`
+  - `path`
+  - `items[]`: asset metadata
+- `resolve_page_asset`
+  - `asset_id`
+  - `path`
+  - `file_name`
+- `get_page_asset_metadata`
+  - `asset`: asset metadata
+- `get_page_asset_data`
+  - `asset`: asset metadata
+  - `data_base64`
+- `upload_page_asset`
+  - `asset`: asset metadata
+  - `summary`
+- `delete_page_asset`
+  - `asset_id`
+  - `path`
+  - `file_name`
+  - `summary`
+
 ### 3.6 エラー表現
 
 ツール実行エラーは、transport レベルの HTTP エラーとは別に、
@@ -600,13 +751,16 @@ MCP ツールの失敗として扱う。
 初期実装では、少なくとも以下の論理区分を持つ。
 
 - `not_found`
-  - 対象ページや対象セクションが見つからない
+  - 対象ページ、対象セクション、対象アセットが見つからない
 - `forbidden`
-  - スコープ不足または path prefix 制約違反
+  - スコープ不足、path prefix 制約違反、または `ReadOnly` ユーザによる upload / delete
 - `conflict`
   - 競合、ロック待機失敗、rename 衝突
+  - ロック中ページへの upload / delete、同名アセット重複、返却前に検出できる MCP result / transport payload 上限超過
 - `invalid_input`
   - path 不正、検索式不正、section 指定不正
+  - file_name 不正、mime_type 不正、data_base64 空または decode 失敗
+  - upload の decode 前 base64 byte 長上限超過、または decode 後 raw bytes 10MiB 超過
   - `create_page` `update_page` `append_page` に渡された
     raw source 内の front matter 構文不正またはスキーマ不正
   - `edit_page.replace_section.title` が不正
@@ -632,6 +786,12 @@ front matter 起因の write 系失敗は、初期版では `invalid_input` と�
 対象は少なくとも `create_page`、`update_page`、`append_page` とし、
 `unsupported` や `conflict` へは分類しない。
 
+アセット tool の `get_page_asset_data` で保存済み asset が 10MiB を超え返却できない場合、
+および事前検出できる result / transport payload 上限超過は `conflict` とする。
+transport 送信時または serialize 後に初めて失敗した場合は protocol `internal_error` とする。
+`not_latest_revision` と `instance_id_not_match` はページ本文編集の内容整合性確認に使い、
+初期版のアセット tool では使わない。
+
 ### 3.7 監査ログとの接続
 
 write 系および認可失敗系では、
@@ -647,6 +807,10 @@ write 系および認可失敗系では、
 - 監査用 summary
 
 この情報はサービス層の共通出力モデルから組み立てる。
+アセット tool の成功監査には、正規化済み page path と安全な metadata のみを渡す。
+`data_base64`、アセット本体 bytes、serialize 済み request body、内部保存パス、
+DB 内部詳細は監査ログへ渡さない。
+アセット操作では page 本文 revision に対応しないため、監査ログの `revision` は `null` とする。
 
 ### 3.8 入出力モデルに関する設計判断
 
@@ -712,19 +876,31 @@ LuWiki 独自 SSE event は導入しない。
 - `not_found`
   - 対象ページが存在しない
   - 対象セクションが存在しない
+  - 対象アセットが存在しない
+  - 削除済みアセット、ゾンビアセットなど外部から到達不能なアセット
 - `forbidden`
   - 必要スコープ不足
   - path prefix 制約違反
+  - `ReadOnly` ユーザの upload / delete
 - `conflict`
   - ページ競合
   - rename 先衝突
   - ロック待機失敗
   - amend 不許可
+  - ロック中ページへの upload / delete
+  - 同名アセット重複
+  - `get_page_asset_data` で保存済み raw bytes が 10MiB を超える
+  - 事前検出できる MCP result / transport payload 上限超過
 - `invalid_input`
   - path 不正
   - 検索式不正
   - セクション指定不正
   - rename 先指定不正
+  - file_name 不正
+  - mime_type 不正
+  - data_base64 空または decode 失敗
+  - upload の decode 前 base64 byte 長上限超過
+  - upload の decode 後 raw bytes 10MiB 超過
   - front matter 構文不正
   - front matter スキーマ不正
   - `replace_section.title` 不正
@@ -762,6 +938,14 @@ LuWiki 独自 SSE event は導入しない。
 | `AmendForbidden` | `conflict` | `append amend is not allowed` |
 | `RootPageProtected` | `forbidden` | `operation is not allowed for root page` |
 | `UserNotFound` | `internal_error` | `user resolution failed` |
+| `AssetNotFound` | `not_found` | `asset not found` |
+| `AssetDeleted` | `not_found` | `asset not found` |
+| `AssetAlreadyExists` | `conflict` | `asset already exists` |
+| asset read 失敗 | `internal_error` | `asset read failed` |
+| asset create 失敗 | `internal_error` | `asset create failed` |
+| asset delete 失敗 | `internal_error` | `asset delete failed` |
+| 所属ページ不一致 | `not_found` | `asset not found` |
+| DB取得／I/O失敗 | `internal_error` | `asset lookup failed` |
 | その他未分類失敗 | `internal_error` | `internal error` |
 
 削除済みページについては、MCP では参照対象外であるため、
@@ -780,6 +964,11 @@ deleted ページの存在を外部へ積極的には示さない。
 
 この内部区別は監査ログの `result` や `summary` に利用し、
 外部応答では不要に詳細を漏らさない。
+アセット参照系 4 tool は `read`、`upload_page_asset` は `update`、
+`delete_page_asset` は `delete` scope を要求する。
+`write` scope は包括 scope としてこれらの required scope を満たす。
+path prefix 制約は正規化後の入力 `path` に対して判定し、
+`asset_id` と内部保存パスは path prefix 判定対象にしない。
 
 ### 4.6 競合系の対応
 
@@ -792,6 +981,10 @@ deleted ページの存在を外部へ積極的には示さない。
 - `AmendForbidden`
 - rename 先衝突
 - `append` の待機タイムアウト
+- ロック中ページへの upload / delete
+- 同名アセット重複
+- `get_page_asset_data` の保存済み asset 10MiB 超過
+- 事前検出できる MCP result / transport payload 上限超過
 
 これにより、呼び出し側は「再試行または入力変更が必要な失敗」として一貫して扱える。
 
@@ -832,6 +1025,11 @@ rename 先 path が不正な場合は `invalid_input` とする。
 
 この区別により、呼び出し側は
 「入力を直すべき失敗」と「再取得してやり直すべき失敗」を分けて扱える。
+初期版のアセット tool では lock token 入力や revision / instance_id による
+更新前提確認を受け付けないため、`not_latest_revision` と
+`instance_id_not_match` は使わない。
+アセット metadata の `instance_id` は応答上の任意情報であり、
+更新要求の整合性 token としては扱わない。
 
 ### 4.9 エラー応答の基本形
 
@@ -870,6 +1068,10 @@ rename 先 path が不正な場合は `invalid_input` とする。
 
 これにより、セキュリティ上過剰な詳細を外部へ返さずに、
 運用上必要な監査粒度を維持する。
+アセット操作では外部エラー message 自体に秘匿情報を含めない。
+失敗監査 summary は公開 message 相当の固定的・抽象的文言に限定する。
+`data_base64`、アセット本体 bytes、内部保存パス、DB 内部エラー詳細は
+監査ログと tracing に含めない。
 
 ### 4.11 エラー応答に関する設計判断
 

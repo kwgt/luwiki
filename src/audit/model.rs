@@ -64,6 +64,24 @@ pub(crate) enum AuditOperation {
 
     /// ページリネーム
     Rename,
+
+    /// ページアセット一覧取得
+    ListPageAssets,
+
+    /// ページアセット解決
+    ResolvePageAsset,
+
+    /// ページアセットメタ情報取得
+    GetPageAssetMetadata,
+
+    /// ページアセット本体取得
+    GetPageAssetData,
+
+    /// ページアセットアップロード
+    UploadPageAsset,
+
+    /// ページアセット削除
+    DeletePageAsset,
 }
 
 impl AuditOperation {
@@ -87,6 +105,12 @@ impl AuditOperation {
             Self::Update => "update",
             Self::Append => "append",
             Self::Rename => "rename",
+            Self::ListPageAssets => "list_page_assets",
+            Self::ResolvePageAsset => "resolve_page_asset",
+            Self::GetPageAssetMetadata => "get_page_asset_metadata",
+            Self::GetPageAssetData => "get_page_asset_data",
+            Self::UploadPageAsset => "upload_page_asset",
+            Self::DeletePageAsset => "delete_page_asset",
         }
     }
 }

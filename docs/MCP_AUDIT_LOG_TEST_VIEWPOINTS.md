@@ -2,8 +2,9 @@
 
 本書は、MCPサーバ機能における監査ログのテスト観点を整理した独立したテスト観点書である。
 
-位置付けとしては、`docs/MCP_IMPLEMENTATION_DESIGN_TASKS.md` の 4.9.3 に対応する成果物であり、
-MCP 設計書群から参照される実装・テスト実装向け文書として扱う。
+位置付けとしては、`docs/MCP_AUDIT_LOG_DESIGN.md`に対応し、
+MCP設計書群から参照される
+実装・テスト実装向け文書として扱う。
 
 監査ログは MCP 起点で設計されたが、実装上は `src/audit/` の横断基盤として扱われる。
 そのため本書では、MCP handler / service からのイベント投入だけでなく、
@@ -14,7 +15,7 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 - `docs/REQUIREMENTS.md`
   - 13. 監査ログ
 - `docs/MCP_INTERNAL_DESIGN.md`
-  - 5.1 認証・認可
+  - 6.1 認証・認可
 - `docs/MCP_AUDIT_LOG_DESIGN.md`
   - 2. 責務配置
   - 3. 監査ログレコードモデル
@@ -27,6 +28,8 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
   - 4.6 競合系の対応
 - `docs/MCP_RESOURCE_SPECS.md`
   - MCP resourcesの監査対象操作、summary、秘匿情報
+- `docs/MCP_ASSET_TOOL_TEST_VIEWPOINTS.md`
+  - MCP アセット Tools固有の監査、payload、状態秘匿、DB接続観点
 
 ## 2. 観点の使い方
 
@@ -341,5 +344,80 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
   - 操作名、result、summary、revision、best-effort
 - JSONL検査
   - 永続化名、null項目、秘匿情報非記録
+- transport統合テスト
+  - 入力元IP address、認証失敗非記録、request body非記録
+
+## 15. MCP アセット Tools監査の観点
+
+### 15.1 操作名
+
+1. `list_page_assets`を`list_page_assets`として永続化すること
+2. `resolve_page_asset`を`resolve_page_asset`として永続化すること
+3. `get_page_asset_metadata`を`get_page_asset_metadata`として永続化すること
+4. `get_page_asset_data`を`get_page_asset_data`として永続化すること
+5. `upload_page_asset`を`upload_page_asset`として永続化すること
+6. `delete_page_asset`を`delete_page_asset`として永続化すること
+7. アセット6 toolを既存の`get`、`list`、`update`、`delete`相当の
+   操作名へ潰さないこと
+
+### 15.2 参照系アセットtool
+
+1. 成功時に`target_path = 正規化済みpage path`となること
+2. 成功時に`revision = null`となること
+3. `list_page_assets`成功summaryが`count=<返却件数>`であること
+4. `resolve_page_asset`、`get_page_asset_metadata`、`get_page_asset_data`
+   成功summaryへ安全なmetadataだけを含められること
+5. scope不足を`scope_denied`として記録すること
+6. path prefix制約違反を`path_prefix_denied`として記録すること
+7. page / asset不存在、削除済みasset、外部到達不能assetを
+   `not_found`として記録すること
+8. 保存済みasset 10MiB超過と事前検出できるresult / transport payload
+   上限超過を`conflict`として記録すること
+9. 失敗summaryに固定公開messageだけを記録すること
+
+### 15.3 更新系アセットtool
+
+1. `upload_page_asset`成功時に`target_path = 正規化済みpage path`、
+   `revision = null`となること
+2. `delete_page_asset`成功時に`target_path = 正規化済みpage path`、
+   `revision = null`となること
+3. `upload_page_asset`成功summaryへ`asset_id`、`file_name`、
+   `mime_type`、`size`、`summary=asset uploaded`だけを含められること
+4. `delete_page_asset`成功summaryへ`asset_id`、`file_name`、
+   `summary=asset deleted`だけを含められること
+5. `ReadOnly`ユーザによるupload / deleteを`scope_denied`として記録すること
+6. 同名アセット重複とロック中ページを`conflict`として記録すること
+7. path / file_name / mime_type / data_base64不正とupload size制約超過を
+   `invalid_input`として記録すること
+8. 初期版対象外操作を`unsupported`として記録すること
+9. DB / FSなどの想定外失敗を`internal_error`として記録すること
+
+### 15.4 秘匿情報とbest-effort
+
+1. `data_base64`を監査ログへ記録しないこと
+2. アセット本体bytesを監査ログへ記録しないこと
+3. serialize済みrequest bodyを監査ログへ記録しないこと
+4. Bearer token平文、Authorization header、lock tokenを記録しないこと
+5. 内部保存パス、DB内部エラー詳細を記録しないこと
+6. raw `data_base64`を含むupload入力構造全体をsummaryへ含めないこと
+7. 削除済み、ゾンビ、所属不一致として除外したasset一覧やfile_nameを
+   記録しないこと
+8. user ID、token ID、取得可能なIP address、timestampを記録すること
+9. 監査sink lock・書込み・ユーザID解決失敗でアセットtool応答を変更しないこと
+10. transport認証失敗を監査JSONLへ記録しないこと
+
+### 15.5 append集約との境界
+
+1. アセット6 toolの成功・失敗監査をappend集約対象にしないこと
+2. アセット6 toolの監査レコードは原則即時書込み対象になること
+3. `upload_page_asset` と `delete_page_asset` がページ本文revisionを返さず、
+   append集約のrevision維持規則へ依存しないこと
+
+### 15.6 実施レイヤ分割
+
+- handler・service結合テスト
+  - 操作名、result、summary、target_path、revision、best-effort
+- JSONL検査
+  - 永続化名、null項目、秘匿情報非記録、summary内容
 - transport統合テスト
   - 入力元IP address、認証失敗非記録、request body非記録

@@ -27,7 +27,7 @@ LuwikiをAIエージェントに効率よく使わせるためのスキルを以
 ```yaml
 ---
 name: luwiki
-description: Use an MCP-enabled Wiki to find, read, create, edit, append, or rename Markdown pages through get_page, get_page_toc, get_page_section, list_pages, search_pages, create_page, update_page, edit_page, append_page, and rename_page. Use whenever a request involves this Wiki's pages, Wiki paths or links, page sections, revisions, or Wiki content maintenance. Apply the Wiki-specific relative-path rule in which the current page itself—not its parent—is the resolution base.
+description: Use an MCP-enabled Wiki to find, read, create, edit, append, rename Markdown pages, and manage page assets through get_page, get_page_toc, get_page_section, list_pages, search_pages, create_page, update_page, edit_page, append_page, rename_page, list_page_assets, resolve_page_asset, get_page_asset_metadata, get_page_asset_data, upload_page_asset, and delete_page_asset. Use whenever a request involves this Wiki's pages, assets, Wiki paths or links, page sections, revisions, or Wiki content maintenance. Apply the Wiki-specific relative-path rule in which the current page itself—not its parent—is the resolution base.
 ---
 ```
 
@@ -53,7 +53,12 @@ policy:
   allow_implicit_invocation: true
 ```
 
-`dependencies.tools[].value`には登録したMCPサービス名を設定してください。また、Luwikiを使用したWikiサービスをMCPサーバとして追加した場合は同じフォーマットで `dependencies.tools` にエントリを追加することにより対応できます。
+環境に合わせて以下の変更を行って下さい。
+
+- `dependencies.tools[].value`には登録したMCPサービス名を設定してください。
+- `dependencies.tools[].url`には登録したMCPサービスのURLを設定してください。
+
+なお、Luwikiを使用したWikiサービスをMCPサーバとして追加した場合は同じフォーマットで `dependencies.tools` にエントリを追加することにより対応できます。
 
 ## Claude Codeの場合
 
@@ -75,7 +80,7 @@ policy:
 ```yaml
 ---
 name: luwiki
-description: Use Luwiki whenever a request involves Wiki pages, Wiki content, Wiki paths or links, page sections, or project/agent scratchpad content. Use it for finding, reading, creating, localized section or text editing, full-page replacement, appending, and renaming Wiki pages. In particular, treat requests to modify part of an existing page, update a section, or replace specific text as Luwiki editing tasks.
+description: Use Luwiki whenever a request involves Wiki pages, page assets, Wiki content, Wiki paths or links, page sections, or project/agent scratchpad content. Use it for finding, reading, creating, localized section or text editing, full-page replacement, appending, renaming Wiki pages, and listing, resolving, retrieving, uploading, or deleting page assets. In particular, treat requests to modify part of an existing page, update a section, replace specific text, or manage assets attached to a page as Luwiki tasks.
 allowed-tools:
   - mcp__local_wiki__get_page
   - mcp__local_wiki__get_page_toc
@@ -87,6 +92,12 @@ allowed-tools:
   - mcp__local_wiki__edit_page
   - mcp__local_wiki__append_page
   - mcp__local_wiki__rename_page
+  - mcp__local_wiki__list_page_assets
+  - mcp__local_wiki__resolve_page_asset
+  - mcp__local_wiki__get_page_asset_metadata
+  - mcp__local_wiki__get_page_asset_data
+  - mcp__local_wiki__upload_page_asset
+  - mcp__local_wiki__delete_page_asset
 ---
 ```
 
@@ -117,6 +128,64 @@ Luwiki treats every Wiki page as both content and a container. Resolve a relativ
 
 Use the same rule for links found in page content, user-supplied relative page references, and destination paths derived from a current page. A page can therefore have child pages even though it also contains Markdown content.
 
+## Resolve asset references
+
+LuWiki asset references identify an owning page and a file name.
+
+A complete asset reference has the form `asset:<asset-spec>`. In this section,
+`<asset-spec>` does not include the leading `asset:` prefix.
+
+Resolve the page portion using the same Wiki-specific rule as page links:
+the current page itself is the base for relative paths.
+
+For current page `/a/b`:
+
+- `asset:image.png` or `asset:./image.png` resolves to `path=/a/b` and
+  `file_name=image.png`.
+- `asset:./child:image.png` resolves to `path=/a/b/child` and
+  `file_name=image.png`.
+- `asset:../sibling:image.png` resolves to `path=/a/sibling` and
+  `file_name=image.png`.
+- `asset:/shared/images:image.png` resolves to `path=/shared/images` and
+  `file_name=image.png`.
+
+When calling page-asset MCP tools, do not pass the combined `asset:`
+reference. Pass the resolved absolute page `path` and `file_name` as
+separate tool arguments.
+
+Do not invent an asset page path or file name. When the target asset has not
+already been established by the user or current page content, use
+`list_page_assets` or `resolve_page_asset` to verify it before authoring a
+reference.
+
+## Author asset references and macros
+
+When writing raw Wiki Markdown that refers to page assets, use LuWiki's asset
+reference syntax instead of inventing an HTTP URL or local file path.
+
+For an asset belonging to the current page:
+
+- Embed it with Markdown: `![](asset:./image.png)`.
+- Embed it with Obsidian-compatible syntax: `![[asset:./image.png]]`.
+- Render a text asset as a code block:
+  `{{include_code:src=./sample.rs:lang=rust}}`.
+- Render a CSV asset as a table: `{{include_csv:src=./table.csv}}`.
+
+For `include_code` and `include_csv`, pass the asset spec in `src` without
+the leading `asset:` prefix.
+
+- `include_code` requires a `text/*` asset. If `lang` is omitted, LuWiki
+  infers it from the MIME type.
+- `include_csv` requires a `text/csv` asset.
+
+These constructs are stored as raw Markdown and expanded by LuWiki at
+rendering time. Do not replace them with expanded output when creating or
+editing page source.
+
+Use `get_page` or the relevant page section tool to preserve existing macro
+syntax during edits. Use page-asset tools only when an asset must be listed,
+resolved, read, uploaded, or deleted.
+
 ## Choose the narrowest tool
 
 | Need | Tool | Key guidance |
@@ -131,6 +200,12 @@ Use the same rule for links found in page content, user-supplied relative page r
 | Make a focused edit | `edit_page` | Prefer for section or text changes; first obtain current concurrency tokens. |
 | Add content at the end | `append_page` | Supply only the exact suffix, including any needed newlines. |
 | Change a page path | `rename_page` | Supply the final absolute destination in `rename_to`, not merely a parent path. |
+| List page assets | `list_page_assets` | Return metadata for normal assets attached to the page. |
+| Resolve a page asset | `resolve_page_asset` | Resolve `path + file_name` to the asset's minimal identity. |
+| Read asset metadata | `get_page_asset_metadata` | Return metadata only; do not request the asset body. |
+| Read asset data | `get_page_asset_data` | Return metadata plus `data_base64`; use only when the body is needed. |
+| Upload a page asset | `upload_page_asset` | Supply `path`, `file_name`, `mime_type`, and `data_base64`; local file paths are not accepted. |
+| Delete a page asset | `delete_page_asset` | Delete a normal page asset identified by `path + file_name`. |
 
 ## Read efficiently
 
@@ -159,7 +234,9 @@ Before changing content, read enough of the current page to preserve unrelated M
 - Use `append_page` only for literal end-of-page additions. Include `\n` in `content` when line separation is required; the server does not add it.
 - Preserve existing front matter unless the request explicitly changes it. For `create_page` and `update_page`, `content` may be the complete raw source including front matter.
 - Do not use `append_page` to edit front matter.
-- Do not attempt restore, deleted-page access, asset operations, locks, templates, outgoing-link lists, or backlink lists; the initial tool set does not support them.
+- Do not attempt restore, deleted-page access, locks, templates, outgoing-link lists, or backlink lists; the initial tool set does not support them.
+- For assets, use only the initial page-asset tools listed above. Do not attempt `asset_id`-only operations, local-file-path uploads, overwrites, lock-token uploads/deletes, deleted asset access, asset restore, asset rename/copy/move, or MIME-only updates.
+- Do not include `data_base64`, asset bytes, Bearer tokens, Authorization headers, lock tokens, internal storage paths, or DB internals in logs, summaries, or Wiki notes.
 
 ### Focused edits
 

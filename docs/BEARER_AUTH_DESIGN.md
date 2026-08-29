@@ -563,12 +563,13 @@ fn require_path_prefix(
 `docs/REST_API_SPECS.md` で定義された各 API の「Bearer認証時の必要スコープ」は、実装上はハンドラごとの `required_scope` 指定へ読み替える。
 
 - ページ・アセット・ロックの参照系 API は `read`
-- ページ作成とアセット追加は `create`
-- ページ更新と rename は `update`
+- ページ作成は `create`
+- ページ更新、rename、アセット upload は `update`
 - ページ削除とアセット削除は `delete`
 - `GET /api/users/me` は `read`
 
 個別 API の列挙を設計書内へ重複転記して管理し始めると同期漏れの原因になるため、詳細な対応表は `docs/REST_API_SPECS.md` を正とし、本章では実装反映の原則のみを定義する。
+MCP アセット Tools でも同じ Bearer scope 判定原則を適用し、参照系は `read`、upload は `update`、delete は `delete` として扱う。
 
 ### 5.4 スライディング期限設計
 

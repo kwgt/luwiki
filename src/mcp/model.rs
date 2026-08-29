@@ -8,24 +8,33 @@
 //! MCP公開面の要求・応答モデルを定義するモジュール
 //!
 
+use std::fmt;
+
 use serde::Serialize;
 
 use crate::fts::FtsSearchTarget;
 
 use super::service::{
     AppendServiceResult,
+    DeletePageAssetResult,
     EditPageRequest as ServiceEditPageRequest,
     EditPageResult,
     EditPageInsertSectionPlacement as ServiceEditPageInsertSectionPlacement,
     EditPageOperation as ServiceEditPageOperation,
     EditPageReplaceTextOccurrence as ServiceEditPageReplaceTextOccurrence,
     GetPageResult,
+    GetPageAssetDataResult,
+    GetPageAssetMetadataResult,
     GetPageSectionResult,
     GetPageTocResult,
+    ListPageAssetsResult,
     ListPagesResult,
+    PageAssetMetadata as ServicePageAssetMetadata,
+    ResolvePageAssetResult,
     SearchPagesResult,
     SectionSelector,
     TocSection,
+    UploadPageAssetResult,
     WritePageResult,
 };
 use super::tools::{
@@ -96,6 +105,24 @@ pub(crate) enum McpToolRequest {
 
     /// `get_page_section` 入力
     GetPageSection(GetPageSectionRequest),
+
+    /// `list_page_assets` 入力
+    ListPageAssets(ListPageAssetsRequest),
+
+    /// `resolve_page_asset` 入力
+    ResolvePageAsset(PageAssetByFileRequest),
+
+    /// `get_page_asset_metadata` 入力
+    GetPageAssetMetadata(PageAssetByFileRequest),
+
+    /// `get_page_asset_data` 入力
+    GetPageAssetData(PageAssetByFileRequest),
+
+    /// `upload_page_asset` 入力
+    UploadPageAsset(UploadPageAssetRequest),
+
+    /// `delete_page_asset` 入力
+    DeletePageAsset(PageAssetByFileRequest),
 }
 
 ///
@@ -132,6 +159,24 @@ pub(crate) enum McpToolResponse {
 
     /// `get_page_section` 出力
     GetPageSection(GetPageSectionResponse),
+
+    /// `list_page_assets` 出力
+    ListPageAssets(ListPageAssetsResponse),
+
+    /// `resolve_page_asset` 出力
+    ResolvePageAsset(ResolvePageAssetResponse),
+
+    /// `get_page_asset_metadata` 出力
+    GetPageAssetMetadata(GetPageAssetMetadataResponse),
+
+    /// `get_page_asset_data` 出力
+    GetPageAssetData(GetPageAssetDataResponse),
+
+    /// `upload_page_asset` 出力
+    UploadPageAsset(UploadPageAssetResponse),
+
+    /// `delete_page_asset` 出力
+    DeletePageAsset(DeletePageAssetResponse),
 }
 
 ///
@@ -171,6 +216,135 @@ pub(crate) struct ListPagesRequest {
 
     /// 継続取得 cursor
     cursor: Option<String>,
+}
+
+///
+/// `list_page_assets` 入力
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ListPageAssetsRequest {
+    /// 対象ページの絶対 path
+    path: String,
+}
+
+///
+/// `resolve_page_asset` / `get_page_asset_metadata` /
+/// `get_page_asset_data` 入力
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PageAssetByFileRequest {
+    /// 対象ページの絶対 path
+    path: String,
+
+    /// 対象アセットファイル名
+    file_name: String,
+}
+
+///
+/// `upload_page_asset` 入力
+///
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct UploadPageAssetRequest {
+    /// 対象ページの絶対 path
+    path: String,
+
+    /// アップロードするアセットファイル名
+    file_name: String,
+
+    /// アップロードするアセットの MIME 種別
+    mime_type: String,
+
+    /// base64 エンコード済みアセット本体
+    data_base64: String,
+}
+
+impl UploadPageAssetRequest {
+    ///
+    /// `upload_page_asset` 入力を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページ path
+    /// * `file_name` - アップロードするアセットファイル名
+    /// * `mime_type` - アップロードするアセットの MIME 種別
+    /// * `data_base64` - base64 エンコード済みアセット本体
+    ///
+    /// # 戻り値
+    /// 生成した入力モデルを返す。
+    ///
+    pub(crate) fn new(
+        path: String,
+        file_name: String,
+        mime_type: String,
+        data_base64: String,
+    ) -> Self {
+        Self {
+            path,
+            file_name,
+            mime_type,
+            data_base64,
+        }
+    }
+
+    ///
+    /// 対象ページ path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの絶対 path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// アセットファイル名を返す
+    ///
+    /// # 戻り値
+    /// アップロードするアセットファイル名を返す。
+    ///
+    pub(crate) fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    ///
+    /// MIME 種別を返す
+    ///
+    /// # 戻り値
+    /// アップロードするアセットの MIME 種別を返す。
+    ///
+    pub(crate) fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+
+    ///
+    /// base64 エンコード済みアセット本体を返す
+    ///
+    /// # 戻り値
+    /// base64 エンコード済みアセット本体を返す。
+    ///
+    pub(crate) fn data_base64(&self) -> &str {
+        &self.data_base64
+    }
+}
+
+impl fmt::Debug for UploadPageAssetRequest {
+    ///
+    /// アセット本体を秘匿したデバッグ表現を生成する
+    ///
+    /// # 引数
+    /// * `formatter` - デバッグ出力先
+    ///
+    /// # 戻り値
+    /// デバッグ表現の生成結果を返す。
+    ///
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UploadPageAssetRequest")
+            .field("path", &self.path)
+            .field("file_name", &self.file_name)
+            .field("mime_type", &self.mime_type)
+            .field("data_base64", &"[REDACTED]")
+            .finish()
+    }
 }
 
 ///
@@ -935,6 +1109,134 @@ pub(crate) struct ListPagesResponse {
 }
 
 ///
+/// アセットメタ情報の公開モデル
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct McpPageAssetMetadata {
+    /// アセットID
+    asset_id: String,
+
+    /// アセットが紐付くページの current path
+    path: String,
+
+    /// アセットファイル名
+    file_name: String,
+
+    /// MIME 種別
+    mime_type: String,
+
+    /// raw binary size
+    size: u64,
+
+    /// 登録または更新日時
+    timestamp: String,
+
+    /// 登録または更新ユーザ名
+    username: String,
+
+    /// アセット内容の任意 instance_id
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_id: Option<String>,
+}
+
+///
+/// `list_page_assets` 出力
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ListPageAssetsResponse {
+    /// 対象ページの current path
+    path: String,
+
+    /// アセットメタ情報一覧
+    items: Vec<McpPageAssetMetadata>,
+}
+
+///
+/// `resolve_page_asset` 出力
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ResolvePageAssetResponse {
+    /// 解決されたアセットID
+    asset_id: String,
+
+    /// 対象ページの current path
+    path: String,
+
+    /// 解決されたアセットファイル名
+    file_name: String,
+}
+
+///
+/// `get_page_asset_metadata` 出力
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct GetPageAssetMetadataResponse {
+    /// アセットメタ情報
+    asset: McpPageAssetMetadata,
+}
+
+///
+/// `get_page_asset_data` 出力
+///
+#[derive(Clone, Eq, PartialEq, Serialize)]
+pub(crate) struct GetPageAssetDataResponse {
+    /// アセットメタ情報
+    asset: McpPageAssetMetadata,
+
+    /// base64 エンコード済みアセット本体
+    data_base64: String,
+}
+
+impl fmt::Debug for GetPageAssetDataResponse {
+    ///
+    /// アセット本体を秘匿したデバッグ表現を生成する
+    ///
+    /// # 引数
+    /// * `formatter` - デバッグ出力先
+    ///
+    /// # 戻り値
+    /// デバッグ表現の生成結果を返す。
+    ///
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GetPageAssetDataResponse")
+            .field("asset", &self.asset)
+            .field("data_base64", &"[REDACTED]")
+            .finish()
+    }
+}
+
+///
+/// `upload_page_asset` 出力
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct UploadPageAssetResponse {
+    /// アセットメタ情報
+    asset: McpPageAssetMetadata,
+
+    /// 実行結果要約
+    summary: String,
+}
+
+///
+/// `delete_page_asset` 出力
+///
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct DeletePageAssetResponse {
+    /// 削除したアセットID
+    asset_id: String,
+
+    /// 対象ページの正規化済み path
+    path: String,
+
+    /// 削除したアセットファイル名
+    file_name: String,
+
+    /// 実行結果要約
+    summary: String,
+}
+
+///
 /// `search_pages` 一覧項目
 ///
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1235,6 +1537,67 @@ impl ListPagesRequest {
     ///
     pub(crate) fn cursor(&self) -> Option<&str> {
         self.cursor.as_deref()
+    }
+}
+
+impl ListPageAssetsRequest {
+    ///
+    /// `list_page_assets` 入力を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページ path
+    ///
+    /// # 戻り値
+    /// 生成した入力モデルを返す。
+    ///
+    pub(crate) fn new(path: String) -> Self {
+        Self { path }
+    }
+
+    ///
+    /// 対象ページ path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの絶対 path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl PageAssetByFileRequest {
+    ///
+    /// path と file_name によるアセット入力を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// 生成した入力モデルを返す。
+    ///
+    pub(crate) fn new(path: String, file_name: String) -> Self {
+        Self { path, file_name }
+    }
+
+    ///
+    /// 対象ページ path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの絶対 path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// 対象アセットファイル名を返す
+    ///
+    /// # 戻り値
+    /// 対象アセットファイル名を返す。
+    ///
+    pub(crate) fn file_name(&self) -> &str {
+        &self.file_name
     }
 }
 
@@ -1615,6 +1978,125 @@ impl ListPagesResponse {
     }
 }
 
+impl McpPageAssetMetadata {
+    ///
+    /// アセットメタ情報の公開モデルを生成する
+    ///
+    /// # 引数
+    /// * `asset_id` - アセットID
+    /// * `path` - current path
+    /// * `file_name` - アセットファイル名
+    /// * `mime_type` - MIME 種別
+    /// * `size` - raw binary size
+    /// * `timestamp` - 登録または更新日時
+    /// * `username` - 登録または更新ユーザ名
+    /// * `instance_id` - アセット内容の任意 instance_id
+    ///
+    /// # 戻り値
+    /// 生成した公開モデルを返す。
+    ///
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        asset_id: String,
+        path: String,
+        file_name: String,
+        mime_type: String,
+        size: u64,
+        timestamp: String,
+        username: String,
+        instance_id: Option<String>,
+    ) -> Self {
+        Self {
+            asset_id,
+            path,
+            file_name,
+            mime_type,
+            size,
+            timestamp,
+            username,
+            instance_id,
+        }
+    }
+}
+
+impl ListPageAssetsResponse {
+    ///
+    /// `list_page_assets` 出力を生成する
+    ///
+    /// # 引数
+    /// * `path` - current path
+    /// * `items` - アセットメタ情報一覧
+    ///
+    /// # 戻り値
+    /// 生成した出力モデルを返す。
+    ///
+    pub(crate) fn new(
+        path: String,
+        items: Vec<McpPageAssetMetadata>,
+    ) -> Self {
+        Self { path, items }
+    }
+}
+
+impl ResolvePageAssetResponse {
+    ///
+    /// `resolve_page_asset` 出力を生成する
+    ///
+    /// # 引数
+    /// * `asset_id` - アセットID
+    /// * `path` - current path
+    /// * `file_name` - アセットファイル名
+    ///
+    /// # 戻り値
+    /// 生成した出力モデルを返す。
+    ///
+    pub(crate) fn new(
+        asset_id: String,
+        path: String,
+        file_name: String,
+    ) -> Self {
+        Self {
+            asset_id,
+            path,
+            file_name,
+        }
+    }
+}
+
+impl GetPageAssetMetadataResponse {
+    ///
+    /// `get_page_asset_metadata` 出力を生成する
+    ///
+    /// # 引数
+    /// * `asset` - アセットメタ情報
+    ///
+    /// # 戻り値
+    /// 生成した出力モデルを返す。
+    ///
+    pub(crate) fn new(asset: McpPageAssetMetadata) -> Self {
+        Self { asset }
+    }
+}
+
+impl GetPageAssetDataResponse {
+    ///
+    /// `get_page_asset_data` 出力を生成する
+    ///
+    /// # 引数
+    /// * `asset` - アセットメタ情報
+    /// * `data_base64` - base64 エンコード済みアセット本体
+    ///
+    /// # 戻り値
+    /// 生成した出力モデルを返す。
+    ///
+    pub(crate) fn new(
+        asset: McpPageAssetMetadata,
+        data_base64: String,
+    ) -> Self {
+        Self { asset, data_base64 }
+    }
+}
+
 impl SearchPagesResponse {
     ///
     /// `search_pages` 出力を生成する
@@ -1979,6 +2461,82 @@ impl From<ListPagesResult> for ListPagesResponse {
     }
 }
 
+impl From<ListPageAssetsResult> for ListPageAssetsResponse {
+    fn from(result: ListPageAssetsResult) -> Self {
+        let items = result
+            .assets()
+            .iter()
+            .map(McpPageAssetMetadata::from)
+            .collect();
+        Self {
+            path: result.path().to_string(),
+            items,
+        }
+    }
+}
+
+impl From<ResolvePageAssetResult> for ResolvePageAssetResponse {
+    fn from(result: ResolvePageAssetResult) -> Self {
+        Self {
+            asset_id: result.asset().asset_id().to_string(),
+            path: result.path().to_string(),
+            file_name: result.asset().file_name().to_string(),
+        }
+    }
+}
+
+impl From<GetPageAssetMetadataResult> for GetPageAssetMetadataResponse {
+    fn from(result: GetPageAssetMetadataResult) -> Self {
+        Self {
+            asset: McpPageAssetMetadata::from(result.asset()),
+        }
+    }
+}
+
+impl From<GetPageAssetDataResult> for GetPageAssetDataResponse {
+    fn from(result: GetPageAssetDataResult) -> Self {
+        Self {
+            asset: McpPageAssetMetadata::from(result.asset()),
+            data_base64: result.data_base64().to_string(),
+        }
+    }
+}
+
+impl From<UploadPageAssetResult> for UploadPageAssetResponse {
+    fn from(result: UploadPageAssetResult) -> Self {
+        Self {
+            asset: McpPageAssetMetadata::from(result.asset()),
+            summary: result.summary().to_string(),
+        }
+    }
+}
+
+impl From<DeletePageAssetResult> for DeletePageAssetResponse {
+    fn from(result: DeletePageAssetResult) -> Self {
+        Self {
+            asset_id: result.asset_id().to_string(),
+            path: result.path().to_string(),
+            file_name: result.file_name().to_string(),
+            summary: result.summary().to_string(),
+        }
+    }
+}
+
+impl From<&ServicePageAssetMetadata> for McpPageAssetMetadata {
+    fn from(asset: &ServicePageAssetMetadata) -> Self {
+        Self {
+            asset_id: asset.asset_id().to_string(),
+            path: asset.path().to_string(),
+            file_name: asset.file_name().to_string(),
+            mime_type: asset.mime_type().to_string(),
+            size: asset.size(),
+            timestamp: asset.timestamp().to_string(),
+            username: asset.username().to_string(),
+            instance_id: asset.instance_id().map(str::to_string),
+        }
+    }
+}
+
 impl From<&super::service::ListPageItem> for McpPageListItem {
     fn from(item: &super::service::ListPageItem) -> Self {
         Self {
@@ -2060,12 +2618,29 @@ impl From<GetPageSectionResult> for GetPageSectionResponse {
 #[cfg(test)]
 mod tests {
     use super::{
+        DeletePageAssetResponse,
         EditPageSectionSelector,
         EditPageToolOperation,
+        GetPageAssetDataResponse,
+        GetPageAssetMetadataResponse,
+        ListPageAssetsResponse,
         McpEditPageOperation,
         McpEditPageSectionSelector,
+        McpPageAssetMetadata,
+        McpRequestEnvelope,
+        McpResponseEnvelope,
+        McpToolName,
+        McpToolRequest,
+        McpToolResponse,
+        ResolvePageAssetResponse,
         SectionSelector,
         ServiceEditPageOperation,
+        UploadPageAssetRequest,
+        UploadPageAssetResponse,
+    };
+    use crate::mcp::service::{
+        GetPageAssetDataResult,
+        PageAssetMetadata,
     };
 
     #[test]
@@ -2111,5 +2686,303 @@ mod tests {
             }
             _ => panic!("unexpected operation"),
         }
+    }
+
+    ///
+    /// upload requestのDebug表現がアセット本体を秘匿することを確認する。
+    ///
+    /// # 注記
+    /// secret sentinelをrequest、tool request、envelopeの各境界で確認する。
+    ///
+    #[test]
+    fn upload_page_asset_request_debug_redacts_data_base64() {
+        const SECRET_SENTINEL: &str = "secret-upload-data-base64";
+
+        let request = UploadPageAssetRequest::new(
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            SECRET_SENTINEL.to_string(),
+        );
+        let request_debug = format!("{request:?}");
+        assert!(!request_debug.contains(SECRET_SENTINEL));
+        assert!(request_debug.contains("[REDACTED]"));
+
+        let tool_request = McpToolRequest::UploadPageAsset(request);
+        let tool_request_debug = format!("{tool_request:?}");
+        assert!(!tool_request_debug.contains(SECRET_SENTINEL));
+        assert!(tool_request_debug.contains("[REDACTED]"));
+
+        let envelope = McpRequestEnvelope::new(
+            McpToolName::UploadPageAsset,
+            tool_request,
+        );
+        let envelope_debug = format!("{envelope:?}");
+        assert!(!envelope_debug.contains(SECRET_SENTINEL));
+        assert!(envelope_debug.contains("[REDACTED]"));
+    }
+
+    ///
+    /// get-data responseのDebug表現が
+    /// アセット本体を秘匿することを確認する。
+    ///
+    /// # 注記
+    /// secret sentinelをservice result、公開response、tool response、
+    /// response envelopeの各境界で確認する。
+    ///
+    #[test]
+    fn get_page_asset_data_response_debug_redacts_data_base64() {
+        const SECRET_SENTINEL: &str = "secret-response-data-base64";
+
+        let asset = PageAssetMetadata::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            123,
+            "2026-09-05T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            None,
+        );
+        let result = GetPageAssetDataResult::new(
+            "/docs/page".to_string(),
+            asset,
+            SECRET_SENTINEL.to_string(),
+        );
+        let result_debug = format!("{result:?}");
+        assert!(!result_debug.contains(SECRET_SENTINEL));
+        assert!(result_debug.contains("[REDACTED]"));
+
+        let response = GetPageAssetDataResponse::from(result);
+        let response_debug = format!("{response:?}");
+        assert!(!response_debug.contains(SECRET_SENTINEL));
+        assert!(response_debug.contains("[REDACTED]"));
+
+        let tool_response = McpToolResponse::GetPageAssetData(response);
+        let tool_response_debug = format!("{tool_response:?}");
+        assert!(!tool_response_debug.contains(SECRET_SENTINEL));
+        assert!(tool_response_debug.contains("[REDACTED]"));
+
+        let envelope = McpResponseEnvelope::new(
+            McpToolName::GetPageAssetData,
+            tool_response,
+        );
+        let envelope_debug = format!("{envelope:?}");
+        assert!(!envelope_debug.contains(SECRET_SENTINEL));
+        assert!(envelope_debug.contains("[REDACTED]"));
+    }
+
+    ///
+    /// upload responseがinstance_idの
+    /// 既存省略規則を維持することを確認する。
+    ///
+    /// # 注記
+    /// Noneの場合の省略とSomeの場合の出力を
+    /// 同じ応答型で確認する。
+    ///
+    #[test]
+    fn upload_page_asset_response_preserves_instance_id_rule() {
+        let asset_without_instance = McpPageAssetMetadata::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            123,
+            "2026-09-05T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            None,
+        );
+        let response_without_instance = UploadPageAssetResponse {
+            asset: asset_without_instance,
+            summary: "asset uploaded".to_string(),
+        };
+        let json_without_instance =
+            serde_json::to_value(response_without_instance)
+                .expect("serialize upload response without instance failed");
+        let fields_without_instance = json_without_instance
+            .as_object()
+            .expect("upload response must be object");
+
+        assert_eq!(fields_without_instance.len(), 2);
+        assert!(fields_without_instance.contains_key("asset"));
+        assert!(fields_without_instance.contains_key("summary"));
+        assert!(json_without_instance["asset"]
+            .get("instance_id")
+            .is_none());
+        assert!(json_without_instance.get("data_base64").is_none());
+
+        let asset_with_instance = McpPageAssetMetadata::new(
+            "asset-2".to_string(),
+            "/docs/page".to_string(),
+            "document.pdf".to_string(),
+            "application/pdf".to_string(),
+            456,
+            "2026-09-05T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            Some("asset-instance".to_string()),
+        );
+        let response_with_instance = UploadPageAssetResponse {
+            asset: asset_with_instance,
+            summary: "asset uploaded".to_string(),
+        };
+        let json_with_instance = serde_json::to_value(response_with_instance)
+            .expect("serialize upload response with instance failed");
+
+        assert_eq!(
+            json_with_instance["asset"]["instance_id"],
+            "asset-instance",
+        );
+        assert_eq!(
+            json_with_instance
+                .as_object()
+                .expect("upload response must be object")
+                .len(),
+            2,
+        );
+        assert!(json_with_instance.get("data_base64").is_none());
+    }
+
+    ///
+    /// delete responseが最小識別情報とsummaryだけを含むことを確認する。
+    ///
+    /// # 注記
+    /// serialize後のトップレベルfield数と各field名を確認する。
+    ///
+    #[test]
+    fn delete_page_asset_response_contains_only_minimum_fields() {
+        let response = DeletePageAssetResponse {
+            asset_id: "asset-1".to_string(),
+            path: "/docs/page".to_string(),
+            file_name: "image.png".to_string(),
+            summary: "asset deleted".to_string(),
+        };
+        let json = serde_json::to_value(response)
+            .expect("serialize delete response failed");
+        let fields = json
+            .as_object()
+            .expect("delete response must be object");
+
+        assert_eq!(fields.len(), 4);
+        assert_eq!(json["asset_id"], "asset-1");
+        assert_eq!(json["path"], "/docs/page");
+        assert_eq!(json["file_name"], "image.png");
+        assert_eq!(json["summary"], "asset deleted");
+        for excluded in [
+            "asset",
+            "mime_type",
+            "size",
+            "timestamp",
+            "username",
+            "instance_id",
+            "data_base64",
+        ] {
+            assert!(fields.get(excluded).is_none());
+        }
+    }
+
+    #[test]
+    fn asset_metadata_response_omits_instance_id_and_data_base64() {
+        let asset = McpPageAssetMetadata::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            123,
+            "2026-08-29T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            None,
+        );
+        let response = GetPageAssetMetadataResponse::new(asset);
+        let json = serde_json::to_value(response)
+            .expect("serialize asset metadata response failed");
+
+        assert!(json["asset"].get("instance_id").is_none());
+        assert!(json.get("data_base64").is_none());
+    }
+
+    #[test]
+    fn list_page_assets_response_omits_data_base64() {
+        let asset = McpPageAssetMetadata::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            123,
+            "2026-08-29T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            Some("asset-instance".to_string()),
+        );
+        let response =
+            ListPageAssetsResponse::new("/docs/page".to_string(), vec![asset]);
+        let json = serde_json::to_value(response)
+            .expect("serialize list page assets response failed");
+
+        assert_eq!(json["path"], "/docs/page");
+        assert_eq!(json["items"][0]["instance_id"], "asset-instance");
+        assert!(json.get("data_base64").is_none());
+        assert!(json["items"][0].get("data_base64").is_none());
+    }
+
+    #[test]
+    fn resolve_page_asset_response_contains_only_minimum_identifier_fields() {
+        let response = ResolvePageAssetResponse::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+        );
+        let json = serde_json::to_value(response)
+            .expect("serialize resolve page asset response failed");
+        let fields = json
+            .as_object()
+            .expect("resolve page asset response must be object");
+
+        assert_eq!(json["asset_id"], "asset-1");
+        assert_eq!(json["path"], "/docs/page");
+        assert_eq!(json["file_name"], "image.png");
+        assert_eq!(fields.len(), 3);
+        assert!(json.get("asset").is_none());
+        assert!(json.get("data_base64").is_none());
+        assert!(json.get("instance_id").is_none());
+    }
+
+    #[test]
+    fn asset_metadata_response_includes_instance_id_when_present() {
+        let asset = McpPageAssetMetadata::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            123,
+            "2026-08-29T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            Some("asset-instance".to_string()),
+        );
+        let response = GetPageAssetMetadataResponse::new(asset);
+        let json = serde_json::to_value(response)
+            .expect("serialize asset metadata response failed");
+
+        assert_eq!(json["asset"]["instance_id"], "asset-instance");
+        assert!(json.get("data_base64").is_none());
+    }
+
+    #[test]
+    fn asset_data_response_contains_data_base64() {
+        let asset = McpPageAssetMetadata::new(
+            "asset-1".to_string(),
+            "/docs/page".to_string(),
+            "image.png".to_string(),
+            "image/png".to_string(),
+            123,
+            "2026-08-29T00:00:00+09:00".to_string(),
+            "alice".to_string(),
+            Some("asset-instance".to_string()),
+        );
+        let response =
+            GetPageAssetDataResponse::new(asset, "YmluYXJ5".to_string());
+        let json = serde_json::to_value(response)
+            .expect("serialize asset data response failed");
+
+        assert_eq!(json["data_base64"], "YmluYXJ5");
+        assert_eq!(json["asset"]["instance_id"], "asset-instance");
     }
 }

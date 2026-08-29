@@ -58,6 +58,12 @@ page_id ベース操作や prefix ベース操作へ安全に変換する流れ�
 6. 既存 DB API または FTS の呼び出し
 7. MCP 応答用の結果モデルへ整形
 
+MCP アセット tool も path ベースサービス層の対象に含める。
+アセット tool は、入力 `path` を正規化し、認可判定と page_id 解決を行ったうえで、
+既存 asset DB API へ橋渡しする。
+REST API の handler、HTTP query、HTTP body、redirect、ETag、条件付き GET、
+lock token header には依存しない。
+
 この順序を統一することで、
 MCP 公開層は path ベースの入力処理に専念でき、
 DB 層は従来どおり page_id や prefix を受け取る低水準 API として維持できる。
@@ -74,6 +80,14 @@ DB 層は従来どおり page_id や prefix を受け取る低水準 API とし�
   - list / search 用の prefix 入力検証と認可判定
 - `ensure_authorized_path`
   - 操作種別と対象 path に応じた path prefix 制約判定
+
+アセット tool では、すべての操作で `path` を `validate_and_normalize_path`
+相当に通し、操作ごとの required scope を `McpOperation` から判定する。
+path prefix 制約は正規化済み入力 `path` に対して判定する。
+`resolve_page_by_path` で page_id を解決し、応答と監査ログへ渡す path は
+解決後の正規化済み page path とする。
+page_id 解決後、upload / delete では `ensure_page_not_locked()` を呼ぶ。
+参照系 4 tool はページロックの影響を受けないため、lock 判定を行わない。
 
 `resolve_page_by_path` は、
 現時点の `DatabaseManager` に path から現在ページを解決する専用 API が不足しているため、
@@ -629,8 +643,8 @@ append 専用の競合待機や「読取時 revision と保存時 revision の�
 
 - 削除済みページ参照
 - restore
-- アセット操作
 - ロック操作
+- 初期 MCP アセット Tools に含まれないアセット操作
 
 対象外機能に対する拒否は、
 「ツール定義に含めないこと」と
@@ -670,17 +684,30 @@ restore は rename と明確に分離し、初期版では提供しない。
 つまり、MCP の rename は常に current page 同士の移動だけを扱い、
 restore 相当の意味づけは行わない。
 
-##### 2.2.14.3 アセット操作
+##### 2.2.14.3 初期 MCP アセット Tools に含まれないアセット操作
 
-アセットは初期 MCP の対象外であり、
+初期版では、ページに紐付く通常アセットを扱う MCP アセット tool として、
+一覧、解決、メタ情報取得、本体取得、upload、delete を公開する。
+一方で、以下のアセット操作は初期 MCP の対象外であり、
 ページツールから透過的に扱えるものとしても露出しない。
 
-- asset 一覧、取得、追加、削除、ページとの紐付け変更はすべて `unsupported`
+- `asset_id` 単独入力による解決、メタ情報取得、本体取得、削除は `unsupported`
+- ローカルファイルパス入力、既存アセットの上書き upload、lock token 入力付き upload / delete は `unsupported`
+- 削除済みアセットの直接参照、列挙、復元、再削除は `unsupported`
+- ゾンビアセットや所属ページ解決不能アセットの
+  直接操作は
+  外部公開しない。
+  DB取得成功後に検出した所属ページ不一致は
+  `not_found / asset not found` へ写像し、
+  真のDB取得失敗またはI/O失敗は `internal_error` へ写像する
+- アセット rename / copy / move / MIME 種別のみ更新は `unsupported`
+- REST API の redirect、ETag、条件付き GET をそのまま MCP tool として公開しない
 - page 本文中の asset 記法自体は page content の一部として扱うが、
   参照整合性解決や asset 実体操作は行わない
-- asset 識別子や内部保存パスは MCP 応答へ含めない
+- 内部保存パスは MCP 応答へ含めない
 
-これにより、MCP は初期段階では page text 操作に責務を限定する。
+これにより、MCP 初期版で公開するアセット操作と、
+将来拡張へ残すアセット操作を分離する。
 
 ##### 2.2.14.4 ロック操作
 
@@ -702,7 +729,7 @@ restore 相当の意味づけは行わない。
 
 - `unsupported`
   - 初期版で提供しない操作種別そのものを要求している
-  - 例: restore、asset 操作、lock 操作
+  - 例: restore、初期版対象外の asset 操作、lock 操作
 - `not_found`
   - current path 前提の通常解決として対象が見つからない
   - 例: rename 後の旧 path、削除済みページの旧 path を通常 read した場合
@@ -793,6 +820,118 @@ MCP の create はドラフト前提ではなく通常ページ作成として�
   - current path から `page_id` を解決
   - 既存の recursive rename API を利用
 - 出力: 変更後 path
+
+#### 2.3.8 アセット共通 helper
+
+`src/mcp/service.rs` は、アセット操作向けに
+以下のhelperを提供する。
+
+- `resolve_page_asset_by_file()`
+  - `ResolvedPage` と `file_name` から、対象ページ内の通常アセットを解決する
+  - `db.get_asset_id_by_page_file(page_id, file_name)` を呼び出す
+  - `db.get_asset_info_by_id(asset_id)` で metadata を取得する
+  - 削除済み、ゾンビ、所属ページ不一致の内部状態を外部へ漏らさない
+  - DB取得成功後の所属ページ不一致は
+    `not_found / asset not found` とする
+  - 真のDB取得失敗またはI/O失敗は `internal_error` とする
+- `validate_asset_file_name()` 相当
+  - 空文字、`/`、バックスラッシュを拒否する
+  - ディレクトリ区切りを含む相対パスや絶対パスとして扱わない
+- `validate_asset_mime_type()` 相当
+  - 空文字を拒否する
+  - MIME sniffing や拡張子との整合確認は行わない
+- `decode_asset_data_base64()` 相当
+  - 空文字を拒否する
+  - decode 前 byte 長が 13,981,016 以下であることを確認する
+  - 標準 base64 として decode する
+  - decode 後 raw bytes が 10MiB 以下であることを確認する
+- `map_upload_asset_db_error()`、`map_asset_boundary_error()`、
+  `map_delete_asset_db_error()`
+  - DB層の`DbError`やI/O失敗を操作境界ごとの
+    MCP error codeへ写像する
+  - asset lookup失敗は、各呼び出し箇所で固定errorへ変換する
+  - 内部保存パス、DB 内部詳細、アセット本体内容を外部 message や監査 summary に含めない
+
+`file_name` は空文字、`/`、バックスラッシュを拒否する。
+`mime_type` と `data_base64` は空文字を拒否する。
+MIME sniffingや拡張子との整合確認は行わない。
+
+#### 2.3.9 `list_page_assets`
+
+処理順序は以下とする。
+
+1. path 検証・正規化
+2. read scope と path prefix 制約を判定
+3. page_id を解決
+4. `db.list_page_assets(page_id)` を呼び出す
+5. 削除済み、ゾンビ、所属ページ不一致の項目を外部公開対象から除外する
+6. metadata 一覧へ変換する
+
+#### 2.3.10 `resolve_page_asset`
+
+処理順序は以下とする。
+
+1. path 検証・正規化
+2. read scope と path prefix 制約を判定
+3. page_id を解決
+4. `file_name` を検証する
+5. `resolve_page_asset_by_file()` でasset_idとmetadataを解決する
+6. 最小識別情報へ変換する
+
+#### 2.3.11 `get_page_asset_metadata`
+
+処理順序は以下とする。
+
+1. `resolve_page_asset` と同じ path / file_name / asset 解決 helper を使う
+2. 詳細 metadata 応答へ変換する
+
+#### 2.3.12 `get_page_asset_data`
+
+処理順序は以下とする。
+
+1. `resolve_page_asset` と同じ path / file_name / asset 解決 helper を使う
+2. `db.read_asset_data(asset_id)` を呼び出す
+3. raw bytes が 10MiB 以下であることを確認する
+4. base64 encode する
+5. metadata と `data_base64` を応答へ変換する
+
+raw bytes が 10MiB を超える場合は `conflict` とする。
+明示的な result / transport payload 上限を事前検出できる場合も
+`conflict` / `tool result is too large` とする。
+transport 送信時または serialize 後に初めて失敗した場合は
+protocol `internal_error` とする。
+
+#### 2.3.13 `upload_page_asset`
+
+処理順序は以下とする。
+
+1. path 検証・正規化
+2. update scope、path prefix 制約、ReadOnly 拒否を判定
+3. page_id を解決
+4. `ensure_page_not_locked()` でロック状態を確認する
+5. `file_name` と `mime_type` を検証する
+6. `data_base64` の decode 前 byte 長、decode 成否、decode 後 raw bytes 10MiB 上限を検証する
+7. `db.create_asset(page_id, file_name, mime_type, auth.user_id(), data)` 相当を呼び出す
+8. 作成後に `db.get_asset_info_by_id(asset_id)` で metadata を取得する
+9. metadata と summary を応答へ変換する
+
+同名未削除アセットがある場合は `conflict` とする。
+削除済み同名アセットがある場合は、DB の `create_asset()` 挙動に従い新規 upload を許可する。
+upload raw bytes 10MiB 超過と decode 前 `data_base64` byte 長超過は `invalid_input` とする。
+
+#### 2.3.14 `delete_page_asset`
+
+処理順序は以下とする。
+
+1. path 検証・正規化
+2. delete scope、path prefix 制約、ReadOnly 拒否を判定
+3. page_id を解決
+4. `ensure_page_not_locked()` でロック状態を確認する
+5. `file_name` を検証する
+6. `resolve_page_asset_by_file()` でasset_idとmetadataを解決する
+7. 応答・監査に必要な安全な metadata を保持する
+8. `db.delete_asset(asset_id)` を呼び出す
+9. 対象識別情報と summary を応答へ変換する
 
 ### 2.4 Bearerトークン管理情報の拡張設計
 
@@ -1132,6 +1271,22 @@ token 系 CLI には混在させない。
 これにより、MCP transport 依存の文脈は `transport.rs` / `handler.rs` で閉じ、
 サービス層は業務ロジックに集中できる。
 
+アセット tool の service result 型として以下を追加する。
+
+- `ListPageAssetsResult { path, assets }`
+- `ResolvePageAssetResult { path, asset }`
+- `GetPageAssetMetadataResult { path, asset }`
+- `GetPageAssetDataResult { path, asset, data_base64 }`
+- `UploadPageAssetResult { asset, summary }`
+- `DeletePageAssetResult { path, asset_id, file_name, summary }`
+
+共通 asset metadata は DB 型を直接外部へ出さない中間 model として扱い、
+`asset_id`、`path`、`file_name`、`mime_type`、`size`、`timestamp`、
+`username`、`instance_id: Option<String>` を保持する。
+upload結果のpathは独立fieldではなく、`asset.path`に保持する。
+`data_base64` と本体 bytes は必要な service result に限定し、
+監査ログへ渡す結果情報から除外する。
+
 #### 2.6.1 MCP session metadata 管理
 
 MCP session metadata は `ManagedSessionManager` が保持・更新し、
@@ -1162,6 +1317,17 @@ session 上限制御による LRU eviction は起こり得る。
 
 既存の `list_page_entries_by_prefix`、`create_page`、`put_page`、
 `rename_pages_recursive_by_id` は再利用候補とする。
+MCP アセット tool の初期版では、既存 `DatabaseManager` asset API を直接利用できるため、
+必須の新規 DB API 追加は原則不要とする。
+利用する既存 API は以下とする。
+
+- `list_page_assets(page_id)`
+- `get_asset_id_by_page_file(page_id, file_name)`
+- `get_asset_info_by_id(asset_id)`
+- `read_asset_data(asset_id)`
+- `create_asset(page_id, file_name, mime, user_name, data)`
+- `delete_asset(asset_id)`
+- `has_deleted_asset_by_page_file(page_id, file_name)` は削除済み同名アセット確認に必要な場合のみ利用する
 
 4.7.3 では、このうち読取系に限定して、
 MCP サービス層が必要とする API を次の方針で整理する。
@@ -1788,8 +1954,10 @@ CLI / config 上の文字列表現とは分離する。
 - path ベース入力はすべてサービス層で検証・正規化する
 - 認可判定は path ベースで先に行い、その後に必要な page_id 解決を行う
 - DB 層は page_id / prefix ベース API を維持し、必要な path 解決 API のみ追加する
-- list / search / create / update / append / rename ごとに橋渡し経路を明示する
+- list / search / create / update / append / rename / asset tool ごとに橋渡し経路を明示する
 - `append` は path ベース公開、page_id ベース保存の二段構成とする
+- アセット tool は path ベース公開、page_id / asset_id ベース DB API 利用の二段構成とする
+- アセット tool は REST API を内部 HTTP 呼び出しせず、既存 `DatabaseManager` asset API を直接利用する
 - MCP session metadata は `ManagedSessionManager` の責務とし、
   path ベース業務サービス層および DB 層へ持ち込まない
 
@@ -1799,8 +1967,11 @@ CLI / config 上の文字列表現とは分離する。
 create、update、append、rename を個別実装として散在させず、
 サービス層で共有できる内部モデルへ整理する。
 
-初期実装の MCP 対象では delete を公開しないため、
-本節の共通化対象は create、update、append、rename の 4 操作とする。
+初期実装の MCP 対象ではページ delete を公開しないため、
+本節のページ本文更新系の共通化対象は create、update、append、rename の 4 操作とする。
+アセット upload / delete は page 本文更新系とは異なり、revision / instance_id による
+内容整合性確認を行わない。
+ただし、認可、path prefix 判定、ReadOnly 拒否、ページロック判定は既存更新系と共通化する。
 
 ### 3.1 共通化の基本方針
 
@@ -1833,12 +2004,16 @@ create、update、append、rename を個別実装として散在させず、
   - `update`
   - `append`
   - `rename`
+  - `upload_page_asset`
+  - `delete_page_asset`
 - `target_path`
   - 操作対象の現在 path または作成先 path
 - `payload`
   - 本文更新
   - 追記文字列
   - rename 先 path
+  - upload 対象の `file_name`、`mime_type`、`data_base64`
+  - delete 対象の `file_name`
 - `options`
   - amend 可否
   - 将来拡張用の追加フラグ
@@ -1918,6 +2093,23 @@ create と update / append / rename のように
 - 認可判定対象は current path と rename_to path の両方
 - 実行結果として新 path と revision を得る
 
+#### 3.4.6 upload_page_asset
+
+- 対象は「既存の現在 path に紐付く新規アセット」
+- `page_id` 解決が必要
+- `file_name`、`mime_type`、`data_base64` を追加 payload として受け取る
+- `revision` / `instance_id` による内容整合性確認は行わない
+- lock token 入力を受け付けず、ロック中ページは `conflict` とする
+- 実行結果として asset metadata と summary を得る
+
+#### 3.4.7 delete_page_asset
+
+- 対象は「既存の現在 path に紐付く通常アセット」
+- `page_id` 解決と `path + file_name` からの asset 解決が必要
+- `revision` / `instance_id` による内容整合性確認は行わない
+- lock token 入力を受け付けず、ロック中ページは `conflict` とする
+- 実行結果として削除対象の識別情報と summary を得る
+
 ### 3.5 共通出力モデル
 
 更新系操作の結果は、監査ログと MCP 応答の双方で再利用できるよう、
@@ -1948,6 +2140,8 @@ append では `summary` に amend 相当か新規 revision かを含める余地
 - `edit_page`
 - `append_page`
 - `rename_page`
+- `upload_page_asset`
+- `delete_page_asset`
 
 ただし内部では、
 
@@ -1981,6 +2175,9 @@ MS2 では拒否強化しない。
 - ただしサービス層の内部では共通入力モデル、解決済みコンテキスト、共通出力モデルを持つ
 - create、update、append、rename を同一の更新系ファミリとして扱う
 - `append` は公開面では独立操作、内部モデルでは更新系の一種として扱う
+- アセット upload / delete はページ本文更新系とは別の更新系操作として扱い、revision / instance_id 照合は行わない
+- アセット upload / delete は lock token 入力を受け付けないため、ロック中ページは常に `conflict` とする
+- アセット操作は page 本文 revision を更新結果として返さず、監査ログ revision も `null` とする
 - 監査ログと MCP 応答へ渡す結果情報は共通出力モデルから組み立てる
 
 ## 4. MCP promptsのサービス・永続化設計

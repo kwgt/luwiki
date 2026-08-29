@@ -215,7 +215,11 @@ impl CliServerGuard {
         config_use_mcp: bool,
     ) -> Self {
         let exe = test_binary_path();
-        let base_dir = db_path.parent().expect("db_path parent missing");
+        let base_dir = db_path
+            .parent()
+            .expect("db_path parent missing")
+            .canonicalize()
+            .expect("canonicalize base dir failed");
         let fts_index = common::fts_index_path(db_path);
         let config_dir = base_dir.join(env!("CARGO_PKG_NAME"));
         fs::create_dir_all(&config_dir).expect("create config dir failed");
@@ -234,8 +238,8 @@ impl CliServerGuard {
             std::fs::File::create(&stderr_path).expect("create stderr failed");
         let mut command = Command::new(exe);
         command
-            .env("XDG_CONFIG_HOME", base_dir)
-            .env("XDG_DATA_HOME", base_dir)
+            .env("XDG_CONFIG_HOME", &base_dir)
+            .env("XDG_DATA_HOME", &base_dir)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")

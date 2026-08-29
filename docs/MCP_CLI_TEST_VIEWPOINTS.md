@@ -28,6 +28,8 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
   - ユーザ属性モデルとの責務分離
 - `docs/MCP_RESOURCE_SPECS.md`
   - resource派生データと再構成、resources capability、通知非対応
+- `docs/MCP_ASSET_TOOL_TEST_VIEWPOINTS.md`
+  - MCP アセット Tools追加時のscope、path prefix、CLI追加不要の境界
 
 ## 2. 観点の使い方
 
@@ -328,3 +330,38 @@ path 制約表示、`NoBasicAuth` 属性表示と入力制約である。
   - target別の成功表示、非ゼロ終了、`template_root`の適用範囲
 - MCP transport回帰テスト
   - readinessに応じたcapability、通知非送信、既存toolsの維持
+
+## 13. MCP アセット Tools追加時のCLI観点
+
+### 13.1 token scope表示との接続
+
+1. `token create --scope read` で作成したトークンが、アセット参照系4 toolの
+   required scopeを満たす前提と矛盾しないこと
+2. `token create --scope update` で作成したトークンが、
+   `upload_page_asset` のrequired scopeを満たす前提と矛盾しないこと
+3. `token create --scope delete` で作成したトークンが、
+   `delete_page_asset` のrequired scopeを満たす前提と矛盾しないこと
+4. `token create --scope write` が、アセット参照系4 tool、upload、deleteを
+   包含する既存互換scopeとして表示・保存されること
+5. `token list` の `SCOPE` 欄で、read / update / delete / write の
+   実効権限表示がアセットtoolのrequired scopeと誤認を生まないこと
+6. `token info` の `SCOPES` と `PERMISSIONS` が、アセットtool追加後も
+   保存値と導出値の責務分離を維持すること
+
+### 13.2 path prefix表示との接続
+
+1. `token create --path-prefix` で保存したprefixが、
+   アセットtoolの入力 `path` に対する制約として説明できること
+2. `token list` の `PATH` 欄が、アセットfile_nameや内部保存パスではなく
+   page path制約の有無を表すこと
+3. `token info` の `PATH PREFIXES:` が、アセットtool追加後も
+   詳細prefix群の表示責務を維持すること
+
+### 13.3 CLI追加不要の境界
+
+1. MCP アセット Tools追加により、新規CLIサブコマンドが必要にならないこと
+2. `derived rebuild` はfront matter派生データ再構成の責務に留まり、
+   アセットmetadataや本体の再構成を担当しないこと
+3. CLIが `data_base64`、アセット本体bytes、内部保存パスを表示しないこと
+4. 既存RESTアセットAPI向けの運用とMCP アセット Tools公開面を、
+   CLI仕様上で混同しないこと

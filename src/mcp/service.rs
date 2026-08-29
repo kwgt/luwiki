@@ -10,10 +10,12 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
+use base64::Engine;
 use chrono::{DateTime, Local};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use serde_json::{Map as JsonObject, Value as JsonValue};
@@ -36,6 +38,8 @@ use crate::database::resource_list::{
     page_resource_uri,
 };
 use crate::database::types::{
+    AssetInfo,
+    AssetId,
     BearerScope,
     PageId,
     PageIndex,
@@ -94,6 +98,15 @@ const APPEND_WAIT_TIMEOUT_MS: u64 = 1_000;
 /// `append` 競合待機のポーリング間隔 (ミリ秒)
 const APPEND_WAIT_INTERVAL_MS: u64 = 50;
 
+/// アセット metadata のユーザ名欠落時代替値
+const UNKNOWN_ASSET_USERNAME: &str = "unknown";
+
+/// MCPで返却するアセットデータの最大サイズ
+const MAX_MCP_ASSET_DATA_SIZE: u64 = 10 * 1024 * 1024;
+
+/// MCPアセットuploadで受け付けるbase64入力の最大サイズ
+const MAX_MCP_ASSET_DATA_BASE64_SIZE: usize = 13_981_016;
+
 ///
 /// resource ACL の対象operation
 ///
@@ -137,6 +150,24 @@ pub(crate) enum McpOperation {
 
     /// セクション参照
     GetPageSection,
+
+    /// ページアセット一覧取得
+    ListPageAssets,
+
+    /// ページアセット解決
+    ResolvePageAsset,
+
+    /// ページアセットメタ情報取得
+    GetPageAssetMetadata,
+
+    /// ページアセット本体取得
+    GetPageAssetData,
+
+    /// ページアセットアップロード
+    UploadPageAsset,
+
+    /// ページアセット削除
+    DeletePageAsset,
 
     /// ページ作成
     CreatePage,
@@ -290,6 +321,137 @@ pub(crate) struct ListPagesResult {
 
     /// 次回 cursor
     next_cursor: Option<String>,
+}
+
+///
+/// MCP公開用のアセットメタ情報
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PageAssetMetadata {
+    /// アセットID
+    asset_id: String,
+
+    /// アセットが紐付くページの current path
+    path: String,
+
+    /// アセットファイル名
+    file_name: String,
+
+    /// MIME 種別
+    mime_type: String,
+
+    /// raw binary size
+    size: u64,
+
+    /// 登録または更新日時
+    timestamp: String,
+
+    /// 登録または更新ユーザ名
+    username: String,
+
+    /// アセット内容の任意 instance_id
+    instance_id: Option<String>,
+}
+
+///
+/// `list_page_assets` の戻り値
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ListPageAssetsResult {
+    /// 対象ページの current path
+    path: String,
+
+    /// アセットメタ情報一覧
+    assets: Vec<PageAssetMetadata>,
+}
+
+///
+/// `resolve_page_asset` の戻り値
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvePageAssetResult {
+    /// 対象ページの current path
+    path: String,
+
+    /// 解決されたアセットメタ情報
+    asset: PageAssetMetadata,
+}
+
+///
+/// `get_page_asset_metadata` の戻り値
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GetPageAssetMetadataResult {
+    /// 対象ページの current path
+    path: String,
+
+    /// アセットメタ情報
+    asset: PageAssetMetadata,
+}
+
+///
+/// `get_page_asset_data` の戻り値
+///
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct GetPageAssetDataResult {
+    /// 対象ページの current path
+    path: String,
+
+    /// アセットメタ情報
+    asset: PageAssetMetadata,
+
+    /// base64 エンコード済みアセット本体
+    data_base64: String,
+}
+
+impl fmt::Debug for GetPageAssetDataResult {
+    ///
+    /// アセット本体を秘匿したデバッグ表現を生成する
+    ///
+    /// # 引数
+    /// * `formatter` - デバッグ出力先
+    ///
+    /// # 戻り値
+    /// デバッグ表現の生成結果を返す。
+    ///
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GetPageAssetDataResult")
+            .field("path", &self.path)
+            .field("asset", &self.asset)
+            .field("data_base64", &"[REDACTED]")
+            .finish()
+    }
+}
+
+///
+/// `upload_page_asset` の戻り値
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UploadPageAssetResult {
+    /// アップロードしたアセットメタ情報
+    asset: PageAssetMetadata,
+
+    /// 実行結果要約
+    summary: String,
+}
+
+///
+/// `delete_page_asset` の戻り値
+///
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DeletePageAssetResult {
+    /// 削除したアセットID
+    asset_id: String,
+
+    /// 対象ページの正規化済み path
+    path: String,
+
+    /// 削除したアセットファイル名
+    file_name: String,
+
+    /// 実行結果要約
+    summary: String,
 }
 
 ///
@@ -555,13 +717,20 @@ impl McpOperation {
             | Self::ReadResource
             | Self::GetPrompt
             | Self::SearchPages
-            | Self::GetPageSection => BearerScope::Read,
+            | Self::GetPageSection
+            | Self::ListPageAssets
+            | Self::ResolvePageAsset
+            | Self::GetPageAssetMetadata
+            | Self::GetPageAssetData => BearerScope::Read,
             Self::CreatePage => BearerScope::Create,
-            Self::UpdatePage | Self::EditPage | Self::RenamePage => {
+            Self::UpdatePage
+            | Self::EditPage
+            | Self::RenamePage
+            | Self::UploadPageAsset => {
                 BearerScope::Update
             }
             Self::AppendPage => BearerScope::Append,
-            Self::DeletePage => BearerScope::Delete,
+            Self::DeletePage | Self::DeletePageAsset => BearerScope::Delete,
         }
     }
 
@@ -583,6 +752,10 @@ impl McpOperation {
                 | Self::GetPrompt
                 | Self::SearchPages
                 | Self::GetPageSection
+                | Self::ListPageAssets
+                | Self::ResolvePageAsset
+                | Self::GetPageAssetMetadata
+                | Self::GetPageAssetData
         )
     }
 }
@@ -1047,6 +1220,393 @@ impl ListPagesResult {
     ///
     pub(crate) fn next_cursor(&self) -> Option<&str> {
         self.next_cursor.as_deref()
+    }
+}
+
+impl PageAssetMetadata {
+    ///
+    /// MCP公開用のアセットメタ情報を生成する
+    ///
+    /// # 引数
+    /// * `asset_id` - アセットID
+    /// * `path` - アセットが紐付くページの current path
+    /// * `file_name` - アセットファイル名
+    /// * `mime_type` - MIME 種別
+    /// * `size` - raw binary size
+    /// * `timestamp` - 登録または更新日時
+    /// * `username` - 登録または更新ユーザ名
+    /// * `instance_id` - アセット内容の任意 instance_id
+    ///
+    /// # 戻り値
+    /// 生成したメタ情報を返す。
+    ///
+    pub(crate) fn new(
+        asset_id: String,
+        path: String,
+        file_name: String,
+        mime_type: String,
+        size: u64,
+        timestamp: String,
+        username: String,
+        instance_id: Option<String>,
+    ) -> Self {
+        Self {
+            asset_id,
+            path,
+            file_name,
+            mime_type,
+            size,
+            timestamp,
+            username,
+            instance_id,
+        }
+    }
+
+    ///
+    /// アセットIDを返す
+    ///
+    /// # 戻り値
+    /// アセットIDを返す。
+    ///
+    pub(crate) fn asset_id(&self) -> &str {
+        &self.asset_id
+    }
+
+    ///
+    /// current path を返す
+    ///
+    /// # 戻り値
+    /// アセットが紐付くページの current path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// アセットファイル名を返す
+    ///
+    /// # 戻り値
+    /// アセットファイル名を返す。
+    ///
+    pub(crate) fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    ///
+    /// MIME 種別を返す
+    ///
+    /// # 戻り値
+    /// MIME 種別を返す。
+    ///
+    pub(crate) fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+
+    ///
+    /// raw binary size を返す
+    ///
+    /// # 戻り値
+    /// raw binary size を返す。
+    ///
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
+    ///
+    /// 登録または更新日時を返す
+    ///
+    /// # 戻り値
+    /// 登録または更新日時を返す。
+    ///
+    pub(crate) fn timestamp(&self) -> &str {
+        &self.timestamp
+    }
+
+    ///
+    /// 登録または更新ユーザ名を返す
+    ///
+    /// # 戻り値
+    /// 登録または更新ユーザ名を返す。
+    ///
+    pub(crate) fn username(&self) -> &str {
+        &self.username
+    }
+
+    ///
+    /// アセット内容の instance_id を返す
+    ///
+    /// # 戻り値
+    /// 存在する場合は instance_id を返す。
+    ///
+    pub(crate) fn instance_id(&self) -> Option<&str> {
+        self.instance_id.as_deref()
+    }
+}
+
+impl ListPageAssetsResult {
+    ///
+    /// `list_page_assets` の戻り値を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページの current path
+    /// * `assets` - アセットメタ情報一覧
+    ///
+    /// # 戻り値
+    /// 生成した戻り値を返す。
+    ///
+    pub(crate) fn new(path: String, assets: Vec<PageAssetMetadata>) -> Self {
+        Self { path, assets }
+    }
+
+    ///
+    /// 対象ページの current path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの current path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// アセットメタ情報一覧を返す
+    ///
+    /// # 戻り値
+    /// アセットメタ情報一覧を返す。
+    ///
+    pub(crate) fn assets(&self) -> &[PageAssetMetadata] {
+        &self.assets
+    }
+}
+
+impl ResolvePageAssetResult {
+    ///
+    /// `resolve_page_asset` の戻り値を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページの current path
+    /// * `asset` - 解決されたアセットメタ情報
+    ///
+    /// # 戻り値
+    /// 生成した戻り値を返す。
+    ///
+    pub(crate) fn new(path: String, asset: PageAssetMetadata) -> Self {
+        Self { path, asset }
+    }
+
+    ///
+    /// 対象ページの current path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの current path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// 解決されたアセットメタ情報を返す
+    ///
+    /// # 戻り値
+    /// 解決されたアセットメタ情報を返す。
+    ///
+    pub(crate) fn asset(&self) -> &PageAssetMetadata {
+        &self.asset
+    }
+}
+
+impl GetPageAssetMetadataResult {
+    ///
+    /// `get_page_asset_metadata` の戻り値を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページの current path
+    /// * `asset` - アセットメタ情報
+    ///
+    /// # 戻り値
+    /// 生成した戻り値を返す。
+    ///
+    pub(crate) fn new(path: String, asset: PageAssetMetadata) -> Self {
+        Self { path, asset }
+    }
+
+    ///
+    /// 対象ページの current path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの current path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// アセットメタ情報を返す
+    ///
+    /// # 戻り値
+    /// アセットメタ情報を返す。
+    ///
+    pub(crate) fn asset(&self) -> &PageAssetMetadata {
+        &self.asset
+    }
+}
+
+impl GetPageAssetDataResult {
+    ///
+    /// `get_page_asset_data` の戻り値を生成する
+    ///
+    /// # 引数
+    /// * `path` - 対象ページの current path
+    /// * `asset` - アセットメタ情報
+    /// * `data_base64` - base64 エンコード済みアセット本体
+    ///
+    /// # 戻り値
+    /// 生成した戻り値を返す。
+    ///
+    pub(crate) fn new(
+        path: String,
+        asset: PageAssetMetadata,
+        data_base64: String,
+    ) -> Self {
+        Self {
+            path,
+            asset,
+            data_base64,
+        }
+    }
+
+    ///
+    /// 対象ページの current path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの current path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// アセットメタ情報を返す
+    ///
+    /// # 戻り値
+    /// アセットメタ情報を返す。
+    ///
+    pub(crate) fn asset(&self) -> &PageAssetMetadata {
+        &self.asset
+    }
+
+    ///
+    /// base64 エンコード済みアセット本体を返す
+    ///
+    /// # 戻り値
+    /// base64 エンコード済みアセット本体を返す。
+    ///
+    pub(crate) fn data_base64(&self) -> &str {
+        &self.data_base64
+    }
+}
+
+impl UploadPageAssetResult {
+    ///
+    /// `upload_page_asset` の戻り値を生成する
+    ///
+    /// # 引数
+    /// * `asset` - アップロードしたアセットメタ情報
+    /// * `summary` - 実行結果要約
+    ///
+    /// # 戻り値
+    /// 生成した戻り値を返す。
+    ///
+    pub(crate) fn new(asset: PageAssetMetadata, summary: String) -> Self {
+        Self { asset, summary }
+    }
+
+    ///
+    /// アセットメタ情報を返す
+    ///
+    /// # 戻り値
+    /// アップロードしたアセットメタ情報を返す。
+    ///
+    pub(crate) fn asset(&self) -> &PageAssetMetadata {
+        &self.asset
+    }
+
+    ///
+    /// 実行結果要約を返す
+    ///
+    /// # 戻り値
+    /// 実行結果要約を返す。
+    ///
+    pub(crate) fn summary(&self) -> &str {
+        &self.summary
+    }
+}
+
+impl DeletePageAssetResult {
+    ///
+    /// `delete_page_asset` の戻り値を生成する
+    ///
+    /// # 引数
+    /// * `asset_id` - 削除したアセットID
+    /// * `path` - 対象ページの正規化済み path
+    /// * `file_name` - 削除したアセットファイル名
+    /// * `summary` - 実行結果要約
+    ///
+    /// # 戻り値
+    /// 生成した戻り値を返す。
+    ///
+    pub(crate) fn new(
+        asset_id: String,
+        path: String,
+        file_name: String,
+        summary: String,
+    ) -> Self {
+        Self {
+            asset_id,
+            path,
+            file_name,
+            summary,
+        }
+    }
+
+    ///
+    /// 削除したアセットIDを返す
+    ///
+    /// # 戻り値
+    /// 削除したアセットIDを返す。
+    ///
+    pub(crate) fn asset_id(&self) -> &str {
+        &self.asset_id
+    }
+
+    ///
+    /// 対象ページの正規化済み path を返す
+    ///
+    /// # 戻り値
+    /// 対象ページの正規化済み path を返す。
+    ///
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    ///
+    /// 削除したアセットファイル名を返す
+    ///
+    /// # 戻り値
+    /// 削除したアセットファイル名を返す。
+    ///
+    pub(crate) fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    ///
+    /// 実行結果要約を返す
+    ///
+    /// # 戻り値
+    /// 実行結果要約を返す。
+    ///
+    pub(crate) fn summary(&self) -> &str {
+        &self.summary
     }
 }
 
@@ -2973,6 +3533,640 @@ impl McpService {
     }
 
     ///
+    /// アセットファイル名を検証する
+    ///
+    /// # 引数
+    /// * `file_name` - 検証対象ファイル名
+    ///
+    /// # 戻り値
+    /// 有効な場合は `Ok(())` を返す。
+    ///
+    fn validate_asset_file_name(
+        &self,
+        file_name: &str,
+    ) -> Result<(), McpError> {
+        if file_name.is_empty()
+            || file_name.contains('/')
+            || file_name.contains('\\')
+        {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "file_name is invalid",
+            ));
+        }
+
+        Ok(())
+    }
+
+    ///
+    /// アセットのMIME種別を検証する
+    ///
+    /// # 引数
+    /// * `mime_type` - 検証対象のMIME種別
+    ///
+    /// # 戻り値
+    /// 空文字でない場合は `Ok(())` を返す。
+    ///
+    fn validate_asset_mime_type(
+        &self,
+        mime_type: &str,
+    ) -> Result<(), McpError> {
+        if mime_type.is_empty() {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "mime_type is invalid",
+            ));
+        }
+
+        Ok(())
+    }
+
+    ///
+    /// アセット本体のbase64入力をデコードする
+    ///
+    /// # 概要
+    /// 入力長とデコード後サイズを検証し、
+    /// 標準base64としてデコードする。
+    ///
+    /// # 引数
+    /// * `data_base64` - base64エンコード済みアセット本体
+    ///
+    /// # 戻り値
+    /// デコード済みアセット本体を返す。
+    ///
+    fn decode_asset_data_base64(
+        &self,
+        data_base64: &str,
+    ) -> Result<Vec<u8>, McpError> {
+        /*
+         * 空入力とデコード前サイズの検証
+         */
+        if data_base64.is_empty() {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "data_base64 is invalid",
+            ));
+        }
+        if data_base64.len() > MAX_MCP_ASSET_DATA_BASE64_SIZE {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "asset data too large",
+            ));
+        }
+
+        /*
+         * 標準base64としてデコード
+         */
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|_| {
+                McpError::new(
+                    McpErrorCode::InvalidInput,
+                    "data_base64 is invalid",
+                )
+            })?;
+
+        /*
+         * デコード後サイズの検証
+         */
+        if data.len() as u64 > MAX_MCP_ASSET_DATA_SIZE {
+            return Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "asset data too large",
+            ));
+        }
+
+        Ok(data)
+    }
+
+    ///
+    /// アセット登録ユーザ名を解決する
+    ///
+    /// # 引数
+    /// * `db` - データベースマネージャ
+    /// * `user_id` - 登録ユーザID
+    ///
+    /// # 戻り値
+    /// ユーザ名を返す。ユーザ欠落時は代替名を返す。
+    ///
+    fn resolve_asset_username(
+        &self,
+        db: &DatabaseManager,
+        user_id: &UserId,
+    ) -> Result<String, McpError> {
+        match db.get_user_name_by_id(user_id) {
+            Ok(Some(name)) => Ok(name),
+            Ok(None) => Ok(UNKNOWN_ASSET_USERNAME.to_string()),
+            Err(_) => Err(McpError::new(
+                McpErrorCode::InternalError,
+                "user lookup failed",
+            )),
+        }
+    }
+
+    ///
+    /// DBアセット情報をMCP公開用metadataへ変換する
+    ///
+    /// # 引数
+    /// * `db` - データベースマネージャ
+    /// * `normalized_path` - 正規化済み対象ページ path
+    /// * `asset_info` - DBアセット情報
+    ///
+    /// # 戻り値
+    /// MCP公開用metadataを返す。
+    ///
+    fn build_page_asset_metadata(
+        &self,
+        db: &DatabaseManager,
+        normalized_path: &str,
+        asset_info: &AssetInfo,
+    ) -> Result<PageAssetMetadata, McpError> {
+        let username = self.resolve_asset_username(db, &asset_info.user())?;
+
+        Ok(PageAssetMetadata::new(
+            asset_info.id().to_string(),
+            normalized_path.to_string(),
+            asset_info.file_name(),
+            asset_info.mime(),
+            asset_info.size(),
+            format_mcp_timestamp(asset_info.timestamp()),
+            username,
+            asset_info.instance_id().map(|id| id.to_string()),
+        ))
+    }
+
+    ///
+    /// ページとファイル名から通常アセットmetadataを解決する
+    ///
+    /// # 引数
+    /// * `db` - データベースマネージャ
+    /// * `resolved` - 解決済みページ
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// MCP公開用metadataを返す。
+    ///
+    fn resolve_page_asset_by_file(
+        &self,
+        db: &DatabaseManager,
+        resolved: &ResolvedPage,
+        file_name: &str,
+    ) -> Result<PageAssetMetadata, McpError> {
+        self.validate_asset_file_name(file_name)?;
+
+        let resolved_page_id = resolved.page_id();
+        let asset_id = match db.get_asset_id_by_page_file(
+            &resolved_page_id,
+            file_name,
+        ) {
+            Ok(Some(asset_id)) => asset_id,
+            Ok(None) => {
+                match db.has_deleted_asset_by_page_file(
+                    &resolved_page_id,
+                    file_name,
+                ) {
+                    Ok(_) => {
+                        return Err(McpError::new(
+                            McpErrorCode::NotFound,
+                            "asset not found",
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(McpError::new(
+                            McpErrorCode::InternalError,
+                            "asset lookup failed",
+                        ));
+                    }
+                }
+            }
+            Err(_) => {
+                return Err(McpError::new(
+                    McpErrorCode::InternalError,
+                    "asset lookup failed",
+                ));
+            }
+        };
+
+        let asset_info = match db.get_asset_info_by_id(&asset_id) {
+            Ok(Some(info)) => info,
+            Ok(None) => {
+                return Err(McpError::new(
+                    McpErrorCode::NotFound,
+                    "asset not found",
+                ));
+            }
+            Err(_) => {
+                return Err(McpError::new(
+                    McpErrorCode::InternalError,
+                    "asset lookup failed",
+                ));
+            }
+        };
+
+        if asset_info.deleted()
+            || asset_info.is_zombie()
+            || asset_info.page_id().as_ref() != Some(&resolved_page_id)
+            || asset_info.file_name() != file_name
+        {
+            return Err(McpError::new(
+                McpErrorCode::NotFound,
+                "asset not found",
+            ));
+        }
+
+        self.build_page_asset_metadata(
+            db,
+            resolved.normalized_path(),
+            &asset_info,
+        )
+    }
+
+    ///
+    /// 認可済みの通常ページを解決する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `operation` - 操作種別
+    /// * `raw_path` - 対象ページ path
+    ///
+    /// # 戻り値
+    /// 解決済みページを返す。
+    ///
+    fn resolve_authorized_page(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        operation: McpOperation,
+        raw_path: &str,
+    ) -> Result<ResolvedPage, McpError> {
+        let normalized_path =
+            self.ensure_authorized_path(auth, operation, raw_path)?;
+        self.resolve_page_by_path(db, &normalized_path)
+    }
+
+    ///
+    /// `list_page_assets` を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `raw_path` - 対象ページ path
+    ///
+    /// # 戻り値
+    /// ページに紐付く公開可能なアセットmetadata一覧を返す。
+    ///
+    pub(crate) fn list_page_assets(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        raw_path: &str,
+    ) -> Result<ListPageAssetsResult, McpError> {
+        let resolved = self.resolve_authorized_page(
+            auth,
+            db,
+            McpOperation::ListPageAssets,
+            raw_path,
+        )?;
+        let resolved_page_id = resolved.page_id();
+        let asset_infos = db
+            .list_page_assets(&resolved_page_id)
+            .map_err(|_| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "asset lookup failed",
+                )
+            })?;
+        let mut assets = Vec::new();
+
+        /*
+         * 外部公開対象の通常アセットだけをmetadataへ変換する
+         */
+        for asset_info in asset_infos {
+            if asset_info.deleted()
+                || asset_info.is_zombie()
+                || asset_info.page_id().as_ref() != Some(&resolved_page_id)
+            {
+                continue;
+            }
+
+            assets.push(self.build_page_asset_metadata(
+                db,
+                resolved.normalized_path(),
+                &asset_info,
+            )?);
+        }
+
+        Ok(ListPageAssetsResult::new(
+            resolved.normalized_path().to_string(),
+            assets,
+        ))
+    }
+
+    ///
+    /// `resolve_page_asset` を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `raw_path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// 解決されたアセットmetadataを返す。
+    ///
+    pub(crate) fn resolve_page_asset(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        raw_path: &str,
+        file_name: &str,
+    ) -> Result<ResolvePageAssetResult, McpError> {
+        let resolved = self.resolve_authorized_page(
+            auth,
+            db,
+            McpOperation::ResolvePageAsset,
+            raw_path,
+        )?;
+        let asset = self.resolve_page_asset_by_file(
+            db,
+            &resolved,
+            file_name,
+        )?;
+
+        Ok(ResolvePageAssetResult::new(
+            resolved.normalized_path().to_string(),
+            asset,
+        ))
+    }
+
+    ///
+    /// `get_page_asset_metadata` を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `raw_path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// アセットmetadataを返す。
+    ///
+    pub(crate) fn get_page_asset_metadata(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        raw_path: &str,
+        file_name: &str,
+    ) -> Result<GetPageAssetMetadataResult, McpError> {
+        let resolved = self.resolve_authorized_page(
+            auth,
+            db,
+            McpOperation::GetPageAssetMetadata,
+            raw_path,
+        )?;
+        let asset = self.resolve_page_asset_by_file(
+            db,
+            &resolved,
+            file_name,
+        )?;
+
+        Ok(GetPageAssetMetadataResult::new(
+            resolved.normalized_path().to_string(),
+            asset,
+        ))
+    }
+
+    ///
+    /// `get_page_asset_data` を実行する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `raw_path` - 対象ページ path
+    /// * `file_name` - 対象アセットファイル名
+    ///
+    /// # 戻り値
+    /// アセットmetadataとbase64エンコード済み本体を返す。
+    ///
+    pub(crate) fn get_page_asset_data(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        raw_path: &str,
+        file_name: &str,
+    ) -> Result<GetPageAssetDataResult, McpError> {
+        let resolved = self.resolve_authorized_page(
+            auth,
+            db,
+            McpOperation::GetPageAssetData,
+            raw_path,
+        )?;
+        let asset = self.resolve_page_asset_by_file(
+            db,
+            &resolved,
+            file_name,
+        )?;
+
+        if asset.size() > MAX_MCP_ASSET_DATA_SIZE {
+            return Err(McpError::new(
+                McpErrorCode::Conflict,
+                "asset data too large",
+            ));
+        }
+
+        /*
+         * アセット本体を取得し、取得後のサイズも上限内であることを確認する
+         */
+        let asset_id = AssetId::from_string(asset.asset_id()).map_err(|_| {
+            McpError::new(McpErrorCode::InternalError, "asset lookup failed")
+        })?;
+        let data = db.read_asset_data(&asset_id).map_err(|_| {
+            McpError::new(McpErrorCode::InternalError, "asset read failed")
+        })?;
+        if data.len() as u64 > MAX_MCP_ASSET_DATA_SIZE {
+            return Err(McpError::new(
+                McpErrorCode::Conflict,
+                "asset data too large",
+            ));
+        }
+        let data_base64 =
+            base64::engine::general_purpose::STANDARD.encode(&data);
+
+        Ok(GetPageAssetDataResult::new(
+            resolved.normalized_path().to_string(),
+            asset,
+            data_base64,
+        ))
+    }
+
+    ///
+    /// `upload_page_asset` を実行する
+    ///
+    /// # 概要
+    /// 対象ページの認可とロック状態を確認する。
+    /// 入力されたアセットをDBと
+    /// ファイルシステムへ保存し、
+    /// 公開metadataを返す。
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `raw_path` - 対象ページ path
+    /// * `file_name` - アセットファイル名
+    /// * `mime_type` - MIME 種別
+    /// * `data_base64` - base64 エンコード済みアセット本体
+    ///
+    /// # 戻り値
+    /// アップロードしたアセットの
+    /// 公開metadataと要約を返す。
+    ///
+    pub(crate) fn upload_page_asset(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        raw_path: &str,
+        file_name: &str,
+        mime_type: &str,
+        data_base64: &str,
+    ) -> Result<UploadPageAssetResult, McpError> {
+        /*
+         * 対象ページの認可とロック状態の確認
+         */
+        let resolved = self
+            .resolve_authorized_page(
+                auth,
+                db,
+                McpOperation::UploadPageAsset,
+                raw_path,
+            )
+            .map_err(|err| {
+                map_asset_boundary_error(err, "page lookup failed")
+            })?;
+        let page_id = resolved.page_id();
+        self.ensure_page_not_locked(db, &page_id).map_err(|err| {
+            map_asset_boundary_error(err, "lock lookup failed")
+        })?;
+
+        /*
+         * 入力値の検証とアセット本体のデコード
+         */
+        self.validate_asset_file_name(file_name)?;
+        self.validate_asset_mime_type(mime_type)?;
+        let data = self.decode_asset_data_base64(data_base64)?;
+
+        /*
+         * アセットの作成と公開metadataの取得
+         */
+        let asset_id = db
+            .create_asset(
+                &page_id,
+                file_name,
+                mime_type,
+                auth.user_id(),
+                &data,
+            )
+            .map_err(map_upload_asset_db_error)?;
+        let asset_info = db
+            .get_asset_info_by_id(&asset_id)
+            .map_err(|_| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "asset lookup failed",
+                )
+            })?
+            .ok_or_else(|| {
+                McpError::new(
+                    McpErrorCode::InternalError,
+                    "asset lookup failed",
+                )
+            })?;
+        let asset = self.build_page_asset_metadata(
+            db,
+            resolved.normalized_path(),
+            &asset_info,
+        )?;
+
+        Ok(UploadPageAssetResult::new(
+            asset,
+            "asset uploaded".to_string(),
+        ))
+    }
+
+    ///
+    /// `delete_page_asset` を実行する
+    ///
+    /// # 概要
+    /// 対象ページの認可とロック状態を確認する。
+    /// 通常アセットを解決し、DB上で論理削除する。
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - データベースマネージャ
+    /// * `raw_path` - 対象ページ path
+    /// * `file_name` - アセットファイル名
+    ///
+    /// # 戻り値
+    /// 削除したアセットの識別情報と要約を返す。
+    ///
+    pub(crate) fn delete_page_asset(
+        &self,
+        auth: &AuthContext,
+        db: &DatabaseManager,
+        raw_path: &str,
+        file_name: &str,
+    ) -> Result<DeletePageAssetResult, McpError> {
+        /*
+         * 対象ページの認可とロック状態の確認
+         */
+        let resolved = self
+            .resolve_authorized_page(
+                auth,
+                db,
+                McpOperation::DeletePageAsset,
+                raw_path,
+            )
+            .map_err(|err| {
+                map_asset_boundary_error(err, "page lookup failed")
+            })?;
+        let page_id = resolved.page_id();
+        self.ensure_page_not_locked(db, &page_id).map_err(|err| {
+            map_asset_boundary_error(err, "lock lookup failed")
+        })?;
+
+        /*
+         * 通常アセットの解決と安全な識別情報の保持
+         */
+        let asset = self.resolve_page_asset_by_file(
+            db,
+            &resolved,
+            file_name,
+        )?;
+        let asset_id = asset.asset_id().to_string();
+        let normalized_path = resolved.normalized_path().to_string();
+        let resolved_file_name = asset.file_name().to_string();
+
+        /*
+         * アセットの論理削除
+         */
+        let db_asset_id = AssetId::from_string(&asset_id).map_err(|_| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "asset delete failed",
+            )
+        })?;
+        db.delete_asset(&db_asset_id)
+            .map_err(map_delete_asset_db_error)?;
+
+        Ok(DeletePageAssetResult::new(
+            asset_id,
+            normalized_path,
+            resolved_file_name,
+            "asset deleted".to_string(),
+        ))
+    }
+
+    ///
     /// 初期版対象外の lock 操作要求を拒否する
     ///
     /// # 引数
@@ -4780,6 +5974,79 @@ fn map_search_error(err: Error) -> McpError {
 }
 
 ///
+/// DBのアセット作成失敗をMCPエラーへ写像する
+///
+/// # 引数
+/// * `err` - DBまたはファイルシステムの失敗
+///
+/// # 戻り値
+/// 公開可能な固定MCPエラーへ写像した結果を返す。
+///
+fn map_upload_asset_db_error(err: Error) -> McpError {
+    match err.downcast_ref::<DbError>() {
+        Some(DbError::PageNotFound) => {
+            McpError::new(McpErrorCode::NotFound, "page not found")
+        }
+        Some(DbError::UserNotFound) => McpError::new(
+            McpErrorCode::InternalError,
+            "user resolution failed",
+        ),
+        Some(DbError::AssetAlreadyExists) => McpError::new(
+            McpErrorCode::Conflict,
+            "asset already exists",
+        ),
+        _ => McpError::new(
+            McpErrorCode::InternalError,
+            "asset create failed",
+        ),
+    }
+}
+
+///
+/// アセット操作境界で内部エラーの詳細を
+/// 固定文言へ縮退する
+///
+/// # 引数
+/// * `err` - サービス内部エラー
+/// * `internal_message` - 内部失敗時の固定公開文言
+///
+/// # 戻り値
+/// 内部失敗だけを固定文言へ置換する。
+/// その他のエラーは維持する。
+///
+fn map_asset_boundary_error(
+    err: McpError,
+    internal_message: &str,
+) -> McpError {
+    if err.code() == McpErrorCode::InternalError {
+        return McpError::new(McpErrorCode::InternalError, internal_message);
+    }
+
+    err
+}
+
+///
+/// DBのアセット削除失敗をMCPエラーへ写像する
+///
+/// # 引数
+/// * `err` - DB失敗
+///
+/// # 戻り値
+/// 公開可能な固定MCPエラーへ写像した結果を返す。
+///
+fn map_delete_asset_db_error(err: Error) -> McpError {
+    match err.downcast_ref::<DbError>() {
+        Some(DbError::AssetNotFound | DbError::AssetDeleted) => {
+            McpError::new(McpErrorCode::NotFound, "asset not found")
+        }
+        _ => McpError::new(
+            McpErrorCode::InternalError,
+            "asset delete failed",
+        ),
+    }
+}
+
+///
 /// DB の作成失敗を MCP エラーへ写像する
 ///
 /// # 引数
@@ -4985,7 +6252,7 @@ fn map_append_db_error(err: Error) -> McpError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::auth::{AuthContext, AuthUser};
     use crate::database::DatabaseManager;
@@ -5017,6 +6284,29 @@ mod tests {
             .expect("open manager failed");
 
         (base_dir, manager)
+    }
+
+    ///
+    /// テストディレクトリ配下のファイル数を数える
+    ///
+    /// # 引数
+    /// * `path` - 集計対象ディレクトリ
+    ///
+    /// # 戻り値
+    /// 子ディレクトリを含むファイル数を返す。
+    ///
+    fn count_test_files(path: &Path) -> usize {
+        fs::read_dir(path)
+            .expect("read test directory failed")
+            .map(|entry| {
+                let child = entry.expect("read test entry failed").path();
+                if child.is_dir() {
+                    count_test_files(&child)
+                } else {
+                    1
+                }
+            })
+            .sum()
     }
 
     ///
@@ -5084,6 +6374,16 @@ mod tests {
             BearerScope::Read,
         );
         assert!(!McpOperation::GetPrompt.is_write());
+        for operation in [
+            McpOperation::ListPageAssets,
+            McpOperation::ResolvePageAsset,
+            McpOperation::GetPageAssetMetadata,
+            McpOperation::GetPageAssetData,
+        ] {
+            assert_eq!(operation.required_scope(), BearerScope::Read);
+            assert!(!operation.is_write());
+            assert!(service.ensure_operation_scope(&auth, operation).is_ok());
+        }
         assert!(service
             .ensure_operation_scope(&auth, McpOperation::CreatePage)
             .is_ok());
@@ -5096,6 +6396,113 @@ mod tests {
         assert!(service
             .ensure_operation_scope(&auth, McpOperation::DeletePage)
             .is_ok());
+        assert_eq!(
+            McpOperation::UploadPageAsset.required_scope(),
+            BearerScope::Update,
+        );
+        assert!(service
+            .ensure_operation_scope(&auth, McpOperation::UploadPageAsset)
+            .is_ok());
+        assert_eq!(
+            McpOperation::DeletePageAsset.required_scope(),
+            BearerScope::Delete,
+        );
+        assert!(service
+            .ensure_operation_scope(&auth, McpOperation::DeletePageAsset)
+            .is_ok());
+    }
+
+    ///
+    /// 更新系アセット操作のscope行列を検証する
+    ///
+    /// # 注記
+    /// - uploadはupdate、deleteはdeleteで許可する。
+    /// - legacy writeは両操作を許可する。
+    /// - read、create、appendと不一致の分解scopeは拒否する。
+    ///
+    #[test]
+    fn update_asset_operations_honor_scope_matrix() {
+        let service = McpService::new();
+
+        /*
+         * 許可scopeの検証
+         */
+        for (scope, operation) in [
+            (BearerScope::Update, McpOperation::UploadPageAsset),
+            (BearerScope::Delete, McpOperation::DeletePageAsset),
+            (BearerScope::Write, McpOperation::UploadPageAsset),
+            (BearerScope::Write, McpOperation::DeletePageAsset),
+        ] {
+            let auth = AuthContext::new(
+                AuthUser::new("alice".to_string()),
+                BearerScopeSet::from_iter([scope]),
+                PathPrefixSet::new(),
+                None,
+            );
+
+            service
+                .ensure_operation_scope(&auth, operation)
+                .expect("asset operation scope must be allowed");
+        }
+
+        /*
+         * 不許可scopeの検証
+         */
+        for (scope, operation, required) in [
+            (
+                BearerScope::Read,
+                McpOperation::UploadPageAsset,
+                "required scope denied: update",
+            ),
+            (
+                BearerScope::Create,
+                McpOperation::UploadPageAsset,
+                "required scope denied: update",
+            ),
+            (
+                BearerScope::Append,
+                McpOperation::UploadPageAsset,
+                "required scope denied: update",
+            ),
+            (
+                BearerScope::Delete,
+                McpOperation::UploadPageAsset,
+                "required scope denied: update",
+            ),
+            (
+                BearerScope::Read,
+                McpOperation::DeletePageAsset,
+                "required scope denied: delete",
+            ),
+            (
+                BearerScope::Create,
+                McpOperation::DeletePageAsset,
+                "required scope denied: delete",
+            ),
+            (
+                BearerScope::Append,
+                McpOperation::DeletePageAsset,
+                "required scope denied: delete",
+            ),
+            (
+                BearerScope::Update,
+                McpOperation::DeletePageAsset,
+                "required scope denied: delete",
+            ),
+        ] {
+            let auth = AuthContext::new(
+                AuthUser::new("alice".to_string()),
+                BearerScopeSet::from_iter([scope]),
+                PathPrefixSet::new(),
+                None,
+            );
+            let err = service
+                .ensure_operation_scope(&auth, operation)
+                .expect_err("unmatched scope must be rejected");
+
+            assert_eq!(err.code(), McpErrorCode::Forbidden);
+            assert_eq!(err.message(), required);
+        }
     }
 
     ///
@@ -5379,6 +6786,32 @@ mod tests {
 
         assert_eq!(update_err.code(), McpErrorCode::Forbidden);
         assert_eq!(append_err.code(), McpErrorCode::Forbidden);
+
+        for scope in [
+            BearerScope::Append,
+            BearerScope::Create,
+            BearerScope::Update,
+            BearerScope::Delete,
+        ] {
+            let auth = AuthContext::new(
+                AuthUser::new("alice".to_string()),
+                BearerScopeSet::from_iter([scope]),
+                PathPrefixSet::new(),
+                None,
+            );
+
+            for operation in [
+                McpOperation::ListPageAssets,
+                McpOperation::ResolvePageAsset,
+                McpOperation::GetPageAssetMetadata,
+                McpOperation::GetPageAssetData,
+            ] {
+                let err = service
+                    .ensure_operation_scope(&auth, operation)
+                    .expect_err("decomposed write scope must not allow read");
+                assert_eq!(err.code(), McpErrorCode::Forbidden);
+            }
+        }
     }
 
     ///
@@ -5390,6 +6823,9 @@ mod tests {
     ///
     #[test]
     fn operation_scope_rejects_read_only_user_only_for_write_operations() {
+        /*
+         * read / write の既存判定を確認する
+         */
         let service = McpService::new();
         let auth = AuthContext::new_with_attributes(
             AuthUser::new("alice".to_string()),
@@ -5413,6 +6849,88 @@ mod tests {
             err.message(),
             "read only denied: write operation is not allowed"
         );
+
+        /*
+         * 更新系アセット操作の優先順位を確認する
+         * scope不足よりReadOnlyを先に判定する
+         */
+        let scope_less_auth = AuthContext::new_with_attributes(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::new(),
+            PathPrefixSet::new(),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
+            None,
+        );
+        for operation in [
+            McpOperation::UploadPageAsset,
+            McpOperation::DeletePageAsset,
+        ] {
+            assert!(operation.is_write());
+            let err = service
+                .ensure_operation_scope(&scope_less_auth, operation)
+                .expect_err("read only must be checked before scope");
+
+            assert_eq!(err.code(), McpErrorCode::Forbidden);
+            assert_eq!(
+                err.message(),
+                "read only denied: write operation is not allowed"
+            );
+        }
+    }
+
+    ///
+    /// 更新系アセット操作がReadOnlyユーザを
+    /// 拒否することを検証する
+    ///
+    /// # 注記
+    /// - 操作固有scopeとlegacy writeを持つ
+    ///   認証文脈を使用する。
+    /// - required scopeを満たしていても
+    ///   ReadOnly拒否になることを確認する。
+    ///
+    #[test]
+    fn update_asset_operations_reject_read_only_with_write_scopes() {
+        let service = McpService::new();
+
+        for (scope, operations) in [
+            (
+                BearerScope::Update,
+                vec![McpOperation::UploadPageAsset],
+            ),
+            (
+                BearerScope::Delete,
+                vec![McpOperation::DeletePageAsset],
+            ),
+            (
+                BearerScope::Write,
+                vec![
+                    McpOperation::UploadPageAsset,
+                    McpOperation::DeletePageAsset,
+                ],
+            ),
+        ] {
+            let auth = AuthContext::new_with_attributes(
+                AuthUser::new("alice".to_string()),
+                BearerScopeSet::from_iter([scope]),
+                PathPrefixSet::new(),
+                UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+                None,
+                None,
+            );
+
+            for operation in operations {
+                let err = service
+                    .ensure_operation_scope(&auth, operation)
+                    .expect_err("read only user must be rejected");
+
+                assert_eq!(err.code(), McpErrorCode::Forbidden);
+                assert_eq!(
+                    err.message(),
+                    "read only denied: write operation is not allowed",
+                );
+            }
+        }
     }
 
     ///
@@ -6333,6 +7851,569 @@ mod tests {
         assert!(!path_matches_prefix("/docs2", "/docs"));
     }
 
+    ///
+    /// 更新系アセット操作のpage path prefix境界を検証する
+    ///
+    /// # 注記
+    /// - trailing slashを正規化した許可prefix内pathを受理する。
+    /// - 文字列前方一致だけの範囲外pathを拒否する。
+    /// - ルートprefixでは任意のpage pathを受理する。
+    ///
+    #[test]
+    fn update_asset_operations_enforce_normalized_page_path_prefixes() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let allowed_page_id = manager
+            .create_page(
+                "/allowed/assets",
+                "alice",
+                "# allowed".to_string(),
+            )
+            .expect("create allowed page failed");
+        manager
+            .create_page(
+                "/allowed2/assets",
+                "alice",
+                "# outside".to_string(),
+            )
+            .expect("create outside page failed");
+        let service = McpService::new();
+
+        /*
+         * 正規化後の許可prefix内pathを検証する
+         */
+        for (scope, operation) in [
+            (BearerScope::Update, McpOperation::UploadPageAsset),
+            (BearerScope::Delete, McpOperation::DeletePageAsset),
+        ] {
+            let auth = AuthContext::new(
+                AuthUser::new("alice".to_string()),
+                BearerScopeSet::from_iter([scope]),
+                PathPrefixSet::from_iter(["/allowed"]),
+                None,
+            );
+            let resolved = service
+                .resolve_authorized_page(
+                    &auth,
+                    &manager,
+                    operation,
+                    "/allowed/assets/",
+                )
+                .expect("allowed asset page must resolve");
+
+            assert_eq!(resolved.normalized_path(), "/allowed/assets");
+            assert_eq!(resolved.page_id(), allowed_page_id);
+
+            let err = service
+                .resolve_authorized_page(
+                    &auth,
+                    &manager,
+                    operation,
+                    "/allowed2/assets",
+                )
+                .expect_err("prefix boundary must be enforced");
+            assert_eq!(err.code(), McpErrorCode::Forbidden);
+            assert_eq!(
+                err.message(),
+                "path prefix denied: /allowed2/assets",
+            );
+        }
+
+        /*
+         * ルートprefixによる全page path許可を検証する
+         */
+        let root_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            None,
+        );
+        for operation in [
+            McpOperation::UploadPageAsset,
+            McpOperation::DeletePageAsset,
+        ] {
+            service
+                .resolve_authorized_page(
+                    &root_auth,
+                    &manager,
+                    operation,
+                    "/allowed2/assets",
+                )
+                .expect("root prefix must allow asset page");
+        }
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 更新系アセット操作のprefix判定対象を検証する
+    ///
+    /// # 注記
+    /// - page pathだけが許可prefix内となる入力を使用する。
+    /// - file_name、asset_id、内部保存パスに関係なく
+    ///   uploadとdeleteが成功することを確認する。
+    ///
+    #[test]
+    fn update_asset_operations_apply_prefix_only_to_page_path() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page(
+                "/allowed/assets",
+                "alice",
+                "# allowed".to_string(),
+            )
+            .expect("create allowed page failed");
+        let upload_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/allowed"]),
+            None,
+        );
+        let delete_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Delete]),
+            PathPrefixSet::from_iter(["/allowed"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * page pathだけをprefix判定してuploadする
+         */
+        let upload = service
+            .upload_page_asset(
+                &upload_auth,
+                &manager,
+                "/allowed/assets",
+                "private-name.bin",
+                "application/octet-stream",
+                "cHJpdmF0ZQ==",
+            )
+            .expect("non-path asset fields must not deny upload");
+        let asset_id = AssetId::from_string(upload.asset().asset_id())
+            .expect("parse uploaded asset id failed");
+        let internal_path = manager.asset_file_path(&asset_id);
+
+        assert_eq!(upload.asset().file_name(), "private-name.bin");
+        assert!(!asset_id.to_string().starts_with("/allowed"));
+        assert!(!internal_path.starts_with(Path::new("/allowed")));
+        assert!(internal_path.is_file());
+
+        /*
+         * asset_id解決後もpage pathだけをprefix判定してdeleteする
+         */
+        let deleted = service
+            .delete_page_asset(
+                &delete_auth,
+                &manager,
+                "/allowed/assets",
+                "private-name.bin",
+            )
+            .expect("non-path asset fields must not deny delete");
+
+        assert_eq!(deleted.asset_id(), asset_id.to_string());
+        assert_eq!(deleted.path(), "/allowed/assets");
+        assert_eq!(deleted.file_name(), "private-name.bin");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 更新系アセット操作の認可と
+    /// ページ解決順序を検証する
+    ///
+    /// # 注記
+    /// - 認可失敗をロック、payload、asset解決より
+    ///   先に確認する。
+    /// - page不存在をpayload、asset解決より先に確認する。
+    ///
+    #[test]
+    fn update_asset_authorization_and_page_resolution_run_first() {
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let allowed_page_id = manager
+            .create_page(
+                "/allowed/assets",
+                "alice",
+                "# allowed".to_string(),
+            )
+            .expect("create allowed page failed");
+        let outside_page_id = manager
+            .create_page(
+                "/outside/assets",
+                "alice",
+                "# outside".to_string(),
+            )
+            .expect("create outside page failed");
+        manager
+            .acquire_page_lock(&allowed_page_id, "alice")
+            .expect("lock allowed page failed");
+        manager
+            .acquire_page_lock(&outside_page_id, "alice")
+            .expect("lock outside page failed");
+        let service = McpService::new();
+
+        /*
+         * scope拒否をロック、payload、asset解決より
+         * 先に確認する
+         */
+        let read_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+            None,
+        );
+        let upload_scope_error = service
+            .upload_page_asset(
+                &read_auth,
+                &manager,
+                "/allowed/assets",
+                "missing.bin",
+                "application/octet-stream",
+                "private:not-base64",
+            )
+            .expect_err("scope must be checked before upload work");
+        let delete_scope_error = service
+            .delete_page_asset(
+                &read_auth,
+                &manager,
+                "/allowed/assets",
+                "missing.bin",
+            )
+            .expect_err("scope must be checked before delete work");
+
+        assert_eq!(upload_scope_error.code(), McpErrorCode::Forbidden);
+        assert_eq!(
+            upload_scope_error.message(),
+            "required scope denied: update",
+        );
+        assert_eq!(delete_scope_error.code(), McpErrorCode::Forbidden);
+        assert_eq!(
+            delete_scope_error.message(),
+            "required scope denied: delete",
+        );
+
+        /*
+         * prefix拒否をロック、payload、asset解決より
+         * 先に確認する
+         */
+        let write_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/allowed"]),
+            None,
+        );
+        let upload_prefix_error = service
+            .upload_page_asset(
+                &write_auth,
+                &manager,
+                "/outside/assets",
+                "missing.bin",
+                "application/octet-stream",
+                "private:not-base64",
+            )
+            .expect_err("prefix must be checked before upload work");
+        let delete_prefix_error = service
+            .delete_page_asset(
+                &write_auth,
+                &manager,
+                "/outside/assets",
+                "missing.bin",
+            )
+            .expect_err("prefix must be checked before delete work");
+
+        for err in [upload_prefix_error, delete_prefix_error] {
+            assert_eq!(err.code(), McpErrorCode::Forbidden);
+            assert_eq!(
+                err.message(),
+                "path prefix denied: /outside/assets",
+            );
+        }
+
+        /*
+         * page不存在をpayloadとasset解決より先に確認する
+         */
+        let root_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            None,
+        );
+        let upload_page_error = service
+            .upload_page_asset(
+                &root_auth,
+                &manager,
+                "/missing/assets",
+                "missing.bin",
+                "application/octet-stream",
+                "private:not-base64",
+            )
+            .expect_err("page must resolve before upload payload");
+        let delete_page_error = service
+            .delete_page_asset(
+                &root_auth,
+                &manager,
+                "/missing/assets",
+                "missing.bin",
+            )
+            .expect_err("page must resolve before delete asset");
+
+        for err in [upload_page_error, delete_page_error] {
+            assert_eq!(err.code(), McpErrorCode::NotFound);
+            assert_eq!(err.message(), "page not found: /missing/assets");
+        }
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// ロック中ページの更新系アセット操作を検証する
+    ///
+    /// # 注記
+    /// - lock token入力なしのuploadとdeleteを実行する。
+    /// - conflict後にDBとアセット実体が変化しないことを確認する。
+    ///
+    #[test]
+    fn update_asset_operations_reject_locked_pages_without_mutation() {
+        /*
+         * ロック対象ページと既存アセットを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/assets",
+                "alice",
+                "# assets".to_string(),
+            )
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "existing.bin",
+                "application/octet-stream",
+                "alice",
+                b"existing",
+            )
+            .expect("create asset failed");
+        let asset_dir = base_dir.join("assets");
+        let asset_path = manager.asset_file_path(&asset_id);
+        let file_count = count_test_files(&asset_dir);
+        manager
+            .acquire_page_lock(&page_id, "alice")
+            .expect("acquire page lock failed");
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * ロック中のuploadとdeleteを拒否する
+         */
+        let upload_error = service
+            .upload_page_asset(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "new.bin",
+                "application/octet-stream",
+                "bmV3",
+            )
+            .expect_err("locked page upload must fail");
+        let delete_error = service
+            .delete_page_asset(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "existing.bin",
+            )
+            .expect_err("locked page delete must fail");
+
+        for error in [upload_error, delete_error] {
+            assert_eq!(error.code(), McpErrorCode::Conflict);
+            assert_eq!(error.message(), "page is locked");
+        }
+
+        /*
+         * DBとアセット実体が変化していないことを検証する
+         */
+        let existing_lookup = manager
+            .get_asset_id_by_page_file(&page_id, "existing.bin")
+            .expect("lookup existing asset failed");
+        let existing_info = manager
+            .get_asset_info_by_id(&asset_id)
+            .expect("get existing asset info failed")
+            .expect("existing asset info missing");
+        let stored_data = manager
+            .read_asset_data(&asset_id)
+            .expect("read existing asset failed");
+
+        assert_eq!(existing_lookup, Some(asset_id));
+        assert!(!existing_info.deleted());
+        assert_eq!(stored_data, b"existing");
+        assert!(asset_path.is_file());
+        assert!(manager
+            .get_asset_id_by_page_file(&page_id, "new.bin")
+            .expect("lookup rejected upload failed")
+            .is_none());
+        assert_eq!(count_test_files(&asset_dir), file_count);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 更新系アセット操作の認可失敗後の状態を検証する
+    ///
+    /// # 注記
+    /// - scope不足とpath prefix違反でuploadとdeleteを拒否する。
+    /// - 認可失敗後にDBとアセット実体が変化しないことを確認する。
+    ///
+    #[test]
+    fn update_asset_authorization_failures_preserve_asset_state() {
+        /*
+         * 認可対象ページと既存アセットを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page(
+                "/mcp/assets",
+                "alice",
+                "# assets".to_string(),
+            )
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "existing.bin",
+                "application/octet-stream",
+                "alice",
+                b"existing",
+            )
+            .expect("create asset failed");
+        let asset_dir = base_dir.join("assets");
+        let asset_path = manager.asset_file_path(&asset_id);
+        let file_count = count_test_files(&asset_dir);
+        let service = McpService::new();
+
+        /*
+         * required scope不足による拒否を検証する
+         */
+        let read_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+            None,
+        );
+        let upload_scope_error = service
+            .upload_page_asset(
+                &read_auth,
+                &manager,
+                "/mcp/assets",
+                "scope.bin",
+                "application/octet-stream",
+                "c2NvcGU=",
+            )
+            .expect_err("scope denied upload must fail");
+        let delete_scope_error = service
+            .delete_page_asset(
+                &read_auth,
+                &manager,
+                "/mcp/assets",
+                "existing.bin",
+            )
+            .expect_err("scope denied delete must fail");
+
+        assert_eq!(upload_scope_error.code(), McpErrorCode::Forbidden);
+        assert_eq!(
+            upload_scope_error.message(),
+            "required scope denied: update",
+        );
+        assert_eq!(delete_scope_error.code(), McpErrorCode::Forbidden);
+        assert_eq!(
+            delete_scope_error.message(),
+            "required scope denied: delete",
+        );
+
+        /*
+         * path prefix違反による拒否を検証する
+         */
+        let prefix_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/allowed"]),
+            None,
+        );
+        let upload_prefix_error = service
+            .upload_page_asset(
+                &prefix_auth,
+                &manager,
+                "/mcp/assets",
+                "prefix.bin",
+                "application/octet-stream",
+                "cHJlZml4",
+            )
+            .expect_err("prefix denied upload must fail");
+        let delete_prefix_error = service
+            .delete_page_asset(
+                &prefix_auth,
+                &manager,
+                "/mcp/assets",
+                "existing.bin",
+            )
+            .expect_err("prefix denied delete must fail");
+
+        for error in [upload_prefix_error, delete_prefix_error] {
+            assert_eq!(error.code(), McpErrorCode::Forbidden);
+            assert_eq!(
+                error.message(),
+                "path prefix denied: /mcp/assets",
+            );
+        }
+
+        /*
+         * DBとアセット実体が変化していないことを検証する
+         */
+        let existing_lookup = manager
+            .get_asset_id_by_page_file(&page_id, "existing.bin")
+            .expect("lookup existing asset failed");
+        let existing_info = manager
+            .get_asset_info_by_id(&asset_id)
+            .expect("get existing asset info failed")
+            .expect("existing asset info missing");
+        let stored_data = manager
+            .read_asset_data(&asset_id)
+            .expect("read existing asset failed");
+
+        assert_eq!(existing_lookup, Some(asset_id));
+        assert!(!existing_info.deleted());
+        assert_eq!(stored_data, b"existing");
+        assert!(asset_path.is_file());
+        for file_name in ["scope.bin", "prefix.bin"] {
+            assert!(manager
+                .get_asset_id_by_page_file(&page_id, file_name)
+                .expect("lookup rejected upload failed")
+                .is_none());
+        }
+        assert_eq!(count_test_files(&asset_dir), file_count);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
     #[test]
     fn validate_and_normalize_path_trims_non_root_trailing_slash() {
         let service = McpService::new();
@@ -6511,6 +8592,1625 @@ mod tests {
             .expect_err("draft must fail");
 
         assert_eq!(err.code(), McpErrorCode::Conflict);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn asset_file_name_validation_rejects_path_like_names() {
+        let service = McpService::new();
+
+        for file_name in ["", "dir/file.png", "dir\\file.png"] {
+            let err = service
+                .validate_asset_file_name(file_name)
+                .expect_err("path-like file name must fail");
+            assert_eq!(err.code(), McpErrorCode::InvalidInput);
+            assert_eq!(err.message(), "file_name is invalid");
+        }
+
+        service
+            .validate_asset_file_name("image.png")
+            .expect("plain file name must be accepted");
+    }
+
+    ///
+    /// upload用MIME種別の入力境界を検証する
+    ///
+    /// # 注記
+    /// - 空文字だけを拒否する。
+    /// - 非空のMIME種別は補完や拡張子照合なしで受理する。
+    ///
+    #[test]
+    fn upload_page_asset_mime_type_validation_uses_nonempty_value() {
+        let service = McpService::new();
+
+        /*
+         * 正常なMIME種別の検証
+         */
+        for mime_type in ["image/png", "application/x-custom"] {
+            service
+                .validate_asset_mime_type(mime_type)
+                .expect("nonempty MIME type must be accepted");
+        }
+
+        /*
+         * 空文字拒否と固定エラーの検証
+         */
+        let err = service
+            .validate_asset_mime_type("")
+            .expect_err("empty MIME type must fail");
+
+        assert_eq!(err.code(), McpErrorCode::InvalidInput);
+        assert_eq!(err.message(), "mime_type is invalid");
+    }
+
+    ///
+    /// upload用base64の正常値と形式不正を検証する
+    ///
+    /// # 注記
+    /// - 正常値を元のbytesへ復元する。
+    /// - 空文字とdecode不能な入力を固定エラーで拒否する。
+    /// - decode不能な入力値を公開エラーへ含めない。
+    ///
+    #[test]
+    fn upload_page_asset_data_base64_validation_handles_input_forms() {
+        let service = McpService::new();
+
+        /*
+         * 正常なbase64入力の検証
+         */
+        let data = service
+            .decode_asset_data_base64("aW1hZ2U=")
+            .expect("valid base64 must be decoded");
+
+        assert_eq!(data, b"image");
+
+        /*
+         * 空文字とdecode不能入力の検証
+         */
+        for data_base64 in ["", "private:not-base64"] {
+            let err = service
+                .decode_asset_data_base64(data_base64)
+                .expect_err("invalid base64 must fail");
+            assert_eq!(err.code(), McpErrorCode::InvalidInput);
+            assert_eq!(err.message(), "data_base64 is invalid");
+            if !data_base64.is_empty() {
+                assert!(!err.message().contains(data_base64));
+            }
+        }
+    }
+
+    ///
+    /// upload用base64のdecode前byte長上限を検証する
+    ///
+    /// # 注記
+    /// - 上限長の有効なbase64入力を受理する。
+    /// - 上限を1byte超える入力をdecode前に
+    ///   固定エラーで拒否する。
+    ///
+    #[test]
+    fn upload_page_asset_data_base64_validation_checks_encoded_limit() {
+        let service = McpService::new();
+        let raw_data = vec![0_u8; MAX_MCP_ASSET_DATA_SIZE as usize];
+        let at_limit = base64::engine::general_purpose::STANDARD
+            .encode(&raw_data);
+
+        /*
+         * decode前上限値の検証
+         */
+        assert_eq!(at_limit.len(), MAX_MCP_ASSET_DATA_BASE64_SIZE);
+        let decoded = service
+            .decode_asset_data_base64(&at_limit)
+            .expect("encoded data at limit must be accepted");
+        assert_eq!(decoded.len(), MAX_MCP_ASSET_DATA_SIZE as usize);
+
+        /*
+         * decode前上限超過の検証
+         */
+        let over_limit = "A".repeat(MAX_MCP_ASSET_DATA_BASE64_SIZE + 1);
+        let err = service
+            .decode_asset_data_base64(&over_limit)
+            .expect_err("encoded data over limit must fail");
+
+        assert_eq!(err.code(), McpErrorCode::InvalidInput);
+        assert_eq!(err.message(), "asset data too large");
+        assert!(!err.message().contains(&over_limit.len().to_string()));
+    }
+
+    ///
+    /// upload用base64のdecode後raw bytes上限を検証する
+    ///
+    /// # 注記
+    /// - raw bytesが10MiB以下の入力を受理する。
+    /// - raw bytesが10MiBを1byte超える入力を
+    ///   固定エラーで拒否する。
+    /// - encoded長が同じでもdecode後上限を独立して評価する。
+    ///
+    #[test]
+    fn upload_page_asset_data_base64_validation_checks_decoded_limit() {
+        let service = McpService::new();
+        let at_limit = vec![0_u8; MAX_MCP_ASSET_DATA_SIZE as usize];
+        let over_limit =
+            vec![0_u8; MAX_MCP_ASSET_DATA_SIZE as usize + 1];
+
+        /*
+         * decode後上限値の検証
+         */
+        let encoded_at_limit =
+            base64::engine::general_purpose::STANDARD.encode(&at_limit);
+        let decoded = service
+            .decode_asset_data_base64(&encoded_at_limit)
+            .expect("raw data at limit must be accepted");
+        assert_eq!(decoded, at_limit);
+
+        /*
+         * decode後上限超過の検証
+         */
+        let encoded_over_limit =
+            base64::engine::general_purpose::STANDARD.encode(&over_limit);
+        assert_eq!(
+            encoded_over_limit.len(),
+            MAX_MCP_ASSET_DATA_BASE64_SIZE,
+        );
+        assert_eq!(encoded_over_limit.len(), encoded_at_limit.len());
+        let err = service
+            .decode_asset_data_base64(&encoded_over_limit)
+            .expect_err("raw data over limit must fail");
+
+        assert_eq!(err.code(), McpErrorCode::InvalidInput);
+        assert_eq!(err.message(), "asset data too large");
+        assert!(!err.message().contains(&over_limit.len().to_string()));
+    }
+
+    ///
+    /// upload成功時のDB、ファイル、公開metadataを検証する
+    ///
+    /// # 注記
+    /// - 認証文脈のユーザーで新規アセットをuploadする。
+    /// - DB情報、保存ファイル、
+    ///   公開metadataの一致を確認する。
+    ///
+    #[test]
+    fn upload_page_asset_persists_data_and_public_metadata() {
+        /*
+         * テスト用データベースと認証文脈を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * upload成功応答を検証する
+         */
+        let result = service
+            .upload_page_asset(
+                &auth,
+                &manager,
+                "/mcp/assets/",
+                "image.png",
+                "image/png",
+                "aW1hZ2U=",
+            )
+            .expect("upload page asset failed");
+        let asset_id = AssetId::from_string(result.asset().asset_id())
+            .expect("parse uploaded asset id failed");
+
+        assert_eq!(result.summary(), "asset uploaded");
+        assert_eq!(result.asset().path(), "/mcp/assets");
+        assert_eq!(result.asset().file_name(), "image.png");
+        assert_eq!(result.asset().mime_type(), "image/png");
+        assert_eq!(result.asset().size(), 5);
+        assert_eq!(result.asset().username(), "alice");
+        assert!(result.asset().instance_id().is_some());
+
+        /*
+         * DB情報と保存ファイルを検証する
+         */
+        let lookup_id = manager
+            .get_asset_id_by_page_file(&page_id, "image.png")
+            .expect("lookup uploaded asset failed")
+            .expect("uploaded asset id missing");
+        let asset_info = manager
+            .get_asset_info_by_id(&asset_id)
+            .expect("get uploaded asset info failed")
+            .expect("uploaded asset info missing");
+        let user_id = manager
+            .get_user_id_by_name("alice")
+            .expect("get upload user failed")
+            .expect("upload user missing");
+        let stored_data = manager
+            .read_asset_data(&asset_id)
+            .expect("read uploaded asset failed");
+
+        assert_eq!(lookup_id, asset_id);
+        assert_eq!(asset_info.page_id().as_ref(), Some(&page_id));
+        assert_eq!(asset_info.file_name(), "image.png");
+        assert_eq!(asset_info.mime(), "image/png");
+        assert_eq!(asset_info.size(), 5);
+        assert_eq!(asset_info.user(), user_id);
+        assert!(!asset_info.deleted());
+        assert_eq!(stored_data, b"image");
+        assert!(manager.asset_file_path(&asset_id).is_file());
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// delete成功時の論理削除と公開応答を検証する
+    ///
+    /// # 注記
+    /// - 通常アセットをservice経由で削除する。
+    /// - DB削除フラグ、lookup除外、固定応答を確認する。
+    ///
+    #[test]
+    fn delete_page_asset_logically_deletes_asset() {
+        /*
+         * テスト用データベースと認証文脈を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "alice",
+                b"image",
+            )
+            .expect("create asset failed");
+        let delete_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Delete]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let read_auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * delete成功応答を検証する
+         */
+        let result = service
+            .delete_page_asset(
+                &delete_auth,
+                &manager,
+                "/mcp/assets/",
+                "image.png",
+            )
+            .expect("delete page asset failed");
+
+        assert_eq!(result.asset_id(), asset_id.to_string());
+        assert_eq!(result.path(), "/mcp/assets");
+        assert_eq!(result.file_name(), "image.png");
+        assert_eq!(result.summary(), "asset deleted");
+
+        /*
+         * 論理削除と通常lookup除外を検証する
+         */
+        let asset_info = manager
+            .get_asset_info_by_id(&asset_id)
+            .expect("get deleted asset info failed")
+            .expect("deleted asset info missing");
+        let lookup_id = manager
+            .get_asset_id_by_page_file(&page_id, "image.png")
+            .expect("lookup deleted asset failed");
+        let err = service
+            .resolve_page_asset(
+                &read_auth,
+                &manager,
+                "/mcp/assets",
+                "image.png",
+            )
+            .expect_err("deleted asset must not resolve");
+
+        assert!(asset_info.deleted());
+        assert!(lookup_id.is_none());
+        assert_eq!(err.code(), McpErrorCode::NotFound);
+        assert_eq!(err.message(), "asset not found");
+        assert!(manager.asset_file_path(&asset_id).is_file());
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// upload時の同名アセット状態を検証する
+    ///
+    /// # 注記
+    /// - 同名未削除アセットへのuploadを拒否する。
+    /// - 削除後は新しいAssetIdでuploadできることを確認する。
+    ///
+    #[test]
+    fn upload_page_asset_handles_active_and_deleted_same_name() {
+        /*
+         * テスト用データベースと同名アセットを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let old_asset_id = manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "alice",
+                b"old",
+            )
+            .expect("create old asset failed");
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * 同名未削除アセットとの競合を検証する
+         */
+        let err = service
+            .upload_page_asset(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "image.png",
+                "image/png",
+                "bmV3",
+            )
+            .expect_err("active same-name asset must conflict");
+
+        assert_eq!(err.code(), McpErrorCode::Conflict);
+        assert_eq!(err.message(), "asset already exists");
+
+        /*
+         * 削除済み同名アセットからの再作成を検証する
+         */
+        manager
+            .delete_asset(&old_asset_id)
+            .expect("delete old asset failed");
+        let result = service
+            .upload_page_asset(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "image.png",
+                "image/png",
+                "bmV3",
+            )
+            .expect("recreate same-name asset failed");
+        let new_asset_id = AssetId::from_string(result.asset().asset_id())
+            .expect("parse new asset id failed");
+        let lookup_id = manager
+            .get_asset_id_by_page_file(&page_id, "image.png")
+            .expect("lookup recreated asset failed")
+            .expect("recreated asset id missing");
+        let old_info = manager
+            .get_asset_info_by_id(&old_asset_id)
+            .expect("get old asset info failed")
+            .expect("old asset info missing");
+        let new_data = manager
+            .read_asset_data(&new_asset_id)
+            .expect("read recreated asset failed");
+
+        assert_ne!(new_asset_id, old_asset_id);
+        assert_eq!(lookup_id, new_asset_id);
+        assert!(old_info.deleted());
+        assert_eq!(new_data, b"new");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// delete対象の通常解決不能状態を検証する
+    ///
+    /// # 注記
+    /// - 不存在、削除済み、ゾンビ、
+    ///   所属不一致を準備する。
+    /// - file_name不一致とアセット情報欠損も
+    ///   同様に拒否する。
+    ///
+    #[test]
+    fn delete_page_asset_rejects_unresolvable_states() {
+        /*
+         * テスト用データベースと各アセット状態を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let other_page_id = manager
+            .create_page("/mcp/other", "alice", "# other".to_string())
+            .expect("create other page failed");
+        let deleted_id = manager
+            .create_asset(
+                &page_id,
+                "deleted.png",
+                "image/png",
+                "alice",
+                b"deleted",
+            )
+            .expect("create deleted asset failed");
+        let zombie_id = manager
+            .create_asset(
+                &page_id,
+                "zombie.png",
+                "image/png",
+                "alice",
+                b"zombie",
+            )
+            .expect("create zombie asset failed");
+        let wrong_page_id = manager
+            .create_asset(
+                &page_id,
+                "wrong-page.png",
+                "image/png",
+                "alice",
+                b"wrong-page",
+            )
+            .expect("create wrong page asset failed");
+        let wrong_name_id = manager
+            .create_asset(
+                &page_id,
+                "original.png",
+                "image/png",
+                "alice",
+                b"wrong-name",
+            )
+            .expect("create wrong name asset failed");
+        let missing_info_id = manager
+            .create_asset(
+                &page_id,
+                "missing-info.png",
+                "image/png",
+                "alice",
+                b"missing-info",
+            )
+            .expect("create missing info asset failed");
+        manager
+            .delete_asset(&deleted_id)
+            .expect("delete asset failed");
+        manager
+            .force_update_asset_info_for_test(&zombie_id, |info| {
+                info.clear_page_id()
+            })
+            .expect("make zombie asset failed");
+        manager
+            .force_update_asset_info_for_test(&wrong_page_id, |info| {
+                info.set_page_id(other_page_id.clone())
+            })
+            .expect("make wrong page asset failed");
+        manager
+            .force_update_asset_info_for_test(&wrong_name_id, |info| {
+                info.set_file_name("renamed.png".to_string())
+            })
+            .expect("make wrong name asset failed");
+        manager
+            .force_remove_asset_info_for_test(&missing_info_id)
+            .expect("remove asset info failed");
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Delete]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * 通常解決不能な全状態を拒否することを検証する
+         */
+        for file_name in [
+            "missing.png",
+            "deleted.png",
+            "zombie.png",
+            "wrong-page.png",
+            "original.png",
+            "missing-info.png",
+        ] {
+            let err = service
+                .delete_page_asset(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("unresolvable asset must fail");
+            assert_eq!(err.code(), McpErrorCode::NotFound);
+            assert_eq!(err.message(), "asset not found");
+            assert!(!err.message().contains(file_name));
+        }
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// アセットDB失敗の固定公開エラー写像を検証する
+    ///
+    /// # 注記
+    /// - uploadとdeleteの既知DBエラーを個別に写像する。
+    /// - 未分類DB／FS相当エラーから内部詳細を除去する。
+    ///
+    #[test]
+    fn asset_db_errors_map_to_fixed_public_errors() {
+        /*
+         * upload失敗の固定写像を検証する
+         */
+        let upload_cases = [
+            (
+                map_upload_asset_db_error(Error::new(DbError::PageNotFound)),
+                McpErrorCode::NotFound,
+                "page not found",
+            ),
+            (
+                map_upload_asset_db_error(Error::new(DbError::UserNotFound)),
+                McpErrorCode::InternalError,
+                "user resolution failed",
+            ),
+            (
+                map_upload_asset_db_error(Error::new(
+                    DbError::AssetAlreadyExists,
+                )),
+                McpErrorCode::Conflict,
+                "asset already exists",
+            ),
+            (
+                map_upload_asset_db_error(anyhow::anyhow!(
+                    "private DB/FS detail: /secret/assets/file",
+                )),
+                McpErrorCode::InternalError,
+                "asset create failed",
+            ),
+        ];
+        for (err, code, message) in upload_cases {
+            assert_eq!(err.code(), code);
+            assert_eq!(err.message(), message);
+            assert!(!err.message().contains("/secret"));
+        }
+
+        /*
+         * delete失敗の固定写像を検証する
+         */
+        let delete_cases = [
+            map_delete_asset_db_error(Error::new(DbError::AssetNotFound)),
+            map_delete_asset_db_error(Error::new(DbError::AssetDeleted)),
+        ];
+        for err in delete_cases {
+            assert_eq!(err.code(), McpErrorCode::NotFound);
+            assert_eq!(err.message(), "asset not found");
+        }
+        let internal = map_delete_asset_db_error(anyhow::anyhow!(
+            "private DB/FS detail: /secret/assets/file",
+        ));
+
+        assert_eq!(internal.code(), McpErrorCode::InternalError);
+        assert_eq!(internal.message(), "asset delete failed");
+        assert!(!internal.message().contains("/secret"));
+    }
+
+    ///
+    /// 再現可能なアセット作成失敗時のcleanupを検証する
+    ///
+    /// # 注記
+    /// - page不存在、user不存在、同名競合を発生させる。
+    /// - 失敗試行で保存ファイルが
+    ///   増えないことを確認する。
+    ///
+    #[test]
+    fn create_asset_cleans_files_after_reproducible_failures() {
+        /*
+         * テスト用データベースを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        let asset_dir = base_dir.join("assets");
+        manager
+            .add_user("alice", "pass", None)
+            .expect("add user failed");
+
+        /*
+         * page不存在とuser不存在のcleanupを検証する
+         */
+        let page_err = manager
+            .create_asset(
+                &PageId::new(),
+                "missing-page.png",
+                "image/png",
+                "alice",
+                b"private-page-data",
+            )
+            .expect_err("missing page must fail");
+        assert!(matches!(
+            page_err.downcast_ref::<DbError>(),
+            Some(DbError::PageNotFound),
+        ));
+        assert_eq!(count_test_files(&asset_dir), 0);
+
+        let page_id = manager
+            .create_page("/mcp/assets", "alice", "# page".to_string())
+            .expect("create page failed");
+        let user_err = manager
+            .create_asset(
+                &page_id,
+                "missing-user.png",
+                "image/png",
+                "missing-user",
+                b"private-user-data",
+            )
+            .expect_err("missing user must fail");
+        assert!(matches!(
+            user_err.downcast_ref::<DbError>(),
+            Some(DbError::UserNotFound),
+        ));
+        assert_eq!(count_test_files(&asset_dir), 0);
+
+        /*
+         * 同名競合時に既存ファイルだけが
+         * 残ることを検証する
+         */
+        manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "alice",
+                b"existing",
+            )
+            .expect("create existing asset failed");
+        let file_count = count_test_files(&asset_dir);
+        let conflict_err = manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "alice",
+                b"private-conflict-data",
+            )
+            .expect_err("same-name asset must fail");
+
+        assert!(matches!(
+            conflict_err.downcast_ref::<DbError>(),
+            Some(DbError::AssetAlreadyExists),
+        ));
+        assert_eq!(file_count, 1);
+        assert_eq!(count_test_files(&asset_dir), file_count);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn resolve_page_asset_by_file_builds_public_metadata() {
+        /*
+         * テスト用データベースとアセットを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "user",
+                b"image",
+            )
+            .expect("create asset failed");
+        let service = McpService::new();
+        let resolved = service
+            .resolve_page_by_path(&manager, "/mcp/assets")
+            .expect("resolve page failed");
+
+        /*
+         * DB内部情報を公開用metadataへ変換できることを検証する
+         */
+        let metadata = service
+            .resolve_page_asset_by_file(&manager, &resolved, "image.png")
+            .expect("resolve asset failed");
+
+        assert_eq!(metadata.asset_id(), asset_id.to_string());
+        assert_eq!(metadata.path(), "/mcp/assets");
+        assert_eq!(metadata.file_name(), "image.png");
+        assert_eq!(metadata.mime_type(), "image/png");
+        assert_eq!(metadata.size(), 5);
+        assert_eq!(metadata.username(), "user");
+        assert!(metadata.instance_id().is_some());
+        assert!(!metadata.timestamp().is_empty());
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    #[test]
+    fn resolve_authorized_page_applies_read_scope_and_prefix() {
+        /*
+         * テスト用データベースと認証文脈を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        manager
+            .create_page("/private/assets", "user", "# page".to_string())
+            .expect("create private page failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * 許可prefix内では認可後にページ解決できることを検証する
+         */
+        let resolved = service
+            .resolve_authorized_page(
+                &auth,
+                &manager,
+                McpOperation::ListPageAssets,
+                "/mcp/assets/",
+            )
+            .expect("resolve authorized page failed");
+        assert_eq!(resolved.normalized_path(), "/mcp/assets");
+        assert_eq!(resolved.page_id(), page_id);
+
+        /*
+         * 許可prefix外では page_id 解決前に forbidden になることを検証する
+         */
+        let err = service
+            .resolve_authorized_page(
+                &auth,
+                &manager,
+                McpOperation::ListPageAssets,
+                "/private/assets",
+            )
+            .expect_err("outside prefix must fail");
+        assert_eq!(err.code(), McpErrorCode::Forbidden);
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// list_page_assets が空ページで空一覧を返すことを検証する
+    ///
+    #[test]
+    fn list_page_assets_returns_empty_assets_for_page_without_assets() {
+        /*
+         * テスト用データベースとアセットなしページを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/empty-assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * ページが存在し、通常アセットが0件の場合は空一覧になることを検証する
+         */
+        let result = service
+            .list_page_assets(&auth, &manager, "/mcp/empty-assets")
+            .expect("list empty page assets failed");
+
+        assert_eq!(result.path(), "/mcp/empty-assets");
+        assert!(result.assets().is_empty());
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 参照系アセットserviceメソッドの認可境界を検証する
+    ///
+    /// # 注記
+    /// read scope、legacy write scope、path prefix 境界、
+    /// ReadOnly属性、ページロック非影響を確認する。
+    ///
+    #[test]
+    fn reference_asset_service_methods_honor_read_authorization_boundaries() {
+        /*
+         * テスト用データベース、通常アセット、ロック中ページを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/docs/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let outside_page_id = manager
+            .create_page("/docs2/assets", "user", "# page".to_string())
+            .expect("create outside page failed");
+        let locked_page_id = manager
+            .create_page("/docs/locked-assets", "user", "# page".to_string())
+            .expect("create locked page failed");
+        manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "user",
+                b"image",
+            )
+            .expect("create asset failed");
+        manager
+            .create_asset(
+                &outside_page_id,
+                "outside.png",
+                "image/png",
+                "user",
+                b"outside",
+            )
+            .expect("create outside asset failed");
+        manager
+            .create_asset(
+                &locked_page_id,
+                "locked.png",
+                "image/png",
+                "user",
+                b"locked",
+            )
+            .expect("create locked asset failed");
+        let _lock_info = manager
+            .acquire_page_lock(&locked_page_id, "user")
+            .expect("acquire page lock failed");
+        let read_auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/docs"]),
+            None,
+        );
+        let write_auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/docs"]),
+            None,
+        );
+        let read_only_auth = AuthContext::new_with_attributes(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/docs"]),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+            None,
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * read scope で参照系4メソッドが許可されることを検証する
+         */
+        let list_result = service
+            .list_page_assets(&read_auth, &manager, "/docs/assets")
+            .expect("read scope must list assets");
+        assert_eq!(list_result.assets().len(), 1);
+
+        let resolve_result = service
+            .resolve_page_asset(
+                &read_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .expect("read scope must resolve asset");
+        assert_eq!(resolve_result.asset().file_name(), "image.png");
+
+        let metadata_result = service
+            .get_page_asset_metadata(
+                &read_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .expect("read scope must get asset metadata");
+        assert_eq!(metadata_result.asset().mime_type(), "image/png");
+
+        let data_result = service
+            .get_page_asset_data(
+                &read_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .expect("read scope must get asset data");
+        assert_eq!(data_result.data_base64(), "aW1hZ2U=");
+
+        /*
+         * legacy write scope が参照系4メソッドの read 要求を満たすことを検証する
+         */
+        assert!(service
+            .list_page_assets(&write_auth, &manager, "/docs/assets")
+            .is_ok());
+        assert!(service
+            .resolve_page_asset(
+                &write_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .is_ok());
+        assert!(service
+            .get_page_asset_metadata(
+                &write_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .is_ok());
+        assert!(service
+            .get_page_asset_data(
+                &write_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .is_ok());
+
+        /*
+         * path prefix 制約は境界一致で評価されることを検証する
+         */
+        let outside_err = service
+            .list_page_assets(&read_auth, &manager, "/docs2/assets")
+            .expect_err("/docs prefix must not allow /docs2");
+        assert_eq!(outside_err.code(), McpErrorCode::Forbidden);
+
+        let normalized_result = service
+            .list_page_assets(&read_auth, &manager, "/docs/assets/")
+            .expect("trailing slash path must be normalized inside prefix");
+        assert_eq!(normalized_result.path(), "/docs/assets");
+
+        /*
+         * ReadOnly 属性とページロックは参照系アセットtoolを阻害しないことを検証する
+         */
+        let read_only_result = service
+            .get_page_asset_data(
+                &read_only_auth,
+                &manager,
+                "/docs/assets",
+                "image.png",
+            )
+            .expect("read only user with read scope must get asset data");
+        assert_eq!(read_only_result.data_base64(), "aW1hZ2U=");
+
+        let locked_result = service
+            .get_page_asset_metadata(
+                &read_auth,
+                &manager,
+                "/docs/locked-assets",
+                "locked.png",
+            )
+            .expect("locked page must not block reference asset metadata");
+        assert_eq!(locked_result.asset().file_name(), "locked.png");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 参照系アセットserviceメソッドが不正入力を invalid_input に分類することを検証する
+    ///
+    #[test]
+    fn reference_asset_service_methods_reject_invalid_inputs() {
+        /*
+         * テスト用データベースと認証文脈を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * path 入力不正は invalid_input になることを検証する
+         */
+        let path_err = service
+            .list_page_assets(&auth, &manager, "relative/path")
+            .expect_err("relative path must fail");
+        assert_eq!(path_err.code(), McpErrorCode::InvalidInput);
+
+        /*
+         * file_name 入力不正は各 file_name 指定toolで invalid_input になることを検証する
+         */
+        for file_name in ["", "dir/file.png", "dir\\file.png"] {
+            let resolve_err = service
+                .resolve_page_asset(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("invalid resolve file_name must fail");
+            assert_eq!(resolve_err.code(), McpErrorCode::InvalidInput);
+            assert_eq!(resolve_err.message(), "file_name is invalid");
+
+            let metadata_err = service
+                .get_page_asset_metadata(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("invalid metadata file_name must fail");
+            assert_eq!(metadata_err.code(), McpErrorCode::InvalidInput);
+            assert_eq!(metadata_err.message(), "file_name is invalid");
+
+            let data_err = service
+                .get_page_asset_data(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("invalid data file_name must fail");
+            assert_eq!(data_err.code(), McpErrorCode::InvalidInput);
+            assert_eq!(data_err.message(), "file_name is invalid");
+        }
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 参照系アセットserviceメソッドが未存在・削除済み状態を not_found に集約することを検証する
+    ///
+    #[test]
+    fn reference_asset_service_methods_hide_missing_and_deleted_state() {
+        /*
+         * テスト用データベース、通常ページ、削除済みページ、削除済みアセットを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let deleted_page_id = manager
+            .create_page("/mcp/deleted-page", "user", "# deleted".to_string())
+            .expect("create deleted page failed");
+        let deleted_asset_id = manager
+            .create_asset(
+                &page_id,
+                "deleted.png",
+                "image/png",
+                "user",
+                b"deleted",
+            )
+            .expect("create deleted asset failed");
+        let other_page_id = manager
+            .create_page("/mcp/other-assets", "user", "# other".to_string())
+            .expect("create other page failed");
+        let zombie_asset_id = manager
+            .create_asset(
+                &page_id,
+                "zombie.png",
+                "image/png",
+                "user",
+                b"zombie",
+            )
+            .expect("create zombie asset failed");
+        let wrong_page_asset_id = manager
+            .create_asset(
+                &page_id,
+                "wrong-page.png",
+                "image/png",
+                "user",
+                b"wrong-page",
+            )
+            .expect("create wrong page asset failed");
+        let wrong_name_asset_id = manager
+            .create_asset(
+                &page_id,
+                "original.png",
+                "image/png",
+                "user",
+                b"wrong-name",
+            )
+            .expect("create wrong name asset failed");
+        manager
+            .delete_page_by_id(&deleted_page_id)
+            .expect("delete page failed");
+        manager
+            .delete_asset(&deleted_asset_id)
+            .expect("delete asset failed");
+        manager
+            .force_update_asset_info_for_test(
+                &zombie_asset_id,
+                |asset_info| asset_info.clear_page_id(),
+            )
+            .expect("make zombie asset failed");
+        manager
+            .force_update_asset_info_for_test(
+                &wrong_page_asset_id,
+                |asset_info| asset_info.set_page_id(other_page_id.clone()),
+            )
+            .expect("make wrong page asset failed");
+        manager
+            .force_update_asset_info_for_test(
+                &wrong_name_asset_id,
+                |asset_info| {
+                    asset_info.set_file_name("renamed.png".to_string())
+                },
+            )
+            .expect("make wrong name asset failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * ページ未存在と削除済みページは not_found になることを検証する
+         */
+        for path in ["/mcp/missing-page", "/mcp/deleted-page"] {
+            let err = service
+                .list_page_assets(&auth, &manager, path)
+                .expect_err("missing or deleted page must fail");
+            assert_eq!(err.code(), McpErrorCode::NotFound);
+        }
+
+        /*
+         * asset 未存在と削除済み asset は not_found に集約されることを検証する
+         */
+        for file_name in ["missing.png", "deleted.png"] {
+            let resolve_err = service
+                .resolve_page_asset(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("missing or deleted asset must fail");
+            assert_eq!(resolve_err.code(), McpErrorCode::NotFound);
+            assert_eq!(resolve_err.message(), "asset not found");
+
+            let metadata_err = service
+                .get_page_asset_metadata(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("missing or deleted asset metadata must fail");
+            assert_eq!(metadata_err.code(), McpErrorCode::NotFound);
+            assert_eq!(metadata_err.message(), "asset not found");
+
+            let data_err = service
+                .get_page_asset_data(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("missing or deleted asset data must fail");
+            assert_eq!(data_err.code(), McpErrorCode::NotFound);
+            assert_eq!(data_err.message(), "asset not found");
+        }
+
+        /*
+         * 内部不整合assetは一覧から除外または file_name 指定解決で not_found に集約されることを検証する
+         */
+        let list_result = service
+            .list_page_assets(&auth, &manager, "/mcp/assets")
+            .expect("list page assets failed");
+        let listed_file_names: Vec<&str> = list_result
+            .assets()
+            .iter()
+            .map(|asset| asset.file_name())
+            .collect();
+        assert!(!listed_file_names.contains(&"zombie.png"));
+        assert!(!listed_file_names.contains(&"wrong-page.png"));
+
+        for file_name in ["zombie.png", "wrong-page.png", "original.png"] {
+            let resolve_err = service
+                .resolve_page_asset(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("inconsistent asset must fail");
+            assert_eq!(resolve_err.code(), McpErrorCode::NotFound);
+            assert_eq!(resolve_err.message(), "asset not found");
+
+            let metadata_err = service
+                .get_page_asset_metadata(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("inconsistent asset metadata must fail");
+            assert_eq!(metadata_err.code(), McpErrorCode::NotFound);
+            assert_eq!(metadata_err.message(), "asset not found");
+
+            let data_err = service
+                .get_page_asset_data(
+                    &auth,
+                    &manager,
+                    "/mcp/assets",
+                    file_name,
+                )
+                .expect_err("inconsistent asset data must fail");
+            assert_eq!(data_err.code(), McpErrorCode::NotFound);
+            assert_eq!(data_err.message(), "asset not found");
+        }
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 参照系アセットserviceメソッドの正常系を検証する
+    ///
+    /// # 注記
+    /// - テスト用DBにページとアセットを作成する。
+    /// - 参照系4メソッドがmetadataとbase64データを返すことを確認する。
+    ///
+    #[test]
+    fn asset_service_methods_return_metadata_and_data() {
+        /*
+         * テスト用データベースと認証文脈を準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "image.png",
+                "image/png",
+                "user",
+                b"image",
+            )
+            .expect("create asset failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * list_page_assets が公開metadata一覧を返すことを検証する
+         */
+        let list_result = service
+            .list_page_assets(&auth, &manager, "/mcp/assets/")
+            .expect("list page assets failed");
+        let db_assets = manager
+            .list_page_assets(&page_id)
+            .expect("list db page assets failed");
+        assert_eq!(list_result.path(), "/mcp/assets");
+        assert_eq!(list_result.assets().len(), 1);
+        assert_eq!(db_assets.len(), 1);
+        assert_eq!(list_result.assets()[0].asset_id(), asset_id.to_string());
+
+        /*
+         * file_name指定の参照系メソッドが同じmetadataを返すことを検証する
+         */
+        let resolve_result = service
+            .resolve_page_asset(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "image.png",
+            )
+            .expect("resolve page asset failed");
+        assert_eq!(resolve_result.path(), "/mcp/assets");
+        assert_eq!(resolve_result.asset().file_name(), "image.png");
+
+        let metadata_result = service
+            .get_page_asset_metadata(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "image.png",
+            )
+            .expect("get page asset metadata failed");
+        assert_eq!(metadata_result.path(), "/mcp/assets");
+        assert_eq!(metadata_result.asset().mime_type(), "image/png");
+
+        let data_result = service
+            .get_page_asset_data(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "image.png",
+            )
+            .expect("get page asset data failed");
+        assert_eq!(data_result.path(), "/mcp/assets");
+        assert_eq!(data_result.asset().size(), 5);
+        assert_eq!(data_result.data_base64(), "aW1hZ2U=");
+
+        /*
+         * service結果が既存 DatabaseManager asset API で確認できる状態と一致することを検証する
+         */
+        let lookup_asset_id = manager
+            .get_asset_id_by_page_file(&page_id, "image.png")
+            .expect("lookup asset id failed")
+            .expect("asset id missing");
+        let db_asset_info = manager
+            .get_asset_info_by_id(&lookup_asset_id)
+            .expect("get db asset info failed")
+            .expect("asset info missing");
+        let db_data = manager
+            .read_asset_data(&lookup_asset_id)
+            .expect("read db asset data failed");
+
+        assert_eq!(lookup_asset_id, asset_id);
+        assert_eq!(db_asset_info.page_id().as_ref(), Some(&page_id));
+        assert_eq!(db_asset_info.file_name(), "image.png");
+        assert_eq!(db_asset_info.mime(), "image/png");
+        assert_eq!(db_asset_info.size(), 5);
+        assert!(!db_asset_info.deleted());
+        assert!(!db_asset_info.is_zombie());
+        assert_eq!(db_data, b"image");
+        assert_eq!(
+            metadata_result.asset().asset_id(),
+            lookup_asset_id.to_string(),
+        );
+        assert_eq!(
+            data_result.asset().instance_id(),
+            db_asset_info.instance_id().map(|id| id.to_string()).as_deref(),
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// 参照系アセットデータ取得のサイズ上限を検証する
+    ///
+    /// # 注記
+    /// - 10MiBを1byte超えるテスト用アセットを作成する。
+    /// - get_page_asset_data が本体返却前に conflict を返すことを確認する。
+    ///
+    #[test]
+    fn get_page_asset_data_rejects_oversized_asset() {
+        /*
+         * テスト用データベースと大きなアセットを準備する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let data = vec![0_u8; MAX_MCP_ASSET_DATA_SIZE as usize + 1];
+        manager
+            .create_asset(
+                &page_id,
+                "large.bin",
+                "application/octet-stream",
+                "user",
+                &data,
+            )
+            .expect("create asset failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * 上限超過アセットは conflict になることを検証する
+         */
+        let err = service
+            .get_page_asset_data(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "large.bin",
+            )
+            .expect_err("oversized asset must fail");
+        assert_eq!(err.code(), McpErrorCode::Conflict);
+        assert_eq!(err.message(), "asset data too large");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// get_page_asset_data が読込後のデータサイズ上限を検証することを確認する
+    ///
+    #[test]
+    fn get_page_asset_data_rejects_oversized_data_after_read() {
+        /*
+         * metadata size は小さいまま、保存済みファイルだけを上限超過へ差し替える
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "large-after-read.bin",
+                "application/octet-stream",
+                "user",
+                b"small",
+            )
+            .expect("create asset failed");
+        fs::write(
+            manager.asset_file_path(&asset_id),
+            vec![0_u8; MAX_MCP_ASSET_DATA_SIZE as usize + 1],
+        )
+        .expect("overwrite asset file failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * 読込後に data length が上限超過なら conflict になることを検証する
+         */
+        let err = service
+            .get_page_asset_data(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "large-after-read.bin",
+            )
+            .expect_err("oversized data after read must fail");
+
+        assert_eq!(err.code(), McpErrorCode::Conflict);
+        assert_eq!(err.message(), "asset data too large");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// get_page_asset_data が保存済みデータ読込失敗を固定文言の internal_error にすることを確認する
+    ///
+    #[test]
+    fn get_page_asset_data_maps_missing_file_to_internal_error() {
+        /*
+         * DB metadata は残したまま保存済みアセットファイルだけを削除する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "missing-file.bin",
+                "application/octet-stream",
+                "user",
+                b"data",
+            )
+            .expect("create asset failed");
+        fs::remove_file(manager.asset_file_path(&asset_id))
+            .expect("remove asset file failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * 内部I/O詳細を含めず固定文言の internal_error になることを検証する
+         */
+        let err = service
+            .get_page_asset_data(
+                &auth,
+                &manager,
+                "/mcp/assets",
+                "missing-file.bin",
+            )
+            .expect_err("missing asset file must fail");
+
+        assert_eq!(err.code(), McpErrorCode::InternalError);
+        assert_eq!(err.message(), "asset read failed");
+
+        fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// list_page_assets が DB lookup 失敗を固定文言の internal_error にすることを確認する
+    ///
+    #[test]
+    fn list_page_assets_maps_lookup_failure_to_internal_error() {
+        /*
+         * group参照を残したまま AssetInfo だけを削除する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager
+            .add_user("user", "pass", None)
+            .expect("add user failed");
+        let page_id = manager
+            .create_page("/mcp/assets", "user", "# page".to_string())
+            .expect("create page failed");
+        let asset_id = manager
+            .create_asset(
+                &page_id,
+                "broken.png",
+                "image/png",
+                "user",
+                b"broken",
+            )
+            .expect("create asset failed");
+        manager
+            .force_remove_asset_info_for_test(&asset_id)
+            .expect("remove asset info failed");
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]),
+            None,
+        );
+        let service = McpService::new();
+
+        /*
+         * DB内部詳細を含めず固定文言の internal_error になることを検証する
+         */
+        let err = service
+            .list_page_assets(&auth, &manager, "/mcp/assets")
+            .expect_err("broken asset lookup must fail");
+
+        assert_eq!(err.code(), McpErrorCode::InternalError);
+        assert_eq!(err.message(), "asset lookup failed");
 
         fs::remove_dir_all(base_dir).expect("cleanup failed");
     }

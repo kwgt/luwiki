@@ -254,6 +254,7 @@ fn map_mcp_auth_error_status(kind: McpAuthErrorKind) -> StatusCode {
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener;
+    use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
 
@@ -262,9 +263,13 @@ mod tests {
     use actix_web::{App, HttpServer, web};
     use reqwest::Client;
     use serde_json::{Value, json};
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     use super::{create_endpoint, create_scope};
+    use crate::audit::AuditSink;
+    use crate::audit::buffer::AppendAuditBuffer;
+    use crate::audit::rotation::{AuditRotationPolicy, active_log_path};
+    use crate::audit::writer::{AuditWriter, AuditWriterConfig};
     use crate::cmd_args::FrontendConfig;
     use crate::database::DatabaseManager;
     use crate::database::types::{
@@ -322,6 +327,12 @@ mod tests {
 
         /// サーバ停止用ハンドル
         handle: ServerHandle,
+
+        /// テスト資材を保持する一時ディレクトリ
+        _temp_dir: TempDir,
+
+        /// 監査ログ出力ディレクトリ
+        audit_dir: PathBuf,
     }
 
     impl TestServerContext {
@@ -537,6 +548,46 @@ mod tests {
                 .acquire_page_lock(&page_id, user)
                 .expect("acquire page lock failed");
         }
+
+        ///
+        /// 監査ログをflushしてJSON value一覧を返す
+        ///
+        /// # 戻り値
+        /// 永続化済み監査レコード一覧を返す。
+        ///
+        fn read_audit_values(&self) -> Vec<Value> {
+            self.read_audit_text()
+                .lines()
+                .map(|line| {
+                    serde_json::from_str(line)
+                        .expect("decode audit record failed")
+                })
+                .collect()
+        }
+
+        ///
+        /// 監査ログをflushしてJSONL本文を返す
+        ///
+        /// # 戻り値
+        /// 永続化済み監査ログ本文を返す。
+        ///
+        fn read_audit_text(&self) -> String {
+            let audit_sink = self
+                .state
+                .read()
+                .expect("lock app state failed")
+                .audit_sink()
+                .expect("audit sink missing");
+            audit_sink
+                .write()
+                .expect("lock audit sink failed")
+                .flush()
+                .expect("flush audit sink failed");
+            std::fs::read_to_string(
+                active_log_path(&self.audit_dir),
+            )
+            .expect("read audit log failed")
+        }
     }
 
     ///
@@ -618,12 +669,50 @@ mod tests {
         path_prefixes: PathPrefixSet,
         attributes: UserAttributeSet,
     ) -> TestServerContext {
+        spawn_test_server_with_options(
+            session_config,
+            scopes,
+            path_prefixes,
+            attributes,
+            false,
+        )
+        .await
+    }
+
+    ///
+    /// 監査を有効にしたtransport統合テスト用サーバを起動する
+    ///
+    async fn spawn_test_server_with_audit(
+        scopes: BearerScopeSet,
+        path_prefixes: PathPrefixSet,
+    ) -> TestServerContext {
+        spawn_test_server_with_options(
+            SessionManagerConfig::default(),
+            scopes,
+            path_prefixes,
+            UserAttributeSet::new(),
+            true,
+        )
+        .await
+    }
+
+    ///
+    /// 指定条件でtransport統合テスト用サーバを起動する
+    ///
+    async fn spawn_test_server_with_options(
+        session_config: SessionManagerConfig,
+        scopes: BearerScopeSet,
+        path_prefixes: PathPrefixSet,
+        attributes: UserAttributeSet,
+        enable_audit: bool,
+    ) -> TestServerContext {
         /*
          * テスト用 AppState を構築する
          */
         let dir = tempdir().expect("tempdir failed");
         let db_path = dir.path().join("database.redb");
         let asset_dir = dir.path().join("assets");
+        let audit_dir = dir.path().join("audit");
         let index_dir = dir.path().join("fts");
         std::fs::create_dir_all(&asset_dir).expect("create assets dir failed");
         std::fs::create_dir_all(&index_dir).expect("create fts dir failed");
@@ -650,6 +739,15 @@ mod tests {
                 Some("transport test".to_string()),
             )
             .expect("create bearer token failed");
+        let audit_sink = enable_audit.then(|| {
+            Arc::new(RwLock::new(AuditSink::new(
+                AppendAuditBuffer::new(),
+                AuditWriter::new(AuditWriterConfig {
+                    output_dir: audit_dir.clone(),
+                    rotation_policy: AuditRotationPolicy::new(1024 * 1024),
+                }),
+            )))
+        });
         let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
             manager,
             FrontendConfig::default(),
@@ -658,7 +756,7 @@ mod tests {
             "LUWIKI".to_string(),
             None,
             1024 * 1024,
-            None,
+            audit_sink,
         ))));
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -696,6 +794,8 @@ mod tests {
             bearer_token: format!("Bearer {}", token.expose()),
             bearer_token_id: token_info.token_id(),
             handle,
+            _temp_dir: dir,
+            audit_dir,
         }
     }
 
@@ -728,6 +828,62 @@ mod tests {
         let payload_json: Value = serde_json::from_str(content_text)
             .expect("tool result payload must contain JSON");
         (body_json, payload_json)
+    }
+
+    async fn call_asset_tool(
+        context: &TestServerContext,
+        session_id: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Value {
+        let request_body = build_tool_call_body(name, arguments);
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", session_id)
+            .send()
+            .await
+            .expect("send asset tool call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read asset tool response failed");
+        let (body_json, payload_json) =
+            parse_tool_result_payload(&body_text);
+        assert_eq!(body_json["result"]["isError"], false);
+
+        payload_json
+    }
+
+    async fn assert_asset_tool_call_error(
+        context: &TestServerContext,
+        session_id: &str,
+        name: &str,
+        arguments: Value,
+        expected_code: &str,
+        expected_message: &str,
+    ) -> Value {
+        let request_body = build_tool_call_body(name, arguments);
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", session_id)
+            .send()
+            .await
+            .expect("send asset tool error call failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read asset tool error response failed");
+        let (body_json, payload_json) =
+            parse_tool_result_payload(&body_text);
+        assert_eq!(body_json["result"]["isError"], true);
+        assert_eq!(payload_json["code"], expected_code);
+        assert_eq!(payload_json["message"], expected_message);
+
+        payload_json
     }
 
     async fn assert_edit_tool_call_error(
@@ -1022,6 +1178,772 @@ mod tests {
             schema,
             "true の場合は対象セクション配下のサブセクションを含めて置換する。",
         ));
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/list` 経由で公開される参照系アセット tool の
+    /// schema と説明文を確認する。
+    ///
+    #[actix_web::test]
+    async fn tools_list_exposes_reference_asset_tool_schemas() {
+        let context = spawn_test_server().await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        })
+        .to_string();
+
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send tools/list failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read tools/list response failed");
+        let body_json = parse_sse_payload(&body_text);
+        let tools = body_json["result"]["tools"]
+            .as_array()
+            .expect("tools result missing");
+
+        let list_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "list_page_assets")
+            .expect("list_page_assets tool missing");
+        assert!(json_value_has_required_fields(
+            &list_tool["inputSchema"],
+            &["path"],
+        ));
+        let list_schema_text = serde_json::to_string(&list_tool["inputSchema"])
+            .expect("list_page_assets schema must serialize");
+        assert!(!list_schema_text.contains("asset_id"));
+        assert!(!list_schema_text.contains("file_name"));
+        assert!(!list_schema_text.contains("data_base64"));
+        assert!(json_value_contains(
+            list_tool,
+            "入力 path で指定されたページに紐付く通常アセットのメタ情報一覧を返す。",
+        ));
+
+        for name in [
+            "resolve_page_asset",
+            "get_page_asset_metadata",
+            "get_page_asset_data",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("asset tool missing");
+            assert!(json_value_has_required_fields(
+                &tool["inputSchema"],
+                &["path", "file_name"],
+            ));
+            let schema_text = serde_json::to_string(&tool["inputSchema"])
+                .expect("asset schema must serialize");
+            assert!(!schema_text.contains("asset_id"));
+            assert!(!schema_text.contains("data_base64"));
+            assert!(!schema_text.contains("if-none-match"));
+            assert!(!schema_text.contains("if_modified_since"));
+            assert!(!schema_text.contains("etag"));
+        }
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// `tools/list` 経由で公開される更新系アセット tool の
+    /// schemaを確認する。
+    ///
+    /// # 注記
+    /// 標準handshake後にtools/listを呼び出し、公開名、必須入力、
+    /// 初期版対象外入力が公開されないことを確認する。
+    ///
+    #[actix_web::test]
+    async fn tools_list_exposes_update_asset_tool_schemas() {
+        let context = spawn_test_server().await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+        let request_body = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        })
+        .to_string();
+
+        /*
+         * tools/list応答の取得
+         */
+        let response = context
+            .post_json(&request_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send tools/list failed");
+
+        assert_eq!(response.status(), 200);
+        let body_text = response
+            .text()
+            .await
+            .expect("read tools/list response failed");
+        let body_json = parse_sse_payload(&body_text);
+        let tools = body_json["result"]["tools"]
+            .as_array()
+            .expect("tools result missing");
+
+        /*
+         * upload_page_asset schemaの確認
+         */
+        let upload_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "upload_page_asset")
+            .expect("upload_page_asset tool missing");
+        let upload_schema = &upload_tool["inputSchema"];
+        assert!(json_value_has_required_fields(
+            upload_schema,
+            &["path", "file_name", "mime_type", "data_base64"],
+        ));
+        let upload_properties = upload_schema["properties"]
+            .as_object()
+            .expect("upload_page_asset properties missing");
+        assert_eq!(upload_properties.len(), 4);
+        for field in ["path", "file_name", "mime_type", "data_base64"] {
+            assert!(upload_properties.contains_key(field));
+        }
+
+        /*
+         * delete_page_asset schemaの確認
+         */
+        let delete_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "delete_page_asset")
+            .expect("delete_page_asset tool missing");
+        let delete_schema = &delete_tool["inputSchema"];
+        assert!(json_value_has_required_fields(
+            delete_schema,
+            &["path", "file_name"],
+        ));
+        let delete_properties = delete_schema["properties"]
+            .as_object()
+            .expect("delete_page_asset properties missing");
+        assert_eq!(delete_properties.len(), 2);
+        for field in ["path", "file_name"] {
+            assert!(delete_properties.contains_key(field));
+        }
+
+        /*
+         * 初期版対象外入力が両schemaに存在しないことを確認
+         */
+        for schema in [upload_schema, delete_schema] {
+            let schema_text = serde_json::to_string(schema)
+                .expect("update asset schema must serialize");
+            for field in [
+                "asset_id",
+                "local_path",
+                "local_file_path",
+                "file_path",
+                "lock_token",
+                "overwrite",
+            ] {
+                assert!(!schema_text.contains(field));
+            }
+        }
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// handshake後の更新系アセットtool成功と永続状態を確認する。
+    ///
+    /// # 注記
+    /// 同一sessionでuploadとdeleteを実行し、tool result、DB状態、
+    /// 保存ファイル、監査JSONLを横断確認する。
+    ///
+    #[actix_web::test]
+    async fn update_asset_tools_persist_state_and_audit_after_handshake() {
+        let context = spawn_test_server_with_audit(
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/mcp"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        /*
+         * uploadのtool resultを確認する
+         */
+        let upload_body = build_tool_call_body(
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page/",
+                "file_name": "image.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": "aW1hZ2U=",
+            }),
+        );
+        let upload_response = context
+            .post_json(&upload_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send upload_page_asset failed");
+        assert_eq!(upload_response.status(), 200);
+        let upload_text = upload_response
+            .text()
+            .await
+            .expect("read upload_page_asset response failed");
+        let (upload_result, upload_payload) =
+            parse_tool_result_payload(&upload_text);
+        assert_eq!(upload_result["result"]["isError"], false);
+        assert_eq!(upload_payload["asset"]["path"], "/mcp/page");
+        assert_eq!(upload_payload["asset"]["file_name"], "image.bin");
+        assert_eq!(
+            upload_payload["asset"]["mime_type"],
+            "application/octet-stream",
+        );
+        assert_eq!(upload_payload["asset"]["size"], 5);
+        assert_eq!(upload_payload["summary"], "asset uploaded");
+        let public_asset_id = upload_payload["asset"]["asset_id"]
+            .as_str()
+            .expect("uploaded asset id missing")
+            .to_string();
+
+        /*
+         * upload後のDB状態と保存ファイルを確認する
+         */
+        let asset_id = {
+            let state = context.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path("/mcp/page")
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            let asset_id = state
+                .db()
+                .get_asset_id_by_page_file(&page_id, "image.bin")
+                .expect("lookup uploaded asset failed")
+                .expect("uploaded asset missing");
+            let asset_info = state
+                .db()
+                .get_asset_info_by_id(&asset_id)
+                .expect("get uploaded asset info failed")
+                .expect("uploaded asset info missing");
+            let data = state
+                .db()
+                .read_asset_data(&asset_id)
+                .expect("read uploaded asset failed");
+
+            assert_eq!(asset_id.to_string(), public_asset_id);
+            assert_eq!(asset_info.file_name(), "image.bin");
+            assert_eq!(asset_info.mime(), "application/octet-stream");
+            assert_eq!(asset_info.size(), 5);
+            assert!(!asset_info.deleted());
+            assert_eq!(data, b"image");
+            assert!(state.db().asset_file_path(&asset_id).is_file());
+
+            asset_id
+        };
+
+        /*
+         * deleteのtool resultと論理削除状態を確認する
+         */
+        let delete_body = build_tool_call_body(
+            "delete_page_asset",
+            json!({
+                "path": "/mcp/page/",
+                "file_name": "image.bin",
+            }),
+        );
+        let delete_response = context
+            .post_json(&delete_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send delete_page_asset failed");
+        assert_eq!(delete_response.status(), 200);
+        let delete_text = delete_response
+            .text()
+            .await
+            .expect("read delete_page_asset response failed");
+        let (delete_result, delete_payload) =
+            parse_tool_result_payload(&delete_text);
+        assert_eq!(delete_result["result"]["isError"], false);
+        assert_eq!(delete_payload["asset_id"], public_asset_id);
+        assert_eq!(delete_payload["path"], "/mcp/page");
+        assert_eq!(delete_payload["file_name"], "image.bin");
+        assert_eq!(delete_payload["summary"], "asset deleted");
+
+        {
+            let state = context.state.read().expect("lock app state failed");
+            let page_id = state
+                .db()
+                .get_page_id_by_path("/mcp/page")
+                .expect("resolve page id failed")
+                .expect("page id missing");
+            let asset_info = state
+                .db()
+                .get_asset_info_by_id(&asset_id)
+                .expect("get deleted asset info failed")
+                .expect("deleted asset info missing");
+            let lookup_id = state
+                .db()
+                .get_asset_id_by_page_file(&page_id, "image.bin")
+                .expect("lookup deleted asset failed");
+
+            assert!(asset_info.deleted());
+            assert!(lookup_id.is_none());
+            assert!(state.db().asset_file_path(&asset_id).is_file());
+        }
+
+        /*
+         * HTTP入口から監査JSONLまでの接続を確認する
+         */
+        let expected_user_id = {
+            let state = context.state.read().expect("lock app state failed");
+            state
+                .db()
+                .get_user_id_by_name("alice")
+                .expect("resolve audit user id failed")
+                .expect("audit user id missing")
+                .to_string()
+        };
+        let expected_token_id = context.bearer_token_id.to_string();
+        let records = context.read_audit_values();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["operation"], "upload_page_asset");
+        assert_eq!(records[0]["result"], "success");
+        assert_eq!(records[0]["target_path"], "/mcp/page");
+        assert!(records[0]["revision"].is_null());
+        assert_eq!(records[1]["operation"], "delete_page_asset");
+        assert_eq!(records[1]["result"], "success");
+        assert_eq!(records[1]["target_path"], "/mcp/page");
+        assert!(records[1]["revision"].is_null());
+        for record in records {
+            assert_eq!(record["user_id"], expected_user_id);
+            assert_eq!(record["token_id"], expected_token_id);
+            assert_eq!(record["address"], "127.0.0.1");
+        }
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// 更新系アセットtoolのHTTP認可境界を確認する。
+    ///
+    #[actix_web::test]
+    async fn update_asset_tools_enforce_authorization_over_http() {
+        /*
+         * required scope不足を確認する
+         */
+        let scope_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let scope_session = scope_context.initialize_session().await;
+        scope_context
+            .send_initialized_notification(&scope_session)
+            .await;
+        assert_asset_tool_call_error(
+            &scope_context,
+            &scope_session,
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "scope.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": "c2NvcGU=",
+            }),
+            "forbidden",
+            "required scope denied: update",
+        )
+        .await;
+
+        /*
+         * path prefix違反を確認する
+         */
+        let prefix_context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/private"]),
+        )
+        .await;
+        let prefix_session = prefix_context.initialize_session().await;
+        prefix_context
+            .send_initialized_notification(&prefix_session)
+            .await;
+        assert_asset_tool_call_error(
+            &prefix_context,
+            &prefix_session,
+            "delete_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "missing.bin",
+            }),
+            "forbidden",
+            "path prefix denied: /mcp/page",
+        )
+        .await;
+
+        /*
+         * ReadOnly拒否を確認する
+         */
+        let read_only_context = spawn_test_server_with_auth_and_attributes(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+            UserAttributeSet::from_iter([UserAttribute::ReadOnly]),
+        )
+        .await;
+        let read_only_session =
+            read_only_context.initialize_session().await;
+        read_only_context
+            .send_initialized_notification(&read_only_session)
+            .await;
+        assert_asset_tool_call_error(
+            &read_only_context,
+            &read_only_session,
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "read-only.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": "cmVhZC1vbmx5",
+            }),
+            "forbidden",
+            "read only denied: write operation is not allowed",
+        )
+        .await;
+
+        scope_context.shutdown().await;
+        prefix_context.shutdown().await;
+        read_only_context.shutdown().await;
+    }
+
+    ///
+    /// 不正session ID付きPOSTがtransport段階で拒否されることを
+    /// 確認する。
+    ///
+    #[actix_web::test]
+    async fn post_tool_call_with_invalid_session_returns_401() {
+        let context = spawn_test_server().await;
+        let response = context
+            .post_json(GET_PAGE_TOOL_CALL_BODY)
+            .header("mcp-session-id", "invalid-session-id")
+            .send()
+            .await
+            .expect("send invalid session request failed");
+
+        assert_eq!(response.status(), 401);
+        let body_text = response
+            .text()
+            .await
+            .expect("read invalid session response failed");
+        assert_eq!(body_text, "Unauthorized: Session not found");
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// 更新系アセットtoolの代表失敗をMCP errorへ変換できることを
+    /// 確認する。
+    ///
+    #[actix_web::test]
+    async fn update_asset_tool_failures_map_to_mcp_errors() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        assert_asset_tool_call_error(
+            &context,
+            &session_id,
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "invalid.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": "not-valid-base64",
+            }),
+            "invalid_input",
+            "data_base64 is invalid",
+        )
+        .await;
+        assert_asset_tool_call_error(
+            &context,
+            &session_id,
+            "delete_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "missing.bin",
+            }),
+            "not_found",
+            "asset not found",
+        )
+        .await;
+
+        context.acquire_page_lock("/mcp/page", "alice");
+        assert_asset_tool_call_error(
+            &context,
+            &session_id,
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "locked.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": "bG9ja2Vk",
+            }),
+            "conflict",
+            "page is locked",
+        )
+        .await;
+
+        context.shutdown().await;
+    }
+
+    ///
+    /// read scope拒否と不正base64応答が入力値を秘匿することを確認する。
+    #[actix_web::test]
+    async fn upload_page_asset_failures_redact_data_base64() {
+        const READ_SENTINEL: &str = "secret-read-scope:not-base64";
+        const UPDATE_SENTINEL: &str = "secret-update-scope:not-base64";
+
+        /*
+         * read scopeではdecodeより先に認可が失敗することを確認する
+         */
+        let read_context = spawn_test_server_with_audit(
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let read_session = read_context.initialize_session().await;
+        read_context
+            .send_initialized_notification(&read_session)
+            .await;
+        let read_body = build_tool_call_body(
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "read-secret.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": READ_SENTINEL,
+            }),
+        );
+        let read_response = read_context
+            .post_json(&read_body)
+            .header("mcp-session-id", &read_session)
+            .send()
+            .await
+            .expect("send read scope upload failed");
+        assert_eq!(read_response.status(), 200);
+        let read_text = read_response
+            .text()
+            .await
+            .expect("read scope upload response failed");
+        assert!(!read_text.contains(READ_SENTINEL));
+        let (read_result, read_payload) =
+            parse_tool_result_payload(&read_text);
+        assert_eq!(read_result["result"]["isError"], true);
+        assert_eq!(read_payload["code"], "forbidden");
+        assert_eq!(
+            read_payload["message"],
+            "required scope denied: update",
+        );
+        let read_audit = read_context.read_audit_text();
+        assert!(!read_audit.contains(READ_SENTINEL));
+        let read_record: Value = serde_json::from_str(
+            read_audit.lines().next().expect("read audit record missing"),
+        )
+        .expect("decode read audit record failed");
+        assert_eq!(read_record["operation"], "upload_page_asset");
+        assert_eq!(read_record["result"], "scope_denied");
+
+        /*
+         * update scopeでは入力検証へ到達することを確認する
+         */
+        let update_context = spawn_test_server_with_audit(
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let update_session = update_context.initialize_session().await;
+        update_context
+            .send_initialized_notification(&update_session)
+            .await;
+        let update_body = build_tool_call_body(
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/page",
+                "file_name": "update-secret.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": UPDATE_SENTINEL,
+            }),
+        );
+        let update_response = update_context
+            .post_json(&update_body)
+            .header("mcp-session-id", &update_session)
+            .send()
+            .await
+            .expect("send invalid base64 upload failed");
+        assert_eq!(update_response.status(), 200);
+        let update_text = update_response
+            .text()
+            .await
+            .expect("read invalid base64 response failed");
+        assert!(!update_text.contains(UPDATE_SENTINEL));
+        let (update_result, update_payload) =
+            parse_tool_result_payload(&update_text);
+        assert_eq!(update_result["result"]["isError"], true);
+        assert_eq!(update_payload["code"], "invalid_input");
+        assert_eq!(update_payload["message"], "data_base64 is invalid");
+        let update_audit = update_context.read_audit_text();
+        assert!(!update_audit.contains(UPDATE_SENTINEL));
+        let update_record: Value = serde_json::from_str(
+            update_audit
+                .lines()
+                .next()
+                .expect("update audit record missing"),
+        )
+        .expect("decode update audit record failed");
+        assert_eq!(update_record["operation"], "upload_page_asset");
+        assert_eq!(update_record["result"], "invalid_input");
+
+        read_context.shutdown().await;
+        update_context.shutdown().await;
+    }
+
+    ///
+    /// transport失敗がrequest bodyと認証情報を露出しないことを
+    /// 確認する。
+    ///
+    #[actix_web::test]
+    async fn transport_failures_redact_request_and_authorization() {
+        const REQUEST_SENTINEL: &str = "secret-transport-request-body";
+        const AUTH_SENTINEL: &str = "Bearer secret-authorization-header";
+
+        let context = spawn_test_server_with_audit(
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        /*
+         * 監査ログの比較基準となる正常呼び出しを記録する
+         */
+        let baseline_response = context
+            .post_json(GET_PAGE_TOOL_CALL_BODY)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send baseline get_page failed");
+        assert_eq!(baseline_response.status(), 200);
+        let baseline_text = baseline_response
+            .text()
+            .await
+            .expect("read baseline get_page response failed");
+        assert_eq!(
+            parse_tool_result_payload(&baseline_text).1["path"],
+            "/mcp/page",
+        );
+        assert_eq!(context.read_audit_values().len(), 1);
+
+        /*
+         * session失敗がrequest bodyを応答へ含めないことを確認する
+         */
+        let invalid_session_body = build_tool_call_body(
+            "get_page",
+            json!({
+                "path": "/mcp/page",
+                "request_marker": REQUEST_SENTINEL,
+            }),
+        );
+        let invalid_session_response = context
+            .post_json(&invalid_session_body)
+            .header("mcp-session-id", "invalid-session-id")
+            .send()
+            .await
+            .expect("send request with invalid session failed");
+        assert_eq!(invalid_session_response.status(), 401);
+        let invalid_session_text = invalid_session_response
+            .text()
+            .await
+            .expect("read invalid session response failed");
+        assert!(!invalid_session_text.contains(REQUEST_SENTINEL));
+        assert!(!invalid_session_text.contains(&context.bearer_token));
+
+        /*
+         * 認証失敗がAuthorization値を応答へ含めないことを確認する
+         */
+        let invalid_auth_response = context
+            .client
+            .post(&context.base_url)
+            .header(header::AUTHORIZATION.as_str(), AUTH_SENTINEL)
+            .header(header::CONTENT_TYPE.as_str(), "application/json")
+            .header(header::ACCEPT.as_str(), ACCEPT_BOTH)
+            .body(GET_PAGE_TOOL_CALL_BODY)
+            .send()
+            .await
+            .expect("send request with invalid bearer failed");
+        assert_eq!(invalid_auth_response.status(), 401);
+        let invalid_auth_text = invalid_auth_response
+            .text()
+            .await
+            .expect("read invalid bearer response failed");
+        assert!(!invalid_auth_text.contains(AUTH_SENTINEL));
+        assert!(!invalid_auth_text.contains(REQUEST_SENTINEL));
+
+        /*
+         * JSON-RPC protocol errorがparamsを応答へ含めないことを確認する
+         */
+        let protocol_body = json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "unknown/method",
+            "params": {
+                "request_marker": REQUEST_SENTINEL,
+            },
+        })
+        .to_string();
+        let protocol_response = context
+            .post_json(&protocol_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send unknown method request failed");
+        assert_eq!(protocol_response.status(), 200);
+        let protocol_text = protocol_response
+            .text()
+            .await
+            .expect("read protocol error response failed");
+        assert!(!protocol_text.contains(REQUEST_SENTINEL));
+        assert!(!protocol_text.contains(&context.bearer_token));
+        let protocol_json = parse_sse_payload(&protocol_text);
+        assert!(protocol_json["error"].is_object());
+
+        /*
+         * transport失敗が監査レコードを追加しないことを確認する
+         */
+        let audit_text = context.read_audit_text();
+        assert_eq!(audit_text.lines().count(), 1);
+        assert!(!audit_text.contains(REQUEST_SENTINEL));
+        assert!(!audit_text.contains(AUTH_SENTINEL));
+        assert!(!audit_text.contains(&context.bearer_token));
 
         context.shutdown().await;
     }
@@ -2368,6 +3290,298 @@ mod tests {
     }
 
     ///
+    /// tools、ページtool、参照系・更新系アセットtool、prompts、
+    /// resourcesが同じMCP構成とsessionで共存することを確認する。
+    ///
+    #[actix_web::test]
+    async fn reference_assets_coexist_with_tools_prompts_and_resources() {
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Write]),
+            PathPrefixSet::from_iter(["/"]),
+        )
+        .await;
+        {
+            let state = context
+                .state
+                .read()
+                .expect("lock app state failed");
+            let page_id = state
+                .db()
+                .create_page(
+                    "/mcp/coexist-assets",
+                    "alice",
+                    "# assets".to_string(),
+                )
+                .expect("create asset page failed");
+            state
+                .db()
+                .create_asset(
+                    &page_id,
+                    "coexist.bin",
+                    "application/octet-stream",
+                    "alice",
+                    b"asset-body",
+                )
+                .expect("create asset failed");
+            state
+                .db()
+                .create_page(
+                    "/prompts/asset-coexist",
+                    "alice",
+                    concat!(
+                        "---\n",
+                        "mcp:\n",
+                        "  primitive: prompt\n",
+                        "  name: asset-coexist-prompt\n",
+                        "  description: asset coexist prompt\n",
+                        "---\n",
+                        "prompt body",
+                    )
+                    .to_string(),
+                )
+                .expect("create prompt failed");
+            state
+                .db()
+                .create_page(
+                    "/resources/asset-coexist",
+                    "alice",
+                    concat!(
+                        "---\n",
+                        "mcp:\n",
+                        "  primitive: resource\n",
+                        "  resource_path: /asset/coexist\n",
+                        "  name: asset-coexist-resource\n",
+                        "  description: asset coexist resource\n",
+                        "  mime_type: text/plain\n",
+                        "---\n",
+                        "resource body",
+                    )
+                    .to_string(),
+                )
+                .expect("create resource failed");
+            state
+                .db()
+                .rebuild_resource_candidates()
+                .expect("rebuild resources failed");
+        }
+
+        let (session_id, initialize_json) =
+            context.initialize_with_result().await;
+        assert!(
+            initialize_json["result"]["capabilities"]["tools"]
+                .is_object(),
+        );
+        assert!(
+            initialize_json["result"]["capabilities"]["prompts"]
+                .is_object(),
+        );
+        assert!(
+            initialize_json["result"]["capabilities"]["resources"]
+                .is_object(),
+        );
+        context.send_initialized_notification(&session_id).await;
+
+        /*
+         * tools/listで既存ページtoolと参照系アセットtoolの共存を確認する
+         */
+        let tools_body = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        })
+        .to_string();
+        let tools_response = context
+            .post_json(&tools_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send tools/list failed");
+        assert_eq!(tools_response.status(), 200);
+        let tools_text = tools_response
+            .text()
+            .await
+            .expect("read tools/list response failed");
+        let tools_json = parse_sse_payload(&tools_text);
+        let tool_names = tools_json["result"]["tools"]
+            .as_array()
+            .expect("tools result missing")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name missing"))
+            .collect::<Vec<_>>();
+        for tool_name in [
+            "get_page",
+            "get_page_toc",
+            "list_pages",
+            "search_pages",
+            "get_page_section",
+            "list_page_assets",
+            "resolve_page_asset",
+            "get_page_asset_metadata",
+            "get_page_asset_data",
+            "upload_page_asset",
+            "delete_page_asset",
+        ] {
+            assert!(tool_names.contains(&tool_name));
+        }
+
+        /*
+         * 同じsessionでページtool、アセットtool、prompts、resourcesを順に呼び出す
+         */
+        let get_page_response = context
+            .post_json(GET_PAGE_TOOL_CALL_BODY)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send get_page failed");
+        assert_eq!(get_page_response.status(), 200);
+        let get_page_text = get_page_response
+            .text()
+            .await
+            .expect("read get_page response failed");
+        let (_, get_page_payload) = parse_tool_result_payload(&get_page_text);
+        assert_eq!(get_page_payload["path"], "/mcp/page");
+
+        let asset_payload = call_asset_tool(
+            &context,
+            &session_id,
+            "list_page_assets",
+            json!({
+                "path": "/mcp/coexist-assets",
+            }),
+        )
+        .await;
+        assert_eq!(asset_payload["path"], "/mcp/coexist-assets");
+        assert_eq!(
+            asset_payload["items"][0]["file_name"],
+            "coexist.bin",
+        );
+
+        for tool_name in [
+            "resolve_page_asset",
+            "get_page_asset_metadata",
+            "get_page_asset_data",
+        ] {
+            let payload = call_asset_tool(
+                &context,
+                &session_id,
+                tool_name,
+                json!({
+                    "path": "/mcp/coexist-assets",
+                    "file_name": "coexist.bin",
+                }),
+            )
+            .await;
+            if tool_name == "resolve_page_asset" {
+                assert_eq!(payload["file_name"], "coexist.bin");
+            } else {
+                assert_eq!(payload["asset"]["file_name"], "coexist.bin");
+            }
+            if tool_name == "get_page_asset_data" {
+                assert_eq!(payload["data_base64"], "YXNzZXQtYm9keQ==");
+            }
+        }
+
+        let upload_payload = call_asset_tool(
+            &context,
+            &session_id,
+            "upload_page_asset",
+            json!({
+                "path": "/mcp/coexist-assets",
+                "file_name": "uploaded.bin",
+                "mime_type": "application/octet-stream",
+                "data_base64": "dXBsb2FkZWQ=",
+            }),
+        )
+        .await;
+        assert_eq!(upload_payload["asset"]["file_name"], "uploaded.bin");
+        assert_eq!(upload_payload["summary"], "asset uploaded");
+
+        let delete_payload = call_asset_tool(
+            &context,
+            &session_id,
+            "delete_page_asset",
+            json!({
+                "path": "/mcp/coexist-assets",
+                "file_name": "uploaded.bin",
+            }),
+        )
+        .await;
+        assert_eq!(delete_payload["file_name"], "uploaded.bin");
+        assert_eq!(delete_payload["summary"], "asset deleted");
+
+        let prompts_body = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "prompts/list",
+            "params": {},
+        })
+        .to_string();
+        let prompts_response = context
+            .post_json(&prompts_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send prompts/list failed");
+        assert_eq!(prompts_response.status(), 200);
+        let prompts_text = prompts_response
+            .text()
+            .await
+            .expect("read prompts/list response failed");
+        let prompts_json = parse_sse_payload(&prompts_text);
+        let prompt_names = prompts_json["result"]["prompts"]
+            .as_array()
+            .expect("prompts result missing")
+            .iter()
+            .map(|prompt| prompt["name"].as_str().expect("prompt name missing"))
+            .collect::<Vec<_>>();
+        assert!(prompt_names.contains(&"asset-coexist-prompt"));
+
+        let resources_body = json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "resources/list",
+            "params": {},
+        })
+        .to_string();
+        let resources_response = context
+            .post_json(&resources_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send resources/list failed");
+        assert_eq!(resources_response.status(), 200);
+        let resources_text = resources_response
+            .text()
+            .await
+            .expect("read resources/list response failed");
+        let resources_json = parse_sse_payload(&resources_text);
+        let resource_uris = resources_json["result"]["resources"]
+            .as_array()
+            .expect("resources result missing")
+            .iter()
+            .map(|resource| {
+                resource["uri"]
+                    .as_str()
+                    .expect("resource uri missing")
+            })
+            .collect::<Vec<_>>();
+        assert!(resource_uris.contains(
+            &"luwiki://local.luwiki/asset/coexist",
+        ));
+
+        let delete_response = context
+            .delete_session()
+            .header("mcp-session-id", session_id)
+            .send()
+            .await
+            .expect("send session delete failed");
+        assert_eq!(delete_response.status(), 204);
+        context.shutdown().await;
+    }
+
+    ///
     /// Bearer付き GET で `Accept: text/event-stream` と
     /// `Mcp-Session-Id` を満たせば SSE stream を開けることを確認する。
     ///
@@ -2606,6 +3820,145 @@ mod tests {
             .send()
             .await
             .expect("send session delete request failed");
+        assert_eq!(delete_response.status(), 204);
+        context.shutdown().await;
+    }
+
+    ///
+    /// 参照系アセット4 tool の代表呼び出しが
+    /// Streamable HTTP経由で成功することを確認する。
+    ///
+    #[actix_web::test]
+    async fn reference_asset_tool_calls_return_expected_payloads() {
+        let context = spawn_test_server().await;
+        let asset_id = {
+            let state = context
+                .state
+                .read()
+                .expect("lock app state failed");
+            let page_id = state
+                .db()
+                .create_page(
+                    "/mcp/assets",
+                    "alice",
+                    "# assets\nbody".to_string(),
+                )
+                .expect("create asset page failed");
+            state
+                .db()
+                .create_asset(
+                    &page_id,
+                    "asset.bin",
+                    "application/octet-stream",
+                    "alice",
+                    b"secret-payload",
+                )
+                .expect("create asset failed")
+        };
+        let session_id = context.initialize_session().await;
+        context.send_initialized_notification(&session_id).await;
+
+        /*
+         * list_page_assets の代表応答を確認する
+         */
+        let list_body = build_tool_call_body(
+            "list_page_assets",
+            json!({
+                "path": "/mcp/assets/",
+            }),
+        );
+        let list_response = context
+            .post_json(&list_body)
+            .header("mcp-session-id", &session_id)
+            .send()
+            .await
+            .expect("send list_page_assets failed");
+        assert_eq!(list_response.status(), 200);
+        let list_text = list_response
+            .text()
+            .await
+            .expect("read list_page_assets response failed");
+        let (_, list_payload) = parse_tool_result_payload(&list_text);
+        assert_eq!(list_payload["path"], "/mcp/assets");
+        assert_eq!(list_payload["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            list_payload["items"][0]["asset_id"],
+            asset_id.to_string(),
+        );
+        assert_eq!(list_payload["items"][0]["file_name"], "asset.bin");
+        assert_eq!(
+            list_payload["items"][0]["mime_type"],
+            "application/octet-stream",
+        );
+        assert_eq!(list_payload["items"][0]["size"], 14);
+        assert!(list_payload["items"][0]["timestamp"].is_string());
+        assert_eq!(list_payload["items"][0]["username"], "alice");
+        assert!(list_payload["items"][0]["instance_id"].is_string());
+        assert!(list_payload.get("data_base64").is_none());
+
+        /*
+         * file_name指定3 tool の代表応答を確認する
+         */
+        for (tool_name, expects_data) in [
+            ("resolve_page_asset", false),
+            ("get_page_asset_metadata", false),
+            ("get_page_asset_data", true),
+        ] {
+            let request_body = build_tool_call_body(
+                tool_name,
+                json!({
+                    "path": "/mcp/assets/",
+                    "file_name": "asset.bin",
+                }),
+            );
+            let response = context
+                .post_json(&request_body)
+                .header("mcp-session-id", &session_id)
+                .send()
+                .await
+                .expect("send asset tool call failed");
+            assert_eq!(response.status(), 200);
+            let body_text = response
+                .text()
+                .await
+                .expect("read asset tool call response failed");
+            let (body_json, payload_json) =
+                parse_tool_result_payload(&body_text);
+            assert_eq!(body_json["result"]["isError"], false);
+            if tool_name == "resolve_page_asset" {
+                assert_eq!(payload_json["asset_id"], asset_id.to_string());
+                assert_eq!(payload_json["path"], "/mcp/assets");
+                assert_eq!(payload_json["file_name"], "asset.bin");
+            } else {
+                assert_eq!(
+                    payload_json["asset"]["asset_id"],
+                    asset_id.to_string(),
+                );
+                assert_eq!(payload_json["asset"]["path"], "/mcp/assets");
+                assert_eq!(payload_json["asset"]["file_name"], "asset.bin");
+                assert_eq!(
+                    payload_json["asset"]["mime_type"],
+                    "application/octet-stream",
+                );
+                assert_eq!(payload_json["asset"]["size"], 14);
+                assert_eq!(payload_json["asset"]["username"], "alice");
+            }
+            if expects_data {
+                assert_eq!(
+                    payload_json["data_base64"],
+                    "c2VjcmV0LXBheWxvYWQ=",
+                );
+            } else {
+                assert!(payload_json.get("data_base64").is_none());
+            }
+        }
+
+        let delete_response = context
+            .delete_session()
+            .header("mcp-session-id", session_id)
+            .send()
+            .await
+            .expect("send session delete failed");
         assert_eq!(delete_response.status(), 204);
         context.shutdown().await;
     }

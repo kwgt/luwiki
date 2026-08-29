@@ -2264,6 +2264,7 @@ dependencies = [
  "actix-web-httpauth",
  "anyhow",
  "argon2",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "directories",

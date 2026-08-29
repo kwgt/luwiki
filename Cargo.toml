@@ -1,6 +1,6 @@
 [package]
 name = "luwiki"
-version = "0.9.30"
+version = "0.9.31"
 edition = "2024"
 
 [dependencies]
@@ -9,6 +9,7 @@ actix-multipart = "0.7.2"
 actix-web = { version = "4.6.0", features = ["rustls-0_23"] }
 actix-web-httpauth = "0.8.2"
 argon2 = "0.5.3"
+base64 = "0.22.1"
 clap = { version = "4.5.53", features = ["derive"] }
 directories = "6.0.0"
 futures = "0.3.31"
