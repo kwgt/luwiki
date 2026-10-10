@@ -44,6 +44,9 @@ pub(crate) struct PendingAppendAudit {
 
     /// 不変部分のテンプレートレコード
     pub(crate) record_template: AuditRecord,
+
+    /// 明示停止flushで初回確定したレコード（再buildしない）
+    shutdown_record: Option<AuditRecord>,
 }
 
 ///
@@ -170,6 +173,46 @@ impl AppendAuditBuffer {
     }
 
     ///
+    /// 明示停止用に非破壊でレコードを一度確定する
+    ///
+    /// # 引数
+    /// * `now` - 初回確定時刻
+    ///
+    /// # 戻り値
+    /// 既存groupのkeyと固定snapshot。bufferからは削除しない。
+    ///
+    /// # 概要
+    /// 失敗groupの時刻/件数/outcome/summaryを再flushで変更しない。
+    ///
+    pub(crate) fn shutdown_snapshot(
+        &mut self,
+        now: DateTime<Utc>,
+    ) -> Vec<(AppendAuditKey, AuditRecord)> {
+        /*
+         * 既存group内部へ確定値を保持し独立queueを追加しない
+         */
+        self.pending.iter_mut().map(|(key, pending)| {
+            if pending.shutdown_record.is_none() {
+                pending.shutdown_record = Some(pending.build_record(now));
+            }
+            (key.clone(), pending.shutdown_record.as_ref().unwrap().clone())
+        }).collect()
+    }
+
+    ///
+    /// writerが受理した停止groupだけを退役する
+    ///
+    /// # 引数
+    /// * `key` - write_record成功済みgroupのkey
+    ///
+    /// # 戻り値
+    /// なし。最終writer flush失敗でもgroupを戻さない。
+    ///
+    pub(crate) fn retire_shutdown_group(&mut self, key: &AppendAuditKey) {
+        self.pending.remove(key);
+    }
+
+    ///
     /// 保留状態の有無を返す
     ///
     /// # 戻り値
@@ -229,6 +272,7 @@ impl PendingAppendAudit {
             revision: record.revision,
             summary_seed,
             record_template: record,
+            shutdown_record: None,
         }
     }
 

@@ -547,6 +547,9 @@ fn allows_path(
 
 MCP 設計上、判定対象は必ず path 正規化後の値とし、
 未正規化入力に対して直接 path prefix 判定を行わない。
+入力規則はREQUIREMENTS.md 2.2、共通処理と認可付きsnapshot/write txnの接続は
+REST_API_AUTHORIZATION_DESIGN.mdを正とする。入力末尾/を除去して受け入れる旧挙動や
+dot segment一律拒否は採用しない。
 入力 path の検証と正規化は公開層または共通サービス層の入口で先行して行い、
 path prefix 判定関数は正規化済み path 同士の比較だけに責務を限定する。
 

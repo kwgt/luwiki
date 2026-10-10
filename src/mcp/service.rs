@@ -20,7 +20,9 @@ use chrono::{DateTime, Local};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use serde_json::{Map as JsonObject, Value as JsonValue};
 
-use crate::auth::AuthContext;
+use crate::auth::{
+    AuthContext, PageAccessPolicy, ScopeAuthorizationError, authorize_scope,
+};
 use crate::database::{
     AppendPageRequest,
     AppendPageResult,
@@ -44,7 +46,6 @@ use crate::database::types::{
     PageId,
     PageIndex,
     TokenId,
-    UserAttribute,
     UserId,
 };
 use crate::fts::{self, FtsIndexConfig, FtsSearchTarget};
@@ -60,6 +61,8 @@ use crate::markdown_source::front_matter::{
     validate_resource_path_shape,
 };
 
+use crate::wiki_path::{NormalizedWikiPath, path_matches_prefix};
+
 use super::errors::{McpError, McpErrorCode};
 use super::model::{
     GetPromptServiceResult,
@@ -70,9 +73,6 @@ use super::model::{
     ReadResourceServiceResult,
     ResourceListItem,
 };
-
-/// path で禁止する文字
-const FORBIDDEN_PATH_CHARS: &[char] = &['\\'];
 
 /// `list_pages` の既定件数
 const DEFAULT_LIST_LIMIT: usize = 50;
@@ -2107,24 +2107,11 @@ impl McpService {
         &self,
         raw_path: &str,
     ) -> Result<String, McpError> {
-        /*
-         * 既存 path 検証規則の適用
-         */
-        validate_page_path_for_mcp(raw_path).map_err(|message| {
-            McpError::new(McpErrorCode::InvalidInput, message)
-        })?;
-
-        /*
-         * MCP 固有の正規化と追加検証
-         */
-        if has_dot_path_segment(raw_path) {
-            return Err(McpError::new(
-                McpErrorCode::InvalidInput,
-                "path must not contain '.' or '..' segments",
-            ));
-        }
-
-        Ok(normalize_absolute_path(raw_path))
+        NormalizedWikiPath::parse(raw_path)
+            .map(NormalizedWikiPath::into_string)
+            .map_err(|err| {
+                McpError::new(McpErrorCode::InvalidInput, err.to_string())
+            })
     }
 
     ///
@@ -2143,21 +2130,17 @@ impl McpService {
         operation: McpOperation,
     ) -> Result<(), McpError> {
         let required = operation.required_scope();
-
-        if operation.is_write()
-            && auth.user_attributes().contains(UserAttribute::ReadOnly)
-        {
-            return Err(McpError::forbidden_read_only());
-        }
-
-        if auth.scopes().allows(required) {
-            return Ok(());
-        }
-
-        Err(McpError::new(
-            McpErrorCode::Forbidden,
-            format!("required scope denied: {}", required.as_str()),
-        ))
+        authorize_scope(auth, required).map_err(|err| {
+            if err.downcast_ref::<ScopeAuthorizationError>()
+                == Some(&ScopeAuthorizationError::ReadOnlyDenied)
+            {
+                return McpError::forbidden_read_only();
+            }
+            McpError::new(
+                McpErrorCode::Forbidden,
+                format!("required scope denied: {}", required.as_str()),
+            )
+        })
     }
 
     ///
@@ -2241,6 +2224,9 @@ impl McpService {
     /// # 戻り値
     /// current path を解決できた場合は `ResolvedPage` を返す。
     ///
+    /// # 概要
+    /// 入力を共通解決し、従来のMCP状態制約と保存パスの整合を確認する。
+    ///
     pub(crate) fn resolve_page_by_path(
         &self,
         db: &DatabaseManager,
@@ -2288,8 +2274,8 @@ impl McpService {
         /*
          * current path 状態の整合確認
          */
-        let current_path = match page_index.current_path() {
-            Some(current_path) => current_path,
+        match page_index.current_path() {
+            Some(_) => {}
             None => {
                 return Err(McpError::new(
                     McpErrorCode::NotFound,
@@ -2300,12 +2286,15 @@ impl McpService {
                 ));
             }
         };
-        if current_path != normalized_path {
+        let current_path = page_index.authorization_path().map_err(|err| {
+            McpError::new(McpErrorCode::InternalError, err.to_string())
+        })?;
+        if current_path.as_str() != normalized_path {
             return Err(McpError::new(
                 McpErrorCode::InternalError,
                 format!(
                     "current path mismatch: {} != {}",
-                    current_path,
+                    current_path.as_str(),
                     normalized_path
                 ),
             ));
@@ -3098,36 +3087,17 @@ impl McpService {
         /*
          * 作成処理を実行する
          */
-        db.create_page(
-            &normalized_path,
-            auth.user().user_id(),
-            content.to_string(),
-        )
-        .map_err(map_create_db_error)?;
-
-        let page_id = db
-            .get_page_id_by_path(&normalized_path)
-            .map_err(|err| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    format!("page id lookup failed: {}", err),
-                )
-            })?
-            .ok_or_else(|| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    "created page id not found",
-                )
-            })?;
-        let instance_id =
-            self.lookup_saved_instance_id(db, &page_id, 1, "created")?;
-
-        Ok(WritePageResult::new(
-            normalized_path,
-            1,
-            instance_id,
-            "page created".to_string(),
-        ))
+        let created = db.create_page_authorized(
+            &normalized_path, auth.user_id(), content.to_string(),
+            &PageAccessPolicy::new(auth.path_prefixes()),
+        ).map_err(map_create_db_error)?;
+        let instance_id = created.outcome.instance_id.ok_or_else(|| {
+            McpError::new(McpErrorCode::InternalError,
+                "created page source instance_id is missing")
+        })?;
+        Ok(WritePageResult::new(created.outcome.path,
+            created.outcome.revision.unwrap_or(1), instance_id,
+            "page created".to_string()))
     }
 
     ///
@@ -3162,15 +3132,15 @@ impl McpService {
         /*
          * ロック状態を確認してから保存する
          */
-        let (revision, instance_id) = self.save_updated_page(
-            db,
+        let (saved_path, revision, instance_id) = self.save_updated_page(
+            auth, db,
             &resolved,
             auth.user().user_id(),
-            content.to_string(),
+            content.to_string(), None,
         )?;
 
         Ok(WritePageResult::new(
-            resolved.normalized_path().to_string(),
+            saved_path,
             revision,
             instance_id,
             "page updated".to_string(),
@@ -3204,7 +3174,7 @@ impl McpService {
             request.path(),
         )?;
         let resolved = self.resolve_page_by_path(db, &normalized_path)?;
-        let (latest_revision, _, latest_source) =
+        let (latest_revision, _, _latest_source) =
             self.resolve_revision_source(db, &resolved, None)?;
         if request.revision() != latest_revision {
             return Err(McpError::new(
@@ -3242,17 +3212,19 @@ impl McpService {
         /*
          * 整合確認を通過した後にだけ本文変換と update 系保存へ進める。
          */
-        let updated_source =
-            self.apply_edit_page_operation(&latest_source, request.operation())?;
-        let (revision, instance_id) = self.save_updated_page(
-            db,
+        let updated_source = self.apply_edit_page_operation(
+            &latest_page_source.source(),
+            request.operation(),
+        )?;
+        let (saved_path, revision, instance_id) = self.save_updated_page(
+            auth, db,
             &resolved,
             auth.user().user_id(),
-            updated_source,
+            updated_source, Some((request.revision(), request.instance_id())),
         )?;
 
         Ok(EditPageResult::new(
-            resolved.normalized_path().to_string(),
+            saved_path,
             revision,
             instance_id,
             "page edited".to_string(),
@@ -3300,20 +3272,6 @@ impl McpService {
                 "operation is not allowed for root page",
             ));
         }
-        if resolved.normalized_path() == normalized_rename_to {
-            let instance_id = self.lookup_saved_instance_id(
-                db,
-                &resolved.page_id(),
-                resolved.latest_revision().unwrap_or(0),
-                "renamed",
-            )?;
-            return Ok(WritePageResult::new(
-                normalized_rename_to,
-                resolved.latest_revision().unwrap_or(0),
-                instance_id,
-                "page rename skipped".to_string(),
-            ));
-        }
         if path_matches_prefix(
             &normalized_rename_to,
             resolved.normalized_path(),
@@ -3327,24 +3285,50 @@ impl McpService {
         /*
          * 再帰 rename を実行する
          */
-        let renamed_revision = resolved.latest_revision().unwrap_or(0) + 1;
-        db.rename_pages_recursive_by_id(
-            &resolved.page_id(),
+        let destination = NormalizedWikiPath::from_stored(
             &normalized_rename_to,
         )
-        .map_err(map_rename_db_error)?;
-        let instance_id = self.lookup_saved_instance_id(
-            db,
-            &resolved.page_id(),
-            renamed_revision,
-            "renamed",
-        )?;
-
+        .map_err(|err| {
+            McpError::new(McpErrorCode::InvalidInput, err.to_string())
+        })?;
+        let access = crate::database::MutationAccess {
+            policy: PageAccessPolicy::new(auth.path_prefixes()),
+            lock: crate::database::MutationLock::Unlocked,
+            allow_draft: false, allow_deleted: false, cleanup_draft: false,
+            expected_version: None,
+        };
+        let result = db
+            .move_page_authorized(
+                &resolved.page_id(),
+                crate::database::PageDestination::Final(&destination),
+                false,
+                true,
+                &access,
+                false,
+            )
+            .map_err(map_rename_db_error)?;
+        let revision = result.outcome.revision.ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "renamed page revision missing",
+            )
+        })?;
+        let instance_id = result.outcome.instance_id.ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "renamed page source instance_id is missing",
+            )
+        })?;
+        let summary = if result.value {
+            format!("page renamed from {}", result.outcome.source_path)
+        } else {
+            "page rename skipped".to_string()
+        };
         Ok(WritePageResult::new(
-            normalized_rename_to,
-            renamed_revision,
+            result.outcome.path,
+            revision,
             instance_id,
-            format!("page renamed from {}", resolved.normalized_path()),
+            summary,
         ))
     }
 
@@ -3390,7 +3374,7 @@ impl McpService {
         let started_at = Instant::now();
         loop {
             let state = self
-                .get_append_conflict_state(db, &resolved.page_id())?;
+                .get_append_conflict_state(auth, db, &resolved.page_id())?;
             if state.draft() {
                 return Err(McpError::new(
                     McpErrorCode::Conflict,
@@ -3433,14 +3417,27 @@ impl McpService {
                 allow_amend,
             );
 
-            match db.append_page_by_id(&request) {
+            let access = crate::database::MutationAccess {
+                policy: PageAccessPolicy::new(auth.path_prefixes()),
+                lock: crate::database::MutationLock::Unlocked,
+                allow_draft: false, allow_deleted: false, cleanup_draft: false,
+                expected_version: None,
+            };
+            match db.append_page_authorized(&request, &access) {
                 Ok(result) => {
-                    return Ok(self.build_append_result(
-                        db,
-                        &resolved.page_id(),
-                        resolved.normalized_path(),
-                        result,
-                    )?);
+                    let instance =
+                        result.outcome.instance_id.ok_or_else(|| {
+                            McpError::new(
+                                McpErrorCode::InternalError,
+                                "appended page source instance_id is missing",
+                            )
+                        })?;
+                    let summary = if result.value.amended() {
+                        "page appended (amended)"
+                    } else { "page appended" };
+                    return Ok(AppendServiceResult::new(result.outcome.path,
+                        result.value.revision(), instance, summary.to_string(),
+                        result.value.amended()));
                 }
                 Err(err) => {
                     if self.is_retryable_append_conflict(&err) {
@@ -3696,6 +3693,52 @@ impl McpService {
     }
 
     ///
+    /// 同snapshot/commitのrecordから公開metadataを生成する
+    ///
+    /// # 引数
+    /// * `path` - 認可済み実owner path
+    /// * `record` - metadataと同時点のusername
+    ///
+    /// # 戻り値
+    /// 既存MCP metadata形式。
+    ///
+    fn asset_metadata_from_record(
+        &self, path: &str, record: &crate::database::AssetRecord,
+    ) -> PageAssetMetadata {
+        let info = &record.info;
+        PageAssetMetadata::new(info.id().to_string(), path.to_string(),
+            info.file_name(), info.mime(), info.size(),
+            format_mcp_timestamp(info.timestamp()), record.user_name.clone(),
+            info.instance_id().map(|id| id.to_string()))
+    }
+
+    ///
+    /// 固定期待page/fileを同snapshotで再認可して解決する
+    ///
+    /// # 引数
+    /// * `auth` - 認証文脈
+    /// * `db` - DB
+    /// * `resolved` - read時点の期待ID
+    /// * `file_name` - 既存file名規則の入力
+    /// * `mode` - bytesの必要性/既存上限
+    ///
+    /// # 戻り値
+    /// 現在対象の同snapshot metadata/bytes。
+    ///
+    fn read_mcp_asset_snapshot(
+        &self, auth: &AuthContext, db: &DatabaseManager,
+        resolved: &ResolvedPage, file_name: &str,
+        mode: crate::database::AssetReadMode,
+    ) -> Result<crate::database::AuthorizedAssetRead, McpError> {
+        self.validate_asset_file_name(file_name)?;
+        db.read_asset_authorized(crate::database::AssetSelector::File {
+            page: crate::database::AssetPageSelector::Id(&resolved.page_id()),
+            file_name,
+        }, &PageAccessPolicy::new(auth.path_prefixes()), mode)
+            .map_err(|err| map_asset_snapshot_error(err, "asset lookup failed"))
+    }
+
+    ///
     /// ページとファイル名から通常アセットmetadataを解決する
     ///
     /// # 引数
@@ -3828,39 +3871,15 @@ impl McpService {
             McpOperation::ListPageAssets,
             raw_path,
         )?;
-        let resolved_page_id = resolved.page_id();
-        let asset_infos = db
-            .list_page_assets(&resolved_page_id)
-            .map_err(|_| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    "asset lookup failed",
-                )
-            })?;
-        let mut assets = Vec::new();
-
-        /*
-         * 外部公開対象の通常アセットだけをmetadataへ変換する
-         */
-        for asset_info in asset_infos {
-            if asset_info.deleted()
-                || asset_info.is_zombie()
-                || asset_info.page_id().as_ref() != Some(&resolved_page_id)
-            {
-                continue;
-            }
-
-            assets.push(self.build_page_asset_metadata(
-                db,
-                resolved.normalized_path(),
-                &asset_info,
-            )?);
-        }
-
-        Ok(ListPageAssetsResult::new(
-            resolved.normalized_path().to_string(),
-            assets,
-        ))
+        let (owner, records) = db.list_assets_authorized(
+            crate::database::AssetPageSelector::Id(&resolved.page_id()),
+            &PageAccessPolicy::new(auth.path_prefixes()),
+        ).map_err(|err| map_asset_snapshot_error(err, "asset lookup failed"))?;
+        let path = owner.path();
+        let assets = records.iter().map(|record| {
+            self.asset_metadata_from_record(&path, record)
+        }).collect();
+        Ok(ListPageAssetsResult::new(path, assets))
     }
 
     ///
@@ -3888,16 +3907,11 @@ impl McpService {
             McpOperation::ResolvePageAsset,
             raw_path,
         )?;
-        let asset = self.resolve_page_asset_by_file(
-            db,
-            &resolved,
-            file_name,
-        )?;
-
-        Ok(ResolvePageAssetResult::new(
-            resolved.normalized_path().to_string(),
-            asset,
-        ))
+        let snapshot = self.read_mcp_asset_snapshot(auth, db, &resolved,
+            file_name, crate::database::AssetReadMode::Metadata)?;
+        let path = snapshot.owner.path();
+        let asset = self.asset_metadata_from_record(&path, &snapshot.record);
+        Ok(ResolvePageAssetResult::new(path, asset))
     }
 
     ///
@@ -3925,16 +3939,11 @@ impl McpService {
             McpOperation::GetPageAssetMetadata,
             raw_path,
         )?;
-        let asset = self.resolve_page_asset_by_file(
-            db,
-            &resolved,
-            file_name,
-        )?;
-
-        Ok(GetPageAssetMetadataResult::new(
-            resolved.normalized_path().to_string(),
-            asset,
-        ))
+        let snapshot = self.read_mcp_asset_snapshot(auth, db, &resolved,
+            file_name, crate::database::AssetReadMode::Metadata)?;
+        let path = snapshot.owner.path();
+        let asset = self.asset_metadata_from_record(&path, &snapshot.record);
+        Ok(GetPageAssetMetadataResult::new(path, asset))
     }
 
     ///
@@ -3962,42 +3971,18 @@ impl McpService {
             McpOperation::GetPageAssetData,
             raw_path,
         )?;
-        let asset = self.resolve_page_asset_by_file(
-            db,
-            &resolved,
-            file_name,
-        )?;
-
-        if asset.size() > MAX_MCP_ASSET_DATA_SIZE {
-            return Err(McpError::new(
-                McpErrorCode::Conflict,
-                "asset data too large",
-            ));
-        }
-
-        /*
-         * アセット本体を取得し、取得後のサイズも上限内であることを確認する
-         */
-        let asset_id = AssetId::from_string(asset.asset_id()).map_err(|_| {
-            McpError::new(McpErrorCode::InternalError, "asset lookup failed")
-        })?;
-        let data = db.read_asset_data(&asset_id).map_err(|_| {
+        let snapshot = self.read_mcp_asset_snapshot(auth, db, &resolved,
+            file_name, crate::database::AssetReadMode::Data {
+                max_bytes: Some(MAX_MCP_ASSET_DATA_SIZE),
+            })?;
+        let path = snapshot.owner.path();
+        let asset = self.asset_metadata_from_record(&path, &snapshot.record);
+        let data = snapshot.data.ok_or_else(|| {
             McpError::new(McpErrorCode::InternalError, "asset read failed")
         })?;
-        if data.len() as u64 > MAX_MCP_ASSET_DATA_SIZE {
-            return Err(McpError::new(
-                McpErrorCode::Conflict,
-                "asset data too large",
-            ));
-        }
         let data_base64 =
             base64::engine::general_purpose::STANDARD.encode(&data);
-
-        Ok(GetPageAssetDataResult::new(
-            resolved.normalized_path().to_string(),
-            asset,
-            data_base64,
-        ))
+        Ok(GetPageAssetDataResult::new(path, asset, data_base64))
     }
 
     ///
@@ -4044,9 +4029,6 @@ impl McpService {
                 map_asset_boundary_error(err, "page lookup failed")
             })?;
         let page_id = resolved.page_id();
-        self.ensure_page_not_locked(db, &page_id).map_err(|err| {
-            map_asset_boundary_error(err, "lock lookup failed")
-        })?;
 
         /*
          * 入力値の検証とアセット本体のデコード
@@ -4058,35 +4040,24 @@ impl McpService {
         /*
          * アセットの作成と公開metadataの取得
          */
-        let asset_id = db
-            .create_asset(
-                &page_id,
+        let access = crate::database::MutationAccess {
+            policy: PageAccessPolicy::new(auth.path_prefixes()),
+            lock: crate::database::MutationLock::Unlocked,
+            allow_draft: false, allow_deleted: false, cleanup_draft: false,
+            expected_version: None,
+        };
+        let result = db
+            .create_asset_authorized(
+                crate::database::AssetPageSelector::Id(&page_id),
                 file_name,
                 mime_type,
                 auth.user_id(),
                 &data,
+                &access,
             )
             .map_err(map_upload_asset_db_error)?;
-        let asset_info = db
-            .get_asset_info_by_id(&asset_id)
-            .map_err(|_| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    "asset lookup failed",
-                )
-            })?
-            .ok_or_else(|| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    "asset lookup failed",
-                )
-            })?;
-        let asset = self.build_page_asset_metadata(
-            db,
-            resolved.normalized_path(),
-            &asset_info,
-        )?;
-
+        let asset = self
+            .asset_metadata_from_record(&result.outcome.path, &result.value);
         Ok(UploadPageAssetResult::new(
             asset,
             "asset uploaded".to_string(),
@@ -4129,39 +4100,28 @@ impl McpService {
             .map_err(|err| {
                 map_asset_boundary_error(err, "page lookup failed")
             })?;
-        let page_id = resolved.page_id();
-        self.ensure_page_not_locked(db, &page_id).map_err(|err| {
-            map_asset_boundary_error(err, "lock lookup failed")
-        })?;
-
-        /*
-         * 通常アセットの解決と安全な識別情報の保持
-         */
-        let asset = self.resolve_page_asset_by_file(
-            db,
-            &resolved,
-            file_name,
-        )?;
-        let asset_id = asset.asset_id().to_string();
-        let normalized_path = resolved.normalized_path().to_string();
-        let resolved_file_name = asset.file_name().to_string();
-
-        /*
-         * アセットの論理削除
-         */
-        let db_asset_id = AssetId::from_string(&asset_id).map_err(|_| {
-            McpError::new(
-                McpErrorCode::InternalError,
-                "asset delete failed",
+        self.validate_asset_file_name(file_name)?;
+        let access = crate::database::MutationAccess {
+            policy: PageAccessPolicy::new(auth.path_prefixes()),
+            lock: crate::database::MutationLock::Unlocked,
+            allow_draft: false, allow_deleted: false, cleanup_draft: false,
+            expected_version: None,
+        };
+        let result = db
+            .delete_asset_authorized(
+                crate::database::AssetSelector::File {
+                    page: crate::database::AssetPageSelector::Id(
+                        &resolved.page_id(),
+                    ),
+                    file_name,
+                },
+                &access,
             )
-        })?;
-        db.delete_asset(&db_asset_id)
             .map_err(map_delete_asset_db_error)?;
-
         Ok(DeletePageAssetResult::new(
-            asset_id,
-            normalized_path,
-            resolved_file_name,
+            result.value.info.id().to_string(),
+            result.outcome.path,
+            result.value.info.file_name(),
             "asset deleted".to_string(),
         ))
     }
@@ -4353,13 +4313,7 @@ impl McpService {
         auth: &AuthContext,
         target_path: &str,
     ) -> bool {
-        if auth.path_prefixes().allows_all() {
-            return true;
-        }
-
-        auth.path_prefixes()
-            .iter()
-            .any(|prefix| path_matches_prefix(target_path, prefix))
+        PageAccessPolicy::new(auth.path_prefixes()).allows(target_path)
     }
 
     ///
@@ -4456,6 +4410,7 @@ impl McpService {
     /// # 戻り値
     /// ロックされていない場合は `Ok(())` を返す。
     ///
+    #[cfg_attr(not(test), allow(dead_code))]
     fn ensure_page_not_locked(
         &self,
         db: &DatabaseManager,
@@ -4497,39 +4452,38 @@ impl McpService {
     /// DB の `put_page(..., amend = false)` を使う update 系保存経路を再利用する。
     ///
     fn save_updated_page(
-        &self,
-        db: &DatabaseManager,
-        resolved: &ResolvedPage,
-        user_name: &str,
-        content: String,
-    ) -> Result<(u64, String), McpError> {
-        self.ensure_page_not_locked(db, &resolved.page_id())?;
-        db.put_page(&resolved.page_id(), user_name, content, false)
+        &self, auth: &AuthContext, db: &DatabaseManager,
+        resolved: &ResolvedPage, user_name: &str, content: String,
+        expected_version: Option<(u64, &str)>,
+    ) -> Result<(String, u64, String), McpError> {
+        let access = crate::database::MutationAccess {
+            policy: PageAccessPolicy::new(auth.path_prefixes()),
+            lock: crate::database::MutationLock::Unlocked,
+            allow_draft: false, allow_deleted: false, cleanup_draft: false,
+            expected_version,
+        };
+        let result = db
+            .put_page_authorized(
+                &resolved.page_id(),
+                user_name,
+                content,
+                false,
+                &access,
+            )
             .map_err(map_update_db_error)?;
-
-        let revision = resolved.latest_revision().unwrap_or(0) + 1;
-        let page_source = db
-            .get_page_source(&resolved.page_id(), revision)
-            .map_err(|err| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    format!("saved page source lookup failed: {}", err),
-                )
-            })?
-            .ok_or_else(|| {
-                McpError::new(
-                    McpErrorCode::InternalError,
-                    "saved page source not found",
-                )
-            })?;
-        let instance_id = page_source.instance_id().ok_or_else(|| {
+        let revision = result.outcome.revision.ok_or_else(|| {
+            McpError::new(
+                McpErrorCode::InternalError,
+                "saved page revision missing",
+            )
+        })?;
+        let instance = result.outcome.instance_id.ok_or_else(|| {
             McpError::new(
                 McpErrorCode::InternalError,
                 "saved page source instance_id is missing",
             )
         })?;
-
-        Ok((revision, instance_id.to_string()))
+        Ok((result.outcome.path, revision, instance))
     }
 
     ///
@@ -4574,11 +4528,14 @@ impl McpService {
     ///
     fn get_append_conflict_state(
         &self,
-        db: &DatabaseManager,
+        auth: &AuthContext, db: &DatabaseManager,
         page_id: &PageId,
     ) -> Result<crate::database::AppendConflictState, McpError> {
-        db.get_append_conflict_state_by_id(page_id)
+        db.get_authorized_append_conflict_state(page_id,
+            &PageAccessPolicy::new(auth.path_prefixes()))
             .map_err(|err| {
+                if let Some(mapped) = map_shared_mutation_error(&err,
+                    "append conflict state lookup failed") { return mapped; }
                 McpError::new(
                     McpErrorCode::InternalError,
                     format!("append conflict state lookup failed: {}", err),
@@ -4726,6 +4683,14 @@ impl McpService {
     /// 再試行可能な競合なら `true` を返す。
     ///
     fn is_retryable_append_conflict(&self, err: &Error) -> bool {
+        if err
+            .downcast_ref::<crate::database::MutationOutcome>()
+            .is_some_and(|outcome| {
+                outcome.committed && outcome.post_processing_failure
+            })
+        {
+            return false;
+        }
         err.downcast_ref::<DbError>().is_some_and(|db_err| {
             matches!(db_err, DbError::PageLocked | DbError::RevisionConflict)
         })
@@ -5428,28 +5393,6 @@ impl McpService {
 }
 
 ///
-/// path が prefix 境界一致で許可されるかを返す
-///
-/// # 引数
-/// * `target_path` - 判定対象 path
-/// * `prefix` - 判定に用いる prefix
-///
-/// # 戻り値
-/// `target_path == prefix` または `target_path` が `prefix/` 配下なら
-/// `true` を返す。
-///
-fn path_matches_prefix(target_path: &str, prefix: &str) -> bool {
-    if prefix == "/" {
-        return true;
-    }
-
-    target_path == prefix
-        || target_path
-            .strip_prefix(prefix)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-///
 /// resources/list 用 cursor の妥当性検証を行う
 ///
 /// # 引数
@@ -5615,43 +5558,7 @@ fn resource_path_from_current_path(
     Ok(resource_path)
 }
 
-///
-/// MCP 用のページ path 妥当性検証を行う
-///
-/// # 引数
-/// * `path` - 検証対象 path
-///
-/// # 戻り値
-/// 検証に成功した場合は `Ok(())` を返す。
-///
-fn validate_page_path_for_mcp(path: &str) -> Result<(), &'static str> {
-    if !path.starts_with('/') {
-        return Err("path must be absolute");
-    }
 
-    if path.chars().any(|ch| FORBIDDEN_PATH_CHARS.contains(&ch)) {
-        return Err("path contains invalid character");
-    }
-
-    Ok(())
-}
-
-///
-/// 絶対 path を MCP 内部表現へ正規化する
-///
-/// # 引数
-/// * `raw_path` - 正規化前の path
-///
-/// # 戻り値
-/// root 以外の末尾 `/` を除去した path を返す。
-///
-fn normalize_absolute_path(raw_path: &str) -> String {
-    if raw_path == "/" {
-        return "/".to_string();
-    }
-
-    raw_path.trim_end_matches('/').to_string()
-}
 
 ///
 /// resource ACL がoperationを許可するかを判定する
@@ -5724,19 +5631,6 @@ fn resource_acl_principal_matches(
 
     auth.token_name()
         .is_some_and(|token_name| token_name == principal)
-}
-
-///
-/// `.` / `..` セグメントを含むかを返す
-///
-/// # 引数
-/// * `path` - 判定対象 path
-///
-/// # 戻り値
-/// `.` または `..` を含む場合は `true` を返す。
-///
-fn has_dot_path_segment(path: &str) -> bool {
-    path.split('/').any(|segment| segment == "." || segment == "..")
 }
 
 ///
@@ -5974,6 +5868,53 @@ fn map_search_error(err: Error) -> McpError {
 }
 
 ///
+/// 同snapshot assetエラーを既存MCP固定形式へ変換する
+///
+/// # 引数
+/// * `err` - DB/FS境界エラー
+/// * `internal` - 既存操作固有内部失敗文言
+///
+/// # 概要
+/// 共有commit/認可条件とasset固有の固定公開エラーを照合する。
+///
+/// # 戻り値
+/// 情報秘匿を維持したMCPエラー。
+///
+fn map_asset_snapshot_error(err: Error, internal: &str) -> McpError {
+    /*
+     * 共有境界と操作固有条件を既存MCP形式へ写像する
+     */
+    if let Some(mapped) = map_shared_mutation_error(&err, internal) {
+        return mapped;
+    }
+    if err
+        .downcast_ref::<crate::database::AssetBodyReadFailure>()
+        .is_some()
+    {
+        return McpError::new(McpErrorCode::InternalError, "asset read failed");
+    }
+    if err.downcast_ref::<crate::database::AssetDataTooLarge>().is_some() {
+        return McpError::new(McpErrorCode::Conflict, "asset data too large");
+    }
+    if err
+        .downcast_ref::<crate::database::AssetLookupMismatch>()
+        .is_some()
+        || err
+            .downcast_ref::<crate::database::AssetLookupMetadataMissing>()
+            .is_some()
+    {
+        return McpError::new(McpErrorCode::NotFound, "asset not found");
+    }
+    match err.downcast_ref::<DbError>() {
+        Some(DbError::PageNotFound | DbError::PageDeleted) => McpError::new(
+            McpErrorCode::NotFound, "page not found"),
+        Some(DbError::AssetNotFound | DbError::AssetDeleted) => McpError::new(
+            McpErrorCode::NotFound, "asset not found"),
+        _ => McpError::new(McpErrorCode::InternalError, internal),
+    }
+}
+
+///
 /// DBのアセット作成失敗をMCPエラーへ写像する
 ///
 /// # 引数
@@ -5983,6 +5924,10 @@ fn map_search_error(err: Error) -> McpError {
 /// 公開可能な固定MCPエラーへ写像した結果を返す。
 ///
 fn map_upload_asset_db_error(err: Error) -> McpError {
+    if let Some(mapped) = map_shared_mutation_error(&err, "asset create failed")
+    {
+        return mapped;
+    }
     match err.downcast_ref::<DbError>() {
         Some(DbError::PageNotFound) => {
             McpError::new(McpErrorCode::NotFound, "page not found")
@@ -6035,6 +5980,19 @@ fn map_asset_boundary_error(
 /// 公開可能な固定MCPエラーへ写像した結果を返す。
 ///
 fn map_delete_asset_db_error(err: Error) -> McpError {
+    if err
+        .downcast_ref::<crate::database::AssetLookupMismatch>()
+        .is_some()
+        || err
+            .downcast_ref::<crate::database::AssetLookupMetadataMissing>()
+            .is_some()
+    {
+        return McpError::new(McpErrorCode::NotFound, "asset not found");
+    }
+    if let Some(mapped) = map_shared_mutation_error(&err, "asset delete failed")
+    {
+        return mapped;
+    }
     match err.downcast_ref::<DbError>() {
         Some(DbError::AssetNotFound | DbError::AssetDeleted) => {
             McpError::new(McpErrorCode::NotFound, "asset not found")
@@ -6043,6 +6001,63 @@ fn map_delete_asset_db_error(err: Error) -> McpError {
             McpErrorCode::InternalError,
             "asset delete failed",
         ),
+    }
+}
+
+///
+/// 共有認可/状態/明示整合性エラーを既存MCP境界へ変換する
+///
+/// # 引数
+/// * `err` - DBエラー
+/// * `internal` - 操作固有の内部失敗文言
+///
+/// # 概要
+/// commit後失敗を先に扱い、認可と既存状態の拒否を分類する。
+///
+/// # 戻り値
+/// 既知の境界エラー、またはNone。
+///
+fn map_shared_mutation_error(err: &Error, internal: &str) -> Option<McpError> {
+    /*
+     * 共有境界と操作固有条件を既存MCP形式へ写像する
+     */
+    if err
+        .downcast_ref::<crate::database::MutationOutcome>()
+        .is_some_and(|outcome| {
+            outcome.committed && outcome.post_processing_failure
+        })
+    {
+        return Some(McpError::new(McpErrorCode::InternalError, internal));
+    }
+    if err
+        .downcast_ref::<crate::database::PathPrefixDenied>()
+        .is_some()
+    {
+        return Some(McpError::new(
+            McpErrorCode::Forbidden,
+            "path prefix is not allowed",
+        ));
+    }
+    if let Some(version) =
+        err.downcast_ref::<crate::database::MutationVersionError>()
+    {
+        return Some(match version {
+            crate::database::MutationVersionError::Revision => McpError::new(
+                McpErrorCode::NotLatestRevision, "revision is not latest"),
+            crate::database::MutationVersionError::Instance => McpError::new(
+                McpErrorCode::InstanceIdNotMatch,
+                "instance_id does not match latest content",
+            ),
+        });
+    }
+    match err.downcast_ref::<DbError>() {
+        Some(DbError::PageDeleted) => Some(McpError::new(
+            McpErrorCode::NotFound, "page not found")),
+        Some(DbError::DraftPage) => Some(McpError::new(
+            McpErrorCode::Conflict, "draft page is not supported")),
+        Some(DbError::PageLocked) => Some(McpError::new(
+            McpErrorCode::Conflict, "page is locked")),
+        _ => None,
     }
 }
 
@@ -6056,6 +6071,10 @@ fn map_delete_asset_db_error(err: Error) -> McpError {
 /// MCP エラーへ写像した結果を返す。
 ///
 fn map_create_db_error(err: Error) -> McpError {
+    if let Some(mapped) = map_shared_mutation_error(&err, "page create failed")
+    {
+        return mapped;
+    }
     if err
         .downcast_ref::<crate::database::DbError>()
         .is_some_and(|db_err| {
@@ -6095,6 +6114,10 @@ fn map_create_db_error(err: Error) -> McpError {
 /// MCP エラーへ写像した結果を返す。
 ///
 fn map_update_db_error(err: Error) -> McpError {
+    if let Some(mapped) = map_shared_mutation_error(&err, "page update failed")
+    {
+        return mapped;
+    }
     if err
         .downcast_ref::<crate::database::DbError>()
         .is_some_and(|db_err| {
@@ -6142,6 +6165,10 @@ fn map_update_db_error(err: Error) -> McpError {
 /// MCP エラーへ写像した結果を返す。
 ///
 fn map_rename_db_error(err: Error) -> McpError {
+    if let Some(mapped) = map_shared_mutation_error(&err, "page rename failed")
+    {
+        return mapped;
+    }
     if err
         .downcast_ref::<crate::database::DbError>()
         .is_some_and(|db_err| {
@@ -6211,6 +6238,10 @@ fn map_rename_db_error(err: Error) -> McpError {
 /// MCP エラーへ写像した結果を返す。
 ///
 fn map_append_db_error(err: Error) -> McpError {
+    if let Some(mapped) = map_shared_mutation_error(&err, "page append failed")
+    {
+        return mapped;
+    }
     if err.downcast_ref::<DbError>().is_some_and(|db_err| {
         matches!(db_err, DbError::PageNotFound)
     }) {
@@ -7287,7 +7318,7 @@ mod tests {
         );
         let service = McpService::new();
         let request = EditPageRequest::new(
-            "/mcp/edit-flow/".to_string(),
+            "/mcp/./edit-flow".to_string(),
             1,
             latest_source
                 .instance_id()
@@ -7899,7 +7930,7 @@ mod tests {
                     &auth,
                     &manager,
                     operation,
-                    "/allowed/assets/",
+                    "/allowed/./assets",
                 )
                 .expect("allowed asset page must resolve");
 
@@ -8414,33 +8445,47 @@ mod tests {
         fs::remove_dir_all(base_dir).expect("cleanup failed");
     }
 
+    ///
+    /// MCP入力で末尾拒否とroot維持を検証する
+    ///
+    /// # 注記
+    /// 末尾/はInvalidInput、rootは有効な同値として比較する。
+    ///
+    /// # 概要
+    /// 操作ごとの許可条件と拒否条件を比較して確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
     #[test]
-    fn validate_and_normalize_path_trims_non_root_trailing_slash() {
+    fn validate_and_normalize_path_rejects_trailing_slash() {
         let service = McpService::new();
-
-        assert_eq!(
-            service
-                .validate_and_normalize_path("/docs/topic/")
-                .expect("normalize failed"),
-            "/docs/topic",
-        );
-        assert_eq!(
-            service
-                .validate_and_normalize_path("/")
-                .expect("root normalize failed"),
-            "/",
-        );
+        let error = service.validate_and_normalize_path("/docs/topic/")
+            .expect_err("trailing slash must fail");
+        assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        assert_eq!(service.validate_and_normalize_path("/").unwrap(), "/");
     }
 
+    ///
+    /// MCP入力でdot解決とroot越え拒否を検証する
+    ///
+    /// # 注記
+    /// 解決後パスを比較し、rootを越える入力だけを拒否する。
+    ///
+    /// # 概要
+    /// 操作ごとの許可条件と拒否条件を比較して確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
     #[test]
-    fn validate_and_normalize_path_rejects_dot_segments() {
+    fn validate_and_normalize_path_resolves_dot_segments() {
         let service = McpService::new();
-
-        let err = service
-            .validate_and_normalize_path("/docs/../private")
-            .expect_err("dot segment must fail");
-
-        assert_eq!(err.code(), McpErrorCode::InvalidInput);
+        assert_eq!(service.validate_and_normalize_path("/docs/../private")
+            .unwrap(), "/private");
+        let error = service.validate_and_normalize_path("/../private")
+            .expect_err("root escape must fail");
+        assert_eq!(error.code(), McpErrorCode::InvalidInput);
     }
 
     #[test]
@@ -8460,8 +8505,23 @@ mod tests {
         assert_eq!(err.code(), McpErrorCode::Forbidden);
     }
 
+    ///
+    /// 許可候補だけを返し保存された非正規表記を許可しない
+    ///
+    /// # 概要
+    /// prefix内でもdotや連続区切りの保存値は変換せず除外する。
+    ///
+    /// # 注記
+    /// 正常候補と範囲外/非正規候補を混ぜ、返却したpathを比較する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
     #[test]
     fn filter_authorized_paths_keeps_only_allowed_paths() {
+        /*
+         * 同じprefixでも保存状態に問題がある候補を区別する
+         */
         let service = McpService::new();
         let auth = AuthContext::new(
             AuthUser::new("alice".to_string()),
@@ -8472,7 +8532,8 @@ mod tests {
 
         let filtered = service.filter_authorized_paths(
             &auth,
-            vec!["/docs", "/docs/a", "/private", "/docs2"],
+            vec!["/docs", "/docs/a", "/private", "/docs2",
+                "/docs/../private", "/docs//a"],
         );
 
         assert_eq!(filtered, vec!["/docs", "/docs/a"]);
@@ -8520,8 +8581,20 @@ mod tests {
         assert_eq!(filtered, vec!["/docs", "/docs/a"]);
     }
 
+    ///
+    /// MCP prefixのdot解決と要求prefix認可を検証する
+    ///
+    /// # 注記
+    /// 入力prefixを解決し、既存のfilter modeを維持する。
+    ///
+    /// # 概要
+    /// 操作ごとの許可条件と拒否条件を比較して確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
     #[test]
-    fn resolve_prefix_request_normalizes_trailing_slash() {
+    fn resolve_prefix_request_resolves_dot_segments() {
         let service = McpService::new();
         let auth = AuthContext::new(
             AuthUser::new("alice".to_string()),
@@ -8531,7 +8604,7 @@ mod tests {
         );
 
         let resolved = service
-            .resolve_list_prefix_request(&auth, Some("/docs/"))
+            .resolve_list_prefix_request(&auth, Some("/docs/."))
             .expect("prefix normalize failed");
 
         assert_eq!(resolved.requested_prefix(), Some("/docs"));
@@ -8559,7 +8632,7 @@ mod tests {
          * current path 解決結果を検証する
          */
         let resolved = service
-            .resolve_page_by_path(&manager, "/mcp/page/")
+            .resolve_page_by_path(&manager, "/mcp/./page")
             .expect("resolve page failed");
 
         assert_eq!(resolved.normalized_path(), "/mcp/page");
@@ -8797,7 +8870,7 @@ mod tests {
             .upload_page_asset(
                 &auth,
                 &manager,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "image.png",
                 "image/png",
                 "aW1hZ2U=",
@@ -8895,7 +8968,7 @@ mod tests {
             .delete_page_asset(
                 &delete_auth,
                 &manager,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "image.png",
             )
             .expect("delete page asset failed");
@@ -9378,7 +9451,7 @@ mod tests {
                 &auth,
                 &manager,
                 McpOperation::ListPageAssets,
-                "/mcp/assets/",
+                "/mcp/./assets",
             )
             .expect("resolve authorized page failed");
         assert_eq!(resolved.normalized_path(), "/mcp/assets");
@@ -9591,8 +9664,8 @@ mod tests {
         assert_eq!(outside_err.code(), McpErrorCode::Forbidden);
 
         let normalized_result = service
-            .list_page_assets(&read_auth, &manager, "/docs/assets/")
-            .expect("trailing slash path must be normalized inside prefix");
+            .list_page_assets(&read_auth, &manager, "/docs/./assets")
+            .expect("dot segments must resolve inside prefix");
         assert_eq!(normalized_result.path(), "/docs/assets");
 
         /*
@@ -9924,7 +9997,7 @@ mod tests {
          * list_page_assets が公開metadata一覧を返すことを検証する
          */
         let list_result = service
-            .list_page_assets(&auth, &manager, "/mcp/assets/")
+            .list_page_assets(&auth, &manager, "/mcp/./assets")
             .expect("list page assets failed");
         let db_assets = manager
             .list_page_assets(&page_id)
@@ -11693,6 +11766,63 @@ mod tests {
             .is_none());
 
         fs::remove_dir_all(base_dir).expect("cleanup failed");
+    }
+
+    ///
+    /// MCP root指定を再解釈せず従来の末尾記法を維持する
+    ///
+    /// # 概要
+    /// rootへのMCP移動は衝突、従来DB入口はbasename付加として比較する。
+    ///
+    /// # 注記
+    /// 同じ一時DBでroot衝突の無変更と、従来root/末尾補完を確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn rename_root_destination_keeps_mcp_and_legacy_contracts_separate() {
+        /*
+         * 衝突するrootと移動元を用意する
+         */
+        let (base_dir, manager) = open_test_manager();
+        manager.add_user("user", "pass", None).unwrap();
+        if manager.get_page_id_by_path("/").unwrap().is_none() {
+            manager.create_page("/", "user", "root".to_string()).unwrap();
+        }
+        let page_id = manager.create_page(
+            "/mcp/item", "user", "body".to_string(),
+        ).unwrap();
+        let auth = AuthContext::new(
+            AuthUser::new("user".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::new(), None,
+        );
+
+        /*
+         * MCP root指定で別pathへ移動せず衝突として返す
+         */
+        let error = McpService::new().rename_page(
+            &auth, &manager, "/mcp/item", "/",
+        ).unwrap_err();
+        assert_eq!(error.code(), McpErrorCode::Conflict);
+        assert_eq!(manager.get_page_id_by_path("/mcp/item").unwrap(),
+            Some(page_id.clone()));
+        assert!(manager.get_page_id_by_path("/item").unwrap().is_none());
+        assert_eq!(manager.get_page_index_by_id(&page_id).unwrap()
+            .unwrap().latest(), 1);
+
+        /*
+         * 従来入口のrootおよび末尾basename補完を維持する
+         */
+        manager.rename_pages_recursive_by_id(&page_id, "/").unwrap();
+        assert_eq!(manager.get_page_id_by_path("/item").unwrap(),
+            Some(page_id.clone()));
+        manager.rename_pages_recursive_by_id(&page_id, "/archive/")
+            .unwrap();
+        assert_eq!(manager.get_page_id_by_path("/archive/item").unwrap(),
+            Some(page_id));
+        fs::remove_dir_all(base_dir).unwrap();
     }
 
     #[test]

@@ -51,9 +51,11 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * クエリ取得と検証
@@ -110,92 +112,44 @@ pub async fn get(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
+    let (page, lock, _) = match state.db().read_authorized_page_meta(
+        &page_id, revision, true, true, &policy,
+    ) {
+        Ok(result) => {
+            crate::rest_api::audit::remember_page(&req, &result.0);
+            result
+        },
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
+                StatusCode::INTERNAL_SERVER_ERROR, "page lookup failed"));
         }
     };
-
-    /*
-     * ページソース取得
-     */
+    let locked = lock.is_some();
+    let page_index = page.index;
     if page_index.is_draft() {
-        let locked = match state.db().get_page_lock_info(&page_id) {
-            Ok(info) => info.is_some(),
-            Err(_) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "lock lookup failed",
-                ));
-            }
-        };
-
         let page_info = build_page_info(&page_index, &page_id, locked);
-
         let mut body = Map::new();
         body.insert("page_info".to_string(), page_info);
-
         return Ok(HttpResponse::Ok()
             .content_type("application/json")
             .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
             .body(Value::Object(body).to_string()));
     }
-
-    let revision = revision.unwrap_or(page_index.latest());
-
-    let page_source = match state.db().get_page_source(&page_id, revision) {
-        Ok(Some(source)) => source,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page source not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page source lookup failed",
-            ));
-        }
+    let revision = page.revision;
+    let page_source = match page.source {
+        Some(source) => source,
+        None => return Ok(resp_error_json(
+            StatusCode::NOT_FOUND, "page source not found")),
     };
-
-    /*
-     * ロック情報の取得
-     */
-    let locked = match state.db().get_page_lock_info(&page_id) {
-        Ok(info) => info.is_some(),
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock lookup failed",
-            ));
-        }
-    };
-
-    /*
-     * ユーザ名の取得
-     */
-    let user_name = match state.db().get_user_name_by_id(&page_source.user()) {
-        Ok(Some(name)) => name,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "user not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "user lookup failed",
-            ));
-        }
+    let user_name = match page.user_name {
+        Some(name) => name,
+        None => return Ok(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR, "user not found")),
     };
 
     /*

@@ -2155,11 +2155,16 @@ fn rollback_rejects_resource_uri_conflict_atomically() {
         .rollback_page_source_only(&page_id, 1)
         .expect_err("conflicting rollback must fail");
 
-    assert!(
-        error
-            .to_string()
-            .contains("resource URI already exists: resource_path=/docs/rollback-old")
-    );
+    /*
+     * metadata文脈のouter表示ではなく元型/診断を厳密に確認する
+     */
+    assert!(matches!(error.downcast_ref::<super::DbError>(),
+        Some(super::DbError::ResourceUriAlreadyExists { resource_path })
+            if resource_path == "/docs/rollback-old"));
+    assert_eq!(error.downcast_ref::<super::RevisionAccessTarget>()
+        .expect("specified revision context missing").revision, 1);
+    assert!(error.chain().any(|cause| cause.to_string() ==
+        "resource URI already exists: resource_path=/docs/rollback-old"));
     let index = manager
         .get_page_index_by_id(&page_id)
         .expect("get target index failed")
@@ -3448,7 +3453,14 @@ fn append_and_rollback_update_primitive_name_index_atomically() {
     let error = manager
         .rollback_page_source_only(&page_id, 1)
         .expect_err("conflicting rollback must fail");
-    assert!(error.to_string().contains("primitive=prompt name=first"));
+    assert!(matches!(error.downcast_ref::<super::DbError>(),
+        Some(super::DbError::McpPrimitiveNameAlreadyExists {
+            primitive: super::types::McpPrimitiveKind::Prompt, name,
+        }) if name == "first"));
+    assert_eq!(error.downcast_ref::<super::RevisionAccessTarget>()
+        .expect("specified revision context missing").revision, 1);
+    assert!(error.chain().any(|cause| cause.to_string() ==
+        "MCP primitive name already exists: primitive=prompt name=first"));
     let index = manager
         .get_page_index_by_id(&page_id)
         .expect("get target index failed")

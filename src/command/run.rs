@@ -218,11 +218,7 @@ impl RunCommandContext {
             self.cert_path.clone(),
             self.cert_is_explicit,
             self.key_path.clone(),
-            if self.mcp_enabled {
-                Some(self.audit_log_config.clone())
-            } else {
-                None
-            },
+            Some(self.audit_log_config.clone()),
             mcp_endpoint,
             shutdown_signal,
             on_started,

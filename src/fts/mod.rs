@@ -8,10 +8,14 @@
 //! 全文検索関連処理をまとめたモジュール
 //!
 
+mod authorized_score;
+#[cfg(test)]
+mod authorized_search_tests;
+
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
@@ -24,7 +28,9 @@ use lindera_tokenizer::tokenizer::{
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
+use tantivy::query::{
+    BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery, TermSetQuery,
+};
 use tantivy::schema::{
     Field,
     INDEXED,
@@ -44,6 +50,8 @@ use tantivy::tokenizer::{
     Tokenizer,
 };
 use tantivy::{doc, Index, Score, TantivyDocument, Term};
+
+use self::authorized_score::StableScoreTweaker;
 
 use crate::database::DatabaseManager;
 use crate::database::types::PageId;
@@ -856,6 +864,35 @@ impl FtsIndexManager {
         with_deleted: bool,
         all_revision: bool,
     ) -> Result<Vec<FtsSearchResult>> {
+        self.search_with_page_ids(
+            target, expression, with_deleted, all_revision, None,
+        )
+    }
+
+    ///
+    /// 型付き許可IDをqueryへ接続してTopDocsを収集する
+    ///
+    /// # 引数
+    /// * `target` - 検索対象field
+    /// * `expression` - 既存query式
+    /// * `with_deleted` - 既存削除条件
+    /// * `all_revision` - 既存履歴条件
+    /// * `page_ids` - DB snapshotから得た許可ID、旧入口はNone
+    ///
+    /// # 戻り値
+    /// 原scoreを保持したtarget上位100件。
+    ///
+    /// # 概要
+    /// 許可条件をscore0でANDし、同scoreのcutoffもID/revで安定させる。
+    ///
+    fn search_with_page_ids(
+        &self,
+        target: FtsSearchTarget,
+        expression: &str,
+        with_deleted: bool,
+        all_revision: bool,
+        page_ids: Option<&[PageId]>,
+    ) -> Result<Vec<FtsSearchResult>> {
         /*
          * 検索対象の決定
          */
@@ -895,6 +932,21 @@ impl FtsIndexManager {
 
             Box::new(BooleanQuery::new(clauses))
         };
+        /*
+         * 元queryのscoreを変えない型付き許可条件
+         */
+        let query = if let Some(page_ids) = page_ids {
+            let terms = page_ids.iter().map(|page_id| {
+                Term::from_field_text(self.schema.page_id, &page_id.to_string())
+            });
+            let filter = BoostQuery::new(
+                Box::new(TermSetQuery::new(terms)), 0.0,
+            );
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Must, query),
+                (Occur::Must, Box::new(filter)),
+            ])) as Box<dyn tantivy::query::Query>
+        } else { query };
         let reader = self.index.reader()?;
         let searcher = reader.searcher();
 
@@ -912,7 +964,26 @@ impl FtsIndexManager {
         /*
          * 検索結果の構築
          */
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
+        let top_docs = if page_ids.is_some() {
+            let failure = Arc::new(Mutex::new(None));
+            let collector = TopDocs::with_limit(100).tweak_score(
+                StableScoreTweaker {
+                    page_id: self.schema.page_id,
+                    revision: self.schema.revision,
+                    failure: failure.clone(),
+                },
+            );
+            let hits = searcher.search(&query, &collector)?;
+            if let Some(err) = failure.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+            {
+                return Err(anyhow!("stable search key read failed: {}", err));
+            }
+            hits.into_iter()
+                .map(|(key, address)| (key.score, address)).collect()
+        } else {
+            searcher.search(&query, &TopDocs::with_limit(100))?
+        };
         let mut results = Vec::with_capacity(top_docs.len());
         for (score, doc_address) in top_docs {
             /*
@@ -1221,6 +1292,35 @@ pub(crate) fn search_index(
 ) -> Result<Vec<FtsSearchResult>> {
     let manager = FtsIndexManager::open(config)?;
     manager.search(target, expression, with_deleted, all_revision)
+}
+
+///
+/// DB snapshotの許可ID条件をTopDocs100より前に適用する
+///
+/// # 引数
+/// * `config` - FTS設定
+/// * `target` - 検索対象
+/// * `expression` - query式
+/// * `with_deleted` - 削除条件
+/// * `all_revision` - 履歴条件
+/// * `page_ids` - 認可済みID集合
+///
+/// # 戻り値
+/// 原scoreを保持した許可候補上位100件。
+///
+pub(crate) fn search_index_for_page_ids(
+    config: &FtsIndexConfig,
+    target: FtsSearchTarget,
+    expression: &str,
+    with_deleted: bool,
+    all_revision: bool,
+    page_ids: &[PageId],
+) -> Result<Vec<FtsSearchResult>> {
+    if page_ids.is_empty() { return Ok(Vec::new()); }
+    let manager = FtsIndexManager::open(config)?;
+    manager.search_with_page_ids(
+        target, expression, with_deleted, all_revision, Some(page_ids),
+    )
 }
 
 ///

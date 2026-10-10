@@ -43,6 +43,9 @@ pub(crate) struct AppState {
 
     /// 監査ログ投入入口
     audit_sink: Option<Arc<RwLock<AuditSink>>>,
+
+    /// HTTP終了後のqueued MCP処理を拒否する内部印
+    shutting_down: bool,
 }
 
 impl AppState {
@@ -81,7 +84,28 @@ impl AppState {
             wiki_icon,
             asset_limit_size,
             audit_sink,
+            shutting_down: false,
         }
+    }
+
+    ///
+    /// exclusive state barrierで終了処理を開始する
+    ///
+    /// # 戻り値
+    /// なし。server終了後だけ呼び、保存値を変更しない。
+    ///
+    pub(crate) fn begin_shutdown(&mut self) {
+        self.shutting_down = true;
+    }
+
+    ///
+    /// queued MCPを実行してよいかを取得する
+    ///
+    /// # 戻り値
+    /// 終了処理中ならtrue。
+    ///
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        self.shutting_down
     }
 
     ///

@@ -10,9 +10,10 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::{HttpResponse, web};
+use actix_web::{HttpRequest, HttpResponse, web};
 
-use super::resp_200;
+use super::{resp_200, require_request_scope};
+use crate::database::types::BearerScope;
 use crate::http_server::app_state::AppState;
 
 ///
@@ -32,7 +33,11 @@ use crate::http_server::app_state::AppState;
 /// actix-webのレスポンスオブジェクト
 ///
 pub async fn get(
+    req: HttpRequest,
     _state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
+    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
+        return Ok(resp);
+    }
     Ok(resp_200("hello"))
 }

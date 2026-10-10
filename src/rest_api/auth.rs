@@ -24,13 +24,15 @@ use chrono::{DateTime, Local};
 use log::warn;
 use serde_json::json;
 
-use crate::auth::{AuthContext, AuthUser, authenticate_bearer_token};
+use crate::auth::{
+    AuthContext, AuthUser, ScopeAuthorizationError,
+    authenticate_bearer_token, authorize_any_scope,
+};
 use crate::database::types::{
     BearerScope,
     BearerScopeSet,
     BearerTokenPlaintext,
     PathPrefixSet,
-    UserAttribute,
 };
 use crate::http_server::app_state::AppState;
 
@@ -177,37 +179,33 @@ impl AuthErrorResponse {
 /// 必要スコープを満たす場合は `Ok(())` を返す。
 /// 満たさない場合は 403 Forbidden 応答を返す。
 ///
+// 非request呼出しとの互換wrapperを維持する。
+#[allow(dead_code)]
 pub(crate) fn require_scope(
     auth: &AuthContext,
     required: BearerScope,
 ) -> Result<(), HttpResponse> {
-    /*
-     * ReadOnly による write 系操作拒否を先に判定する
-     */
-    if is_write_scope(required)
-        && auth.user_attributes().contains(UserAttribute::ReadOnly)
-    {
-        return Err(AuthErrorResponse::forbidden().error_response());
-    }
-
-    if auth.scopes().allows(required) {
-        return Ok(());
-    }
-
-    Err(AuthErrorResponse::forbidden().error_response())
+    require_any_scope(auth, &[required])
 }
 
 ///
-/// write 系スコープかどうかを返す
+/// OR要求scopeを共有基盤で判定する
 ///
 /// # 引数
-/// * `scope` - 判定対象スコープ
+/// * `auth` - 認証文脈
+/// * `required` - 当該操作を許可するscope候補
 ///
 /// # 戻り値
-/// write 系スコープの場合は `true` を返す。
+/// 許可、または403応答を返す。
 ///
-fn is_write_scope(scope: BearerScope) -> bool {
-    !matches!(scope, BearerScope::Read)
+// 非request呼出しとの互換wrapperを維持する。
+#[allow(dead_code)]
+pub(crate) fn require_any_scope(
+    auth: &AuthContext,
+    required: &[BearerScope],
+) -> Result<(), HttpResponse> {
+    authorize_any_scope(auth, required)
+        .map_err(|_| AuthErrorResponse::forbidden().error_response())
 }
 
 ///
@@ -249,8 +247,40 @@ pub(crate) fn require_request_scope(
     req: &HttpRequest,
     required: BearerScope,
 ) -> Result<AuthContext, HttpResponse> {
+    require_request_any_scope(req, &[required])
+}
+
+///
+/// リクエストのOR要求scopeを判定する
+///
+/// # 引数
+/// * `req` - リクエスト
+/// * `required` - 許可scope候補
+///
+/// # 戻り値
+/// 認証文脈、またはHTTP拒否応答を返す。
+///
+pub(crate) fn require_request_any_scope(
+    req: &HttpRequest,
+    required: &[BearerScope],
+) -> Result<AuthContext, HttpResponse> {
+    /*
+     * 不変認証文脈を取得しcoreの固定拒否理由を保持する
+     */
     let auth = auth_context_from_request(req)?;
-    require_scope(&auth, required)?;
+    authorize_any_scope(&auth, required).map_err(|error| {
+        let result = match error.downcast_ref::<ScopeAuthorizationError>() {
+            Some(ScopeAuthorizationError::ScopeDenied) =>
+                crate::audit::model::AuditResult::ScopeDenied,
+            Some(ScopeAuthorizationError::ReadOnlyDenied) =>
+                crate::audit::model::AuditResult::ReadOnlyDenied,
+            None => crate::audit::model::AuditResult::OperationDenied,
+        };
+        super::audit::update_metadata(req, |metadata| {
+            metadata.result = Some(result);
+        });
+        AuthErrorResponse::forbidden().error_response()
+    })?;
     Ok(auth)
 }
 
@@ -395,13 +425,14 @@ async fn validate_basic_auth(
         }
     };
 
-    req.extensions_mut().insert(AuthContext::new_with_attributes(
+    req.extensions_mut().insert(AuthContext::new_with_actor(
         AuthUser::new(username),
         BearerScopeSet::all(),
         PathPrefixSet::new(),
         user_info.attributes(),
         None,
         None,
+        user_info.id(),
     ));
 
     Ok(req)
@@ -478,6 +509,11 @@ where
     B: MessageBody + 'static,
 {
     let mut res = next.call(req).await?;
+    if res.response().extensions()
+        .get::<super::audit::RestNextErrorResponse>().is_some()
+    {
+        return Ok(res);
+    }
 
     let expire_at = res
         .request()
@@ -543,4 +579,240 @@ fn parse_authorization_header(
     }
 
     Err(AuthErrorResponse::bad_request().into())
+}
+
+///
+/// DB対象解決・パス認可の型付きエラーを公開応答へ変換する
+///
+/// # 引数
+/// * `err` - DB操作エラー
+///
+/// # 戻り値
+/// 共通の認可/状態エラーの場合はHTTP応答を返す。
+///
+pub(crate) fn page_access_error(err: &anyhow::Error) -> Option<HttpResponse> {
+    use crate::database::{DbError, LockTokenInputError, PathPrefixDenied};
+    use super::resp_error_json;
+    if let Some(denied) = err.downcast_ref::<PathPrefixDenied>() {
+        let (status, reason) = if denied.parent_candidate {
+            (StatusCode::NOT_FOUND, "parent not found")
+        } else { (StatusCode::FORBIDDEN, "forbidden") };
+        return Some(resp_error_json(status, reason));
+    }
+    if let Some(input) = err.downcast_ref::<LockTokenInputError>() {
+        return Some(resp_error_json(StatusCode::FORBIDDEN, input.reason));
+    }
+    if err.downcast_ref::<crate::database::PageSourceNotFound>().is_some() {
+        return Some(resp_error_json(StatusCode::NOT_FOUND,
+            "page source not found"));
+    }
+    match err.downcast_ref::<DbError>() {
+        Some(DbError::PageNotFound) => Some(resp_error_json(
+            StatusCode::NOT_FOUND, "page not found")),
+        Some(DbError::PageDeleted) => Some(resp_error_json(
+            StatusCode::GONE, "page deleted")),
+        _ => None,
+    }
+}
+
+///
+/// 要求内に型付きパス拒否を保持して既存応答へ変換する
+///
+/// # 引数
+/// * `req` - 認証済み要求
+/// * `err` - DB認可エラー
+///
+/// # 戻り値
+/// 既存のHTTP認可・状態応答。
+///
+/// # 概要
+/// 最終statusへ変換する前に型付き拒否を要求内へ残す。
+///
+pub(crate) fn page_access_error_for_request(
+    req: &HttpRequest,
+    err: &anyhow::Error,
+) -> Option<HttpResponse> {
+    use crate::database::PathPrefixDenied;
+    super::audit::remember_error(req, err);
+    /*
+     * 同txn対象と拒否分類を既存HTTP変換より前に保持する
+     */
+    if let Some(denied) = err.downcast_ref::<PathPrefixDenied>()
+    {
+        super::audit::update_metadata(req, |metadata| {
+            metadata.result =
+                Some(crate::audit::model::AuditResult::PathPrefixDenied);
+            if denied.parent_candidate {
+                metadata.denied_side =
+                    Some(super::audit::RestDeniedSide::Parent);
+            }
+        });
+    }
+    page_access_error(err)
+}
+
+///
+/// 任意lockヘッダの入力をHTTP非依存エラーとして遅延する
+///
+/// # 引数
+/// * `req` - HTTPリクエスト
+///
+/// # 戻り値
+/// tokenの有無、または認可後に判定する入力不正。
+///
+pub(crate) fn mutation_lock_input(
+    req: &HttpRequest,
+) -> Result<Option<crate::database::types::LockToken>,
+    crate::database::LockTokenInputError> {
+    let invalid = || crate::database::LockTokenInputError {
+        reason: "lock token invalid",
+    };
+    let Some(raw) = req.headers().get("X-Lock-Authentication") else {
+        return Ok(None);
+    };
+    let raw = raw.to_str().map_err(|_| invalid())?;
+    let token = raw.split_whitespace()
+        .find_map(|part| part.strip_prefix("token="))
+        .ok_or_else(invalid)?;
+    crate::database::types::LockToken::from_string(token)
+        .map(Some).map_err(|_| invalid())
+}
+
+///
+/// write認可・既存lock・commit後失敗をHTTP応答へ変換する
+///
+/// # 引数
+/// * `err` - 操作エラー
+/// * `failure_reason` - 既存操作の500理由
+///
+/// # 戻り値
+/// 既知の境界エラーなら公開応答を返す。
+///
+/// # 概要
+/// commit後の派生失敗は元PageNotFound等から404へ誤変換しない。
+///
+pub(crate) fn mutation_access_error(
+    req: &HttpRequest,
+    err: &anyhow::Error,
+    failure_reason: &'static str,
+) -> Option<HttpResponse> {
+    use crate::database::{DbError, MutationOutcome, PathPrefixDenied};
+    use super::resp_error_json;
+    if let Some(outcome) = err.downcast_ref::<MutationOutcome>() {
+        req.extensions_mut().insert(outcome.clone());
+    }
+    if let Some(denied) = err.downcast_ref::<PathPrefixDenied>() {
+        req.extensions_mut().insert(denied.clone());
+    }
+    if err.downcast_ref::<MutationOutcome>()
+        .is_some_and(|outcome| outcome.committed
+            && outcome.post_processing_failure)
+    {
+        return Some(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR, failure_reason));
+    }
+    if let Some(response) = page_access_error_for_request(req, err) {
+        return Some(response);
+    }
+    match err.downcast_ref::<DbError>() {
+        Some(DbError::PageLocked) => Some(resp_error_json(
+            StatusCode::LOCKED, "page locked")),
+        Some(DbError::LockForbidden) => Some(resp_error_json(
+            StatusCode::FORBIDDEN, "lock forbidden")),
+        _ => None,
+    }
+}
+
+///
+/// asset固有の不在/削除を既存応答へ変換する
+///
+/// # 引数
+/// * `req` - リクエスト
+/// * `err` - 認可/assetエラー
+/// * `failure_reason` - 既存500理由
+///
+/// # 戻り値
+/// 既知エラーのHTTP応答。
+///
+pub(crate) fn asset_access_error(
+    req: &HttpRequest, err: &anyhow::Error, failure_reason: &'static str,
+) -> Option<HttpResponse> {
+    if let Some(target) =
+        err.downcast_ref::<crate::database::AssetAccessTarget>()
+    {
+        req.extensions_mut().insert(target.clone());
+    }
+    if let Some(resp) = mutation_access_error(req, err, failure_reason) {
+        return Some(resp);
+    }
+    if err.downcast_ref::<crate::database::AssetBodyReadFailure>().is_some() {
+        return Some(super::resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+            "asset read failed"));
+    }
+    match err.downcast_ref::<crate::database::DbError>() {
+        Some(crate::database::DbError::AssetNotFound) => Some(
+            super::resp_error_json(StatusCode::NOT_FOUND, "asset not found"),
+        ),
+        Some(crate::database::DbError::AssetDeleted) => {
+            Some(super::resp_error_json(StatusCode::GONE, "asset deleted"))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod audit_actor_tests {
+    use actix_web::test::TestRequest;
+
+    use super::*;
+
+    ///
+    /// Basic実認証のIDを要求途中の主体変更から独立させる
+    ///
+    /// # 概要
+    /// 確定した型付き情報と既存公開契約をfixtureで照合する。
+    ///
+    /// # 注記
+    /// 認証後の表示名更新・削除・同名再作成とtoken nullを確認する。
+    ///
+    #[actix_web::test]
+    async fn audit_actor_basic_survives_user_replacement() {
+        /*
+         * 既存隔離fixtureのBasic認証入口を実際に通す
+         */
+        let (base, state) = crate::rest_api::authorization_tests::fixture();
+        let id = state.db().get_user_info_by_name("user")
+            .unwrap().unwrap().id();
+        let state = web::Data::new(Arc::new(RwLock::new(state)));
+        let req = TestRequest::default()
+            .app_data(state.clone())
+            .insert_header(("Authorization", "Basic dXNlcjpwYXNz"))
+            .to_srv_request();
+        let req = validate_basic_auth(req).await.unwrap();
+        let context = req.extensions().get::<AuthContext>().unwrap().clone();
+        assert_eq!(context.actor_id(), Some(&id));
+        assert_eq!(context.token_id(), None);
+        assert_eq!(context.user_id(), "user");
+
+        /*
+         * 要求中の表示名更新・ユーザ差替えでも認証済みIDを保持する
+         */
+        {
+            let guard = state.read().unwrap();
+            guard.db().update_user("user", Some("new display"), None).unwrap();
+            assert_eq!(context.actor_id(), Some(&id));
+            guard.db().delete_user("user").unwrap();
+            let removed = guard.db().get_user_info_by_name("user").unwrap();
+            assert!(removed.is_none());
+            assert_eq!(context.actor_id(), Some(&id));
+            guard.db().add_user("user", "newpass", None).unwrap();
+            let new_id = guard.db().get_user_info_by_name("user")
+                .unwrap().unwrap().id();
+            assert_ne!(new_id, id);
+            assert_eq!(context.actor_id(), Some(&id));
+        }
+        drop(req);
+        drop(state);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

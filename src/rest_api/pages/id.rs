@@ -43,9 +43,11 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * クエリ取得と検証
@@ -62,9 +64,18 @@ pub async fn get(
         }
     };
 
-    if let Err(message) = super::validate_page_path(&query.path) {
-        return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
-    }
+    let mut query = query.into_inner();
+    query.path = match super::normalize_page_path(&query.path) {
+        Ok(path) => path,
+        Err(message) => {
+            return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
+        }
+    };
+    crate::rest_api::audit::remember_path(
+        &req,
+        crate::wiki_path::NormalizedWikiPath::from_stored(&query.path),
+    );
+
 
     /*
      * 共有状態取得
@@ -82,7 +93,9 @@ pub async fn get(
     /*
      * page path からページ状態を解決
      */
-    let page_id = match state.db().resolve_page_state_by_path(&query.path) {
+    let page_id = match state.db().resolve_authorized_page_path(
+        &query.path, &policy,
+    ) {
         Ok(PagePathResolveState::Current {
             page_id,
             draft: false,
@@ -94,7 +107,12 @@ pub async fn get(
         Ok(PagePathResolveState::Deleted) => {
             return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
         }
-        Err(_) => {
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "page lookup failed",

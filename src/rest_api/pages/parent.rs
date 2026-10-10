@@ -11,12 +11,11 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::StatusCode;
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
 use super::super::resp_error_json;
-use crate::database::DbError;
 use crate::database::types::{BearerScope, PageId};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::require_request_scope;
@@ -45,9 +44,11 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -92,56 +93,27 @@ pub async fn get(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    if page_index.is_draft() {
-        return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-    }
-
-    let current_path = match page_index.current_path() {
-        Some(path) => path.to_string(),
-        None => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page path not found",
-            ));
-        }
-    };
-
-    let (parent_id, parent_path) = match resolve_parent(
-        state.db(),
-        current_path,
-        recursive,
+    let (parent_id, parent_path, target) =
+        match state.db().read_authorized_parent_target(
+        &page_id, recursive, &policy,
     ) {
-        Ok(result) => result,
+        Ok(parent) => parent,
         Err(err) => {
-            if let Some(DbError::PageNotFound) = err.downcast_ref::<DbError>() {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
+            if err.downcast_ref::<crate::database::ParentNotFound>().is_some() {
                 return Ok(resp_error_json(
-                    StatusCode::NOT_FOUND,
-                    "parent not found",
-                ));
+                    StatusCode::NOT_FOUND, "parent not found"));
             }
             return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "parent lookup failed",
-            ));
+                StatusCode::INTERNAL_SERVER_ERROR, "parent lookup failed"));
         }
     };
+
+    req.extensions_mut().insert(target);
 
     let body = json!({
         "id": parent_id.to_string(),
@@ -151,74 +123,4 @@ pub async fn get(
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .body(body.to_string()))
-}
-
-///
-/// 親ページを解決する
-///
-/// # 引数
-/// * `db` - データベースマネージャ
-/// * `current_path` - 現在ページパス
-/// * `recursive` - 再帰的に親を探索する場合は`true`
-///
-/// # 戻り値
-/// (親ページID, 親ページパス)
-///
-fn resolve_parent(
-    db: &crate::database::DatabaseManager,
-    current_path: String,
-    recursive: bool,
-) -> anyhow::Result<(PageId, String)> {
-    /*
-     * 直接の親を解決する
-     */
-    let mut path = parent_path(&current_path);
-    if !recursive {
-        let parent_id = db
-            .get_page_id_by_path(&path)?
-            .ok_or_else(|| anyhow::anyhow!(DbError::PageNotFound))?;
-        return Ok((parent_id, path));
-    }
-
-    /*
-     * 存在する親ページまで遡る
-     */
-    loop {
-        if let Some(parent_id) = db.get_page_id_by_path(&path)? {
-            return Ok((parent_id, path));
-        }
-        if path == "/" {
-            break;
-        }
-        path = parent_path(&path);
-    }
-
-    Err(anyhow::anyhow!(DbError::PageNotFound))
-}
-
-///
-/// 親ページパスを計算する
-///
-/// # 引数
-/// * `path` - 現在ページパス
-///
-/// # 戻り値
-/// 親ページパス
-///
-fn parent_path(path: &str) -> String {
-    if path == "/" {
-        return "/".to_string();
-    }
-
-    let trimmed = path.trim_end_matches('/');
-    if let Some(pos) = trimmed.rfind('/') {
-        let parent = &trimmed[..pos];
-        if parent.is_empty() {
-            "/".to_string()
-        } else {
-            parent.to_string()
-        }
-    } else {
-        "/".to_string()
-    }
 }

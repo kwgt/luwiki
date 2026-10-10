@@ -60,6 +60,14 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 - MCP promptsはread scopeを要求するが、ページ用path prefix制約を適用しない
 - 監査ログは MCP 操作および関連する認可失敗を対象として記録する
 
+### 1.1.1 入力ページパス
+
+ページ/アセットtoolのpath・prefix・cursor・rename_toはREQUIREMENTS.md 2.2の共通規則を使う。
+絶対パスのraw検証→dot解決→最終検証とし、root以外の末尾/、連続/、空白（全角を含む）・
+制御文字・バックスラッシュを拒否する。`.`・`..`は解決し、root越えは拒否する。
+MCP renameにREST配置先の末尾/特例を適用しない。不正入力はInvalidInput、認可拒否と区別する。
+JSON文字列の%表記をWikiパス処理でURLデコードしない。
+
 ### 1.2 公開するツール
 
 初期版では、少なくとも以下のツールを公開する。

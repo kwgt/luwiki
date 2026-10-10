@@ -30,10 +30,16 @@ use super::schema::{
 use super::types::{AssetId, PageId};
 
 pub(crate) mod assets;
+pub(crate) mod authorized_assets;
+pub(crate) mod authorized_pages;
+pub(crate) mod authorized_writes;
 pub(crate) mod bearer_tokens;
 pub(crate) mod derived_rebuild;
 pub(crate) mod export_import;
 pub(crate) mod locks;
+pub(crate) mod mutation;
+#[cfg(test)]
+mod mutation_tests;
 pub(crate) mod pages_read;
 pub(crate) mod pages_write;
 pub(crate) mod prompt_candidates;
@@ -52,9 +58,17 @@ pub(crate) struct DatabaseManager {
     #[allow(dead_code)]
     asset_path: PathBuf,
 
+    /// テスト用asset upload登録/commit失敗段階
+    #[cfg(test)]
+    fail_asset_upload_for_test: std::sync::atomic::AtomicU8,
+
     /// テスト用resource候補同期失敗フラグ
     #[cfg(test)]
     fail_resource_candidate_sync_for_test: AtomicBool,
+
+    /// 隔離fixtureのmeta commit直前失敗注入
+    #[cfg(test)]
+    fail_meta_commit_for_test: AtomicBool,
 }
 
 impl DatabaseManager {
@@ -89,8 +103,40 @@ impl DatabaseManager {
             db,
             asset_path: asset_path.as_ref().into(),
             #[cfg(test)]
+            fail_asset_upload_for_test: std::sync::atomic::AtomicU8::new(0),
+            #[cfg(test)]
             fail_resource_candidate_sync_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_meta_commit_for_test: AtomicBool::new(false),
         })
+    }
+
+    ///
+    /// metaのcommit直前失敗を隔離fixtureで設定する
+    ///
+    /// # 引数
+    /// * `enabled` - 注入の有無
+    ///
+    /// # 戻り値
+    /// なし。製品ビルドには含めない。
+    ///
+    #[cfg(test)]
+    pub(crate) fn set_meta_commit_failure_for_test(&self, enabled: bool) {
+        self.fail_meta_commit_for_test.store(enabled, Ordering::SeqCst);
+    }
+
+    ///
+    /// 隔離fixtureのupload失敗位置を設定する
+    ///
+    /// # 引数
+    /// * `phase` - 0=なし、1=登録、2=commit試行前、3=回収失敗
+    ///
+    /// # 戻り値
+    /// なし。製品ビルドには含めない。
+    ///
+    #[cfg(test)]
+    pub(crate) fn set_asset_upload_failure_for_test(&self, phase: u8) {
+        self.fail_asset_upload_for_test.store(phase, Ordering::SeqCst);
     }
 
     ///

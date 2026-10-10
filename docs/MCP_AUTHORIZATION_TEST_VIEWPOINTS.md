@@ -342,3 +342,10 @@ MCP 公開層、path ベースサービス層、MCP 固有の失敗分類を中�
   - HTTP 401、handshake済みsession、Bearerとsessionの組合せ
 - 既存tool回帰テスト
   - pathベースtools、prompts、resourcesの認可境界維持
+
+## 共通入力規則の回帰
+
+root以外末尾/、連続/、全角を含む空白/control拒否、dot解決・root越え拒否、JSONの%表記保持を確認する。旧末尾除去/dot拒否テストは更新する。REST配置先特例をMCPへ一般化しない。
+
+詳細ケースと全32アクション対応の正本は[REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)。
+2026-10-11時点で検証計画のみ反映し、テストの実行成功を示すものではない。

@@ -13,9 +13,13 @@ use std::fs;
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
-use redb::{ReadableMultimapTable, ReadableTable};
+use redb::{WriteTransaction, ReadableMultimapTable, ReadableTable};
 
 use super::DatabaseManager;
+use super::mutation::{
+    AuthorizedMutation, MutationAccess, MutationOutcome,
+    mutation_outcome_in_txn,
+};
 use crate::database::link_refs::{build_link_refs, build_link_refs_with_table};
 use crate::database::primitive_names::{
     remove_mcp_primitive_names_by_page_ids_in_txn,
@@ -26,7 +30,6 @@ use crate::database::resource_uris::{
     sync_resource_uri_for_source_in_txn,
     verify_resource_uri_owner_for_source_in_txn,
 };
-use crate::markdown_source::front_matter::validate_document_front_matter;
 use crate::database::schema::{
     ASSET_GROUP_TABLE,
     ASSET_INFO_TABLE,
@@ -60,6 +63,9 @@ use crate::database::types::{
     RenameInfo,
     UserId,
 };
+
+use crate::markdown_source::front_matter::validate_document_front_matter;
+use crate::wiki_path::NormalizedWikiPath;
 
 ///
 /// `append` 保存補助 API の入力
@@ -174,27 +180,72 @@ impl DatabaseManager {
     /// 作成したページIDを返す。
     ///
     pub(crate) fn create_page<P, U>(
-        &self,
-        path: P,
-        user_name: U,
-        source: String,
+        &self, path: P, user_name: U, source: String,
     ) -> Result<PageId>
-    where
-        P: AsRef<str>,
-        U: AsRef<str>,
-    {
-        let path = path.as_ref().to_string();
-        let user_name = user_name.as_ref().to_string();
-        let revision = 1u64;
-
-        /*
-         * front matter 検証
-         */
+    where P: AsRef<str>, U: AsRef<str> {
         validate_document_front_matter(&source)?;
-
         let txn = self.db.begin_write()?;
-        let page_id = PageId::new();
+        let page_id = self.create_page_in_txn(
+            &txn, path.as_ref(), user_name.as_ref(), source,
+        )?;
+        txn.commit()?;
+        self.sync_page_candidates_after_commit(&page_id, None)?;
+        Ok(page_id)
+    }
 
+    ///
+    /// 作成先を同write txnで認可して通常ページを作る
+    ///
+    /// # 引数
+    /// * `path` - 入力解決済み作成先
+    /// * `user_name` - 作成ユーザ
+    /// * `source` - 本文
+    /// * `policy` - 保存prefix制約
+    ///
+    /// # 戻り値
+    /// 新IDとcommit時のpath/revision/instance。
+    ///
+    pub(crate) fn create_page_authorized(
+        &self, path: &str, user_name: &str, source: String,
+        policy: &crate::auth::PageAccessPolicy<'_>,
+    ) -> Result<AuthorizedMutation<PageId>> {
+        let txn = self.db.begin_write()?;
+        super::mutation::authorize_create_path(path, policy)?;
+        validate_document_front_matter(&source)?;
+        let page_id = self.create_page_in_txn(&txn, path, user_name, source)?;
+        let mut outcome = mutation_outcome_in_txn(
+            &txn, &page_id, path, vec![page_id.clone()],
+        )?;
+        txn.commit()
+            .map_err(|err| anyhow!(err).context(outcome.clone()))?;
+        outcome.committed = true;
+        self.sync_page_candidates_after_commit(&page_id, Some(&outcome))?;
+        Ok(AuthorizedMutation { value: page_id, outcome })
+    }
+
+    ///
+    /// 既存作成本体を呼出し側write txnで実行する
+    ///
+    /// # 引数
+    /// * `txn` - 作成txn
+    /// * `path` - 作成先
+    /// * `user_name` - 作成ユーザ
+    /// * `source` - 本文
+    ///
+    /// # 戻り値
+    /// 作成したID。
+    ///
+    /// # 概要
+    /// 呼出し側の認可/入力確認後に既存衝突・登録を実行する。
+    ///
+    fn create_page_in_txn(
+        &self, txn: &WriteTransaction, path: &str,
+        user_name: &str, source: String,
+    ) -> Result<PageId> {
+        let path = path.to_string();
+        let user_name = user_name.to_string();
+        let revision = 1;
+        let page_id = PageId::new();
         {
             /*
              * ユーザIDの解決
@@ -248,12 +299,6 @@ impl DatabaseManager {
             source_table.insert((page_id.clone(), revision), page_source)?;
         }
 
-        txn.commit()?;
-
-        self.sync_template_candidate_for_page(&page_id)?;
-        self.sync_prompt_candidate_for_page(&page_id)?;
-        self.sync_resource_candidate_for_page(&page_id)?;
-
         Ok(page_id)
     }
 
@@ -271,18 +316,63 @@ impl DatabaseManager {
     /// 作成したページIDとロック情報を返す。
     ///
     pub(crate) fn create_draft_page<P, U>(
-        &self,
-        path: P,
-        user_name: U,
+        &self, path: P, user_name: U,
     ) -> Result<(PageId, LockInfo)>
-    where
-        P: AsRef<str>,
-        U: AsRef<str>,
-    {
-        let path = path.as_ref().to_string();
-        let user_name = user_name.as_ref().to_string();
-
+    where P: AsRef<str>, U: AsRef<str> {
         let txn = self.db.begin_write()?;
+        let result = self.create_draft_in_txn(
+            &txn, path.as_ref(), user_name.as_ref(),
+        )?;
+        txn.commit()?;
+        Ok(result)
+    }
+
+    ///
+    /// 作成先認可とdraft/lock登録を同write txnで行う
+    ///
+    /// # 引数
+    /// * `path` - 入力解決済み作成先
+    /// * `user_name` - 作成ユーザ
+    /// * `policy` - 保存prefix制約
+    ///
+    /// # 戻り値
+    /// 新ID/lockと認可した確定対象・commit情報。
+    ///
+    pub(crate) fn create_draft_authorized(
+        &self, path: &str, user_name: &str,
+        policy: &crate::auth::PageAccessPolicy<'_>,
+    ) -> Result<AuthorizedMutation<(PageId, LockInfo)>> {
+        let txn = self.db.begin_write()?;
+        super::mutation::authorize_create_path(path, policy)?;
+        let value = self.create_draft_in_txn(&txn, path, user_name)?;
+        let mut outcome = mutation_outcome_in_txn(
+            &txn, &value.0, path, vec![value.0.clone()],
+        )?;
+        txn.commit()
+            .map_err(|err| anyhow!(err).context(outcome.clone()))?;
+        outcome.committed = true;
+        Ok(AuthorizedMutation { value, outcome })
+    }
+
+    ///
+    /// 呼出し側txnで既存draft/lock登録を実行する
+    ///
+    /// # 引数
+    /// * `txn` - 作成txn
+    /// * `path` - 作成先
+    /// * `user_name` - 作成ユーザ
+    ///
+    /// # 戻り値
+    /// 新IDとlock。
+    ///
+    /// # 概要
+    /// 同じtxnでユーザ・衝突を確認してdraftとlockを登録する。
+    ///
+    fn create_draft_in_txn(
+        &self, txn: &WriteTransaction, path: &str, user_name: &str,
+    ) -> Result<(PageId, LockInfo)> {
+        let path = path.to_string();
+        let user_name = user_name.to_string();
         let page_id = PageId::new();
         let lock_info = {
             /*
@@ -326,8 +416,6 @@ impl DatabaseManager {
             lock_info
         };
 
-        txn.commit()?;
-
         Ok((page_id, lock_info))
     }
 
@@ -351,16 +439,98 @@ impl DatabaseManager {
         source: String,
         amend: bool,
     ) -> Result<()> {
-        /*
-         * front matter 検証
-         */
-        validate_document_front_matter(&source)?;
+        let txn = self.db.begin_write()?;
+        self.put_page_in_txn(&txn, page_id, user_name, source, amend)?;
+        txn.commit()?;
+        self.sync_page_candidates_after_commit(page_id, None)
+    }
 
+    ///
+    /// 最新対象認可と保存・必要lock解放を同write txnで実行する
+    ///
+    /// # 引数
+    /// * `page_id` - 固定の対象ID
+    /// * `user_name` - 編集ユーザ
+    /// * `source` - 保存本文
+    /// * `amend` - 最新版更新指定
+    /// * `access` - 認可/既存lock/明示edit条件
+    ///
+    /// # 戻り値
+    /// 確定path/revision/instance/commit、または型付き拒否。
+    ///
+    /// # 概要
+    /// 認可前cleanupを防ぎ、保存後indexを使ってlockを解放する。
+    ///
+    pub(crate) fn put_page_authorized(
+        &self,
+        page_id: &PageId,
+        user_name: &str,
+        source: String,
+        amend: bool,
+        access: &MutationAccess<'_>,
+    ) -> Result<AuthorizedMutation<()>> {
         /*
-         * 書き込みトランザクション開始
+         * 最新対象を認可し、状態/lock/cleanupを同txnで判定する
          */
         let txn = self.db.begin_write()?;
+        let prepared = self.prepare_mutation_in_txn(&txn, page_id, access)?;
+        if prepared.index.is_none() {
+            return self.complete_expired_mutation(txn, page_id, prepared);
+        }
+        let mut outcome = self.put_page_in_txn(
+            &txn, page_id, user_name, source, amend,
+        )?;
 
+        /*
+         * 保存した最新indexから必要なlockだけを解放する
+         */
+        if let Some(lock) = prepared.lock {
+            let mut indexes = txn.open_table(PAGE_INDEX_TABLE)?;
+            let mut locks = txn.open_table(LOCK_INFO_TABLE)?;
+            let mut index = indexes.get(page_id.clone())?
+                .ok_or_else(|| anyhow!(DbError::PageNotFound))?.value();
+            locks.remove(lock.token())?;
+            index.set_lock_token(None);
+            indexes.insert(page_id.clone(), index)?;
+        }
+        txn.commit()
+            .map_err(|err| anyhow!(err).context(outcome.clone()))?;
+        outcome.committed = true;
+        self.finish_mutation_assets(&prepared.asset_cleanup, &outcome)?;
+        self.sync_page_candidates_after_commit(page_id, Some(&outcome))?;
+        Ok(AuthorizedMutation { value: (), outcome })
+    }
+
+    ///
+    /// 既存source保存本体を外側のtxnで実行する
+    ///
+    /// # 引数
+    /// * `txn` - 呼出し側のwrite txn
+    /// * `page_id` - 対象ID
+    /// * `user_name` - 編集ユーザ
+    /// * `source` - 保存本文
+    /// * `amend` - 最新版更新指定
+    ///
+    /// # 戻り値
+    /// commit前の確定対象情報。
+    ///
+    /// # 概要
+    /// CLIと認可入口で保存bodyを共有しnested write txnを作らない。
+    ///
+    fn put_page_in_txn(
+        &self,
+        txn: &WriteTransaction,
+        page_id: &PageId,
+        user_name: &str,
+        source: String,
+        amend: bool,
+    ) -> Result<MutationOutcome> {
+        validate_document_front_matter(&source)?;
+        let source_path = {
+            let indexes = txn.open_table(PAGE_INDEX_TABLE)?;
+            indexes.get(page_id.clone())?
+                .ok_or_else(|| anyhow!(DbError::PageNotFound))?.value().path()
+        };
         {
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
@@ -455,16 +625,38 @@ impl DatabaseManager {
             }
         }
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
+        mutation_outcome_in_txn(txn, page_id, &source_path,
+            vec![page_id.clone()])
+    }
 
-        self.sync_template_candidate_for_page(page_id)?;
-        self.sync_prompt_candidate_for_page(page_id)?;
-        self.sync_resource_candidate_for_page(page_id)?;
-
-        Ok(())
+    ///
+    /// 保存commit後の既存派生同期を行う
+    ///
+    /// # 引数
+    /// * `page_id` - 保存対象
+    /// * `outcome` - 認可入口のcommit情報、旧CLI入口はNone
+    ///
+    /// # 戻り値
+    /// 成功、または元エラーdowncastとcommit情報を保持した後処理失敗。
+    ///
+    pub(super) fn sync_page_candidates_after_commit(
+        &self,
+        page_id: &PageId,
+        outcome: Option<&MutationOutcome>,
+    ) -> Result<()> {
+        let result = (|| -> Result<()> {
+            self.sync_template_candidate_for_page(page_id)?;
+            self.sync_prompt_candidate_for_page(page_id)?;
+            self.sync_resource_candidate_for_page(page_id)?;
+            Ok(())
+        })();
+        result.map_err(|err| {
+            if let Some(outcome) = outcome {
+                let mut committed = outcome.clone();
+                committed.post_processing_failure = true;
+                err.context(committed)
+            } else { err }
+        })
     }
 
     ///
@@ -477,13 +669,72 @@ impl DatabaseManager {
     /// 成功時は確定 revision と amend 実行有無を返す。
     ///
     pub(crate) fn append_page_by_id(
-        &self,
-        request: &AppendPageRequest,
+        &self, request: &AppendPageRequest,
     ) -> Result<AppendPageResult> {
-        /*
-         * 書き込みトランザクション開始
-         */
         let txn = self.db.begin_write()?;
+        let result = self.append_page_in_txn(&txn, request)?;
+        txn.commit()?;
+        self.sync_page_candidates_after_commit(&request.page_id, None)?;
+        Ok(result)
+    }
+
+    ///
+    /// 最新path認可と既存append CASを同txnで実行する
+    ///
+    /// # 引数
+    /// * `request` - 固定ID/CAS/amend入力
+    /// * `access` - policyと既存unlocked条件
+    ///
+    /// # 戻り値
+    /// append結果とcommit時対象情報。
+    ///
+    /// # 概要
+    /// 認可前cleanupを防ぎ、明示CAS/待機/派生同期の契約を保つ。
+    ///
+    pub(crate) fn append_page_authorized(
+        &self, request: &AppendPageRequest, access: &MutationAccess<'_>,
+    ) -> Result<AuthorizedMutation<AppendPageResult>> {
+        let txn = self.db.begin_write()?;
+        let prepared =
+            self.prepare_mutation_in_txn(&txn, &request.page_id, access)?;
+        let attempted = mutation_outcome_in_txn(
+            &txn,
+            &request.page_id,
+            &prepared.source_path,
+            vec![request.page_id.clone()],
+        )?;
+        let value = self
+            .append_page_in_txn(&txn, request)
+            .map_err(|err| err.context(attempted))?;
+        let mut outcome = mutation_outcome_in_txn(&txn, &request.page_id,
+            &prepared.source_path, vec![request.page_id.clone()])?;
+        txn.commit()
+            .map_err(|err| anyhow!(err).context(outcome.clone()))?;
+        outcome.committed = true;
+        self.finish_mutation_assets(&prepared.asset_cleanup, &outcome)?;
+        self.sync_page_candidates_after_commit(
+            &request.page_id,
+            Some(&outcome),
+        )?;
+        Ok(AuthorizedMutation { value, outcome })
+    }
+
+    ///
+    /// 既存append CAS本体を呼出し側txnで実行する
+    ///
+    /// # 引数
+    /// * `txn` - 保存txn
+    /// * `request` - 既存compare-and-write要求
+    ///
+    /// # 戻り値
+    /// 確定revisionとamend結果。
+    ///
+    /// # 概要
+    /// CLI互換入口と認可入口で同じ本体を共有する。
+    ///
+    fn append_page_in_txn(
+        &self, txn: &WriteTransaction, request: &AppendPageRequest,
+    ) -> Result<AppendPageResult> {
         let result = {
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
             let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
@@ -582,15 +833,6 @@ impl DatabaseManager {
             }
         };
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
-        self.sync_template_candidate_for_page(&request.page_id)?;
-        self.sync_prompt_candidate_for_page(&request.page_id)?;
-        self.sync_resource_candidate_for_page(&request.page_id)?;
-
         Ok(result)
     }
 
@@ -613,10 +855,44 @@ impl DatabaseManager {
         page_id: &PageId,
         hard_delete: bool,
     ) -> Result<Vec<PageId>> {
-        /*
-         * 書き込みトランザクション開始
-         */
         let txn = self.db.begin_write()?;
+        let (target_ids, asset_ids) = self.delete_recursive_in_txn(
+            &txn, page_id, hard_delete,
+        )?;
+        txn.commit()?;
+        /*
+         * アセットファイルの削除
+         */
+        if hard_delete {
+            self.remove_template_candidates_by_page_ids(&target_ids)?;
+            self.remove_prompt_candidates_by_page_ids(&target_ids)?;
+            self.remove_resource_candidates_by_page_ids(&target_ids)?;
+            for asset_id in asset_ids {
+                let asset_path = self.asset_file_path(&asset_id);
+                let _ = fs::remove_file(asset_path);
+            }
+        }
+
+        Ok(target_ids)
+    }
+
+    ///
+    /// 再帰削除の全件条件と更新を呼出し側txnで実行する
+    ///
+    /// # 引数
+    /// * `txn` - 操作txn
+    /// * `page_id` - 固定起点
+    /// * `hard_delete` - 既存CLIハード削除指定
+    ///
+    /// # 戻り値
+    /// 対象IDとcommit後除去するfile ID。
+    ///
+    /// # 概要
+    /// 再帰境界と全件lockを確認した後に同txnで削除する。
+    ///
+    pub(super) fn delete_recursive_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId, hard_delete: bool,
+    ) -> Result<(Vec<PageId>, Vec<AssetId>)> {
         let mut asset_ids = Vec::new();
 
         let target_ids = {
@@ -733,25 +1009,7 @@ impl DatabaseManager {
             target_ids
         };
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
-        /*
-         * アセットファイルの削除
-         */
-        if hard_delete {
-            self.remove_template_candidates_by_page_ids(&target_ids)?;
-            self.remove_prompt_candidates_by_page_ids(&target_ids)?;
-            self.remove_resource_candidates_by_page_ids(&target_ids)?;
-            for asset_id in asset_ids {
-                let asset_path = self.asset_file_path(&asset_id);
-                let _ = fs::remove_file(asset_path);
-            }
-        }
-
-        Ok(target_ids)
+        Ok((target_ids, asset_ids))
     }
 
     ///
@@ -773,102 +1031,126 @@ impl DatabaseManager {
         page_id: &PageId,
         rollback_to: u64,
     ) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
         let txn = self.db.begin_write()?;
-
-        {
-            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
-            let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
-            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
-
-            /*
-             * ページ情報取得と検証
-             */
-            let mut index = match index_table.get(page_id.clone())? {
-                Some(entry) => entry.value(),
-                None => return Err(anyhow!(DbError::PageNotFound)),
-            };
-
-            if index.is_draft() {
-                return Err(anyhow!(DbError::PageLocked));
-            }
-
-            if index.deleted() {
-                return Err(anyhow!(DbError::PageDeleted));
-            }
-
-            let latest = index.latest();
-            let earliest = index.earliest();
-            if rollback_to < earliest || rollback_to > latest {
-                return Err(anyhow!(DbError::InvalidRevision));
-            }
-
-            /*
-             * ロールバック先ソースの front matter 検証
-             */
-            let target_source = match source_table
-                .get((page_id.clone(), rollback_to))?
-            {
-                Some(entry) => entry.value(),
-                None => {
-                    return Err(anyhow!("page source not found"));
-                }
-            };
-            validate_document_front_matter(&target_source.source())?;
-            sync_mcp_primitive_name_for_source_in_txn(
-                &txn,
-                page_id,
-                &target_source.source(),
-            )?;
-            let current_path = match index.current_path() {
-                Some(path) => path.to_string(),
-                None => return Err(anyhow!("page path not found")),
-            };
-            sync_resource_uri_for_source_in_txn(
-                &txn,
-                page_id,
-                &current_path,
-                &target_source.source(),
-            )?;
-
-            /*
-             * ロック検証
-             */
-            let now = Local::now();
-            verify_page_lock_in_txn(
-                page_id,
-                &mut index,
-                &mut index_table,
-                &mut lock_table,
-                &now,
-            )?;
-
-            /*
-             * ソース削除
-             */
-            for revision in (rollback_to + 1)..=latest {
-                let _ = source_table.remove((page_id.clone(), revision))?;
-            }
-
-            /*
-             * 最新リビジョン更新
-             */
-            index.set_latest(rollback_to);
-            index_table.insert(page_id.clone(), index)?;
-        }
-
-        /*
-         * コミット
-         */
+        self.rollback_page_in_txn(&txn, page_id, rollback_to)?;
         txn.commit()?;
-
-        self.sync_template_candidate_for_page(page_id)?;
-        self.sync_prompt_candidate_for_page(page_id)?;
-        self.sync_resource_candidate_for_page(page_id)?;
-
+        self.sync_page_candidates_after_commit(page_id, None)?;
         Ok(())
+    }
+
+    ///
+    /// 既存履歴操作を呼出し側のtxnへ接続する
+    ///
+    /// # 引数
+    /// * `txn` - 操作write txn
+    /// * `page_id` - 固定ID
+    /// * `rollback_to` - 指定revision
+    ///
+    /// # 戻り値
+    /// 既存条件/更新の結果。
+    ///
+    /// # 概要
+    /// 認可入口とCLIが同じ履歴処理bodyを使いnested txnを作らない。
+    ///
+    pub(super) fn rollback_page_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        rollback_to: u64,
+    ) -> Result<()> {
+        let mut audit_revision = None;
+        let result = (|| -> Result<_> {
+            {
+                let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+                let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+                let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+
+                /*
+                 * ページ情報取得と検証
+                 */
+                let mut index = match index_table.get(page_id.clone())? {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!(DbError::PageNotFound)),
+                };
+
+                if index.is_draft() {
+                    return Err(anyhow!(DbError::PageLocked));
+                }
+
+                if index.deleted() {
+                    return Err(anyhow!(DbError::PageDeleted));
+                }
+
+                let latest = index.latest();
+                let earliest = index.earliest();
+                if rollback_to < earliest || rollback_to > latest {
+                    return Err(anyhow!(DbError::InvalidRevision));
+                }
+
+                /*
+                 * ロールバック先ソースの front matter 検証
+                 */
+                let target_source = match source_table
+                    .get((page_id.clone(), rollback_to))?
+                {
+                    Some(entry) => entry.value(),
+                    None => {
+                        return Err(anyhow!("page source not found"));
+                    }
+                };
+                audit_revision = Some(
+                    super::authorized_writes::RevisionAccessTarget {
+                        revision: rollback_to,
+                    },
+                );
+                validate_document_front_matter(&target_source.source())?;
+                sync_mcp_primitive_name_for_source_in_txn(
+                    &txn,
+                    page_id,
+                    &target_source.source(),
+                )?;
+                let current_path = match index.current_path() {
+                    Some(path) => path.to_string(),
+                    None => return Err(anyhow!("page path not found")),
+                };
+                sync_resource_uri_for_source_in_txn(
+                    &txn,
+                    page_id,
+                    &current_path,
+                    &target_source.source(),
+                )?;
+
+                /*
+                 * ロック検証
+                 */
+                let now = Local::now();
+                verify_page_lock_in_txn(
+                    page_id,
+                    &mut index,
+                    &mut index_table,
+                    &mut lock_table,
+                    &now,
+                )?;
+
+                /*
+                 * ソース削除
+                 */
+                for revision in (rollback_to + 1)..=latest {
+                    let _ = source_table.remove((page_id.clone(), revision))?;
+                }
+
+                /*
+                 * 最新リビジョン更新
+                 */
+                index.set_latest(rollback_to);
+                index_table.insert(page_id.clone(), index)?;
+            }
+
+            Ok(())
+
+        })();
+        result.map_err(|err| match audit_revision {
+            Some(target) => err.context(target),
+            None => err,
+        })
     }
 
     ///
@@ -889,72 +1171,100 @@ impl DatabaseManager {
         page_id: &PageId,
         keep_from: u64,
     ) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
         let txn = self.db.begin_write()?;
-
-        {
-            let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
-            let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
-            let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
-
-            /*
-             * ページ情報取得と検証
-             */
-            let mut index = match index_table.get(page_id.clone())? {
-                Some(entry) => entry.value(),
-                None => return Err(anyhow!(DbError::PageNotFound)),
-            };
-
-            if index.is_draft() {
-                return Err(anyhow!(DbError::PageLocked));
-            }
-
-            if index.deleted() {
-                return Err(anyhow!(DbError::PageDeleted));
-            }
-
-            let latest = index.latest();
-            let earliest = index.earliest();
-            if keep_from < earliest || keep_from > latest {
-                return Err(anyhow!(DbError::InvalidRevision));
-            }
-
-            /*
-             * ロック検証
-             */
-            let now = Local::now();
-            verify_page_lock_in_txn(
-                page_id,
-                &mut index,
-                &mut index_table,
-                &mut lock_table,
-                &now,
-            )?;
-
-            /*
-             * ソース削除
-             */
-            if keep_from > earliest {
-                for revision in earliest..=(keep_from - 1) {
-                    let _ = source_table.remove((page_id.clone(), revision))?;
-                }
-            }
-
-            /*
-             * 最古リビジョン更新
-             */
-            index.set_earliest(keep_from);
-            index_table.insert(page_id.clone(), index)?;
-        }
-
-        /*
-         * コミット
-         */
+        self.compact_page_in_txn(&txn, page_id, keep_from)?;
         txn.commit()?;
-
         Ok(())
+    }
+
+    ///
+    /// 既存履歴操作を呼出し側のtxnへ接続する
+    ///
+    /// # 引数
+    /// * `txn` - 操作write txn
+    /// * `page_id` - 固定ID
+    /// * `keep_from` - 指定revision
+    ///
+    /// # 戻り値
+    /// 既存条件/更新の結果。
+    ///
+    /// # 概要
+    /// 認可入口とCLIが同じ履歴処理bodyを使いnested txnを作らない。
+    ///
+    pub(super) fn compact_page_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        keep_from: u64,
+    ) -> Result<()> {
+        let mut audit_revision = None;
+        let result = (|| -> Result<_> {
+            {
+                let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+                let mut source_table = txn.open_table(PAGE_SOURCE_TABLE)?;
+                let mut lock_table = txn.open_table(LOCK_INFO_TABLE)?;
+
+                /*
+                 * ページ情報取得と検証
+                 */
+                let mut index = match index_table.get(page_id.clone())? {
+                    Some(entry) => entry.value(),
+                    None => return Err(anyhow!(DbError::PageNotFound)),
+                };
+
+                if index.is_draft() {
+                    return Err(anyhow!(DbError::PageLocked));
+                }
+
+                if index.deleted() {
+                    return Err(anyhow!(DbError::PageDeleted));
+                }
+
+                let latest = index.latest();
+                let earliest = index.earliest();
+                if keep_from < earliest || keep_from > latest {
+                    return Err(anyhow!(DbError::InvalidRevision));
+                }
+
+                audit_revision = Some(
+                    super::authorized_writes::RevisionAccessTarget {
+                        revision: keep_from,
+                    },
+                );
+                /*
+                 * ロック検証
+                 */
+                let now = Local::now();
+                verify_page_lock_in_txn(
+                    page_id,
+                    &mut index,
+                    &mut index_table,
+                    &mut lock_table,
+                    &now,
+                )?;
+
+                /*
+                 * ソース削除
+                 */
+                if keep_from > earliest {
+                    for revision in earliest..=(keep_from - 1) {
+                        let _ = source_table
+                            .remove((page_id.clone(), revision))?;
+                    }
+                }
+
+                /*
+                 * 最古リビジョン更新
+                 */
+                index.set_earliest(keep_from);
+                index_table.insert(page_id.clone(), index)?;
+            }
+
+            Ok(())
+
+        })();
+        result.map_err(|err| match audit_revision {
+            Some(target) => err.context(target),
+            None => err,
+        })
     }
 
     ///
@@ -975,11 +1285,78 @@ impl DatabaseManager {
         page_id: &PageId,
         rename_to: &str,
     ) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
-        let txn = self.db.begin_write()?;
+        self.rename_pages_recursive_with_destination(page_id, rename_to, true)
+    }
 
+    ///
+    /// 解決済み最終配置先へ再帰リネームする
+    ///
+    /// # 引数
+    /// * `page_id` - 起点ページのID
+    /// * `destination` - 再解釈しない検証済み最終パス
+    ///
+    /// # 戻り値
+    /// 成功、または既存の衝突・状態・ロック等のエラーを返す。
+    ///
+    pub(crate) fn rename_pages_recursive_to_path_by_id(
+        &self,
+        page_id: &PageId,
+        destination: &NormalizedWikiPath,
+    ) -> Result<()> {
+        self.rename_pages_recursive_with_destination(
+            page_id, destination.as_str(), false,
+        )
+    }
+
+    ///
+    /// 配置先の解釈を区別して既存の再帰txnを実行する
+    ///
+    /// # 引数
+    /// * `page_id` - 起点ページのID
+    /// * `rename_to` - 配置先文字列
+    /// * `reuse_basename` - 従来入口の末尾記法を使う指定
+    ///
+    /// # 戻り値
+    /// 成功、または既存のDBエラーを返す。
+    ///
+    /// # 概要
+    /// 従来入口は末尾記法、MCPの最終配置先入口は文字列を保持する。
+    /// 対象収集・衝突判定・更新は既存の同じwrite txnで行う。
+    ///
+    fn rename_pages_recursive_with_destination(
+        &self,
+        page_id: &PageId,
+        rename_to: &str,
+        reuse_basename: bool,
+    ) -> Result<()> {
+        let txn = self.db.begin_write()?;
+        self.rename_recursive_in_txn(
+            &txn, page_id, rename_to, reuse_basename,
+        )?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    ///
+    /// 呼出し側txnで再帰移動の全件条件とmappingを実行する
+    ///
+    /// # 引数
+    /// * `txn` - 操作txn
+    /// * `page_id` - 固定起点
+    /// * `rename_to` - 配置先（認可入口は確定済み）
+    /// * `reuse_basename` - 旧CLI末尾記法
+    ///
+    /// # 戻り値
+    /// 移動した対象ID。
+    ///
+    /// # 概要
+    /// 全件lock/衝突確認後にrelative suffixを維持して同txnで変更する。
+    ///
+    pub(super) fn rename_recursive_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        rename_to: &str, reuse_basename: bool,
+    ) -> Result<Vec<PageId>> {
+        let affected;
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
@@ -998,16 +1375,16 @@ impl DatabaseManager {
                 return Err(anyhow!(DbError::PageLocked));
             }
 
-            let rename_to = if let Some(suffix) =
-                Self::get_suffix(base_index.path())
-            {
+            let rename_to = if reuse_basename {
+                let suffix = Self::get_suffix(base_index.path())
+                    .ok_or_else(|| anyhow!(DbError::InvalidPath))?;
                 if rename_to.ends_with('/') {
                     format!("{}{}", rename_to, suffix)
                 } else {
                     rename_to.to_string()
                 }
             } else {
-                return Err(anyhow!(DbError::InvalidPath));
+                rename_to.to_string()
             };
 
             let base_path = match base_index.current_path() {
@@ -1020,7 +1397,7 @@ impl DatabaseManager {
             }
 
             if base_path == rename_to {
-                return Ok(());
+                return Ok(vec![page_id.clone()]);
             }
 
             let base_prefix = Self::build_recursive_prefix(&base_path);
@@ -1038,6 +1415,8 @@ impl DatabaseManager {
                 &base_path,
             )?;
 
+            affected =
+                targets.iter().map(|item| item.page_id.clone()).collect();
             let target_ids: HashSet<PageId> =
                 targets.iter().map(|item| item.page_id.clone()).collect();
 
@@ -1055,7 +1434,7 @@ impl DatabaseManager {
                         .strip_prefix(&base_prefix)
                         .unwrap_or("");
 
-                    format!("{}/{}", rename_to, suffix)
+                    Self::recursive_destination_path(&rename_to, suffix)
                 };
 
                 if !new_paths.insert(new_path.clone()) {
@@ -1137,12 +1516,7 @@ impl DatabaseManager {
             }
         }
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
-        Ok(())
+        Ok(affected)
     }
 
     ///
@@ -1220,10 +1594,37 @@ impl DatabaseManager {
         user_id: &UserId,
         token: Option<&LockToken>,
     ) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
         let txn = self.db.begin_write()?;
+        let asset_ids = self.delete_page_with_token_in_txn(
+            &txn, page_id, user_id, token,
+        )?;
+        txn.commit()?;
+        self.remove_template_candidate_by_page_id(page_id)?;
+        for asset_id in asset_ids {
+            let _ = fs::remove_file(self.asset_file_path(&asset_id));
+        }
+        Ok(())
+    }
+
+    ///
+    /// 既存単独削除を呼出し側txnで実行する
+    ///
+    /// # 引数
+    /// * `txn` - 削除txn
+    /// * `page_id` - 固定ID
+    /// * `user_id` - 操作ユーザ
+    /// * `token` - 既存token条件
+    ///
+    /// # 戻り値
+    /// commit後に除去するdraft file ID。
+    ///
+    /// # 概要
+    /// draft/通常状態とlock条件を維持して同txnで削除する。
+    ///
+    pub(super) fn delete_page_with_token_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        user_id: &UserId, token: Option<&LockToken>,
+    ) -> Result<Vec<AssetId>> {
         let mut asset_ids = Vec::new();
 
         {
@@ -1317,22 +1718,7 @@ impl DatabaseManager {
             }
         }
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
-        self.remove_template_candidate_by_page_id(page_id)?;
-
-        /*
-         * アセットファイルの削除
-         */
-        for asset_id in asset_ids {
-            let asset_path = self.asset_file_path(&asset_id);
-            let _ = fs::remove_file(asset_path);
-        }
-
-        Ok(())
+        Ok(asset_ids)
     }
 
     ///
@@ -1403,11 +1789,79 @@ impl DatabaseManager {
         restore_to: &str,
         with_assets: bool,
     ) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
-        let txn = self.db.begin_write()?;
+        self.undelete_page_by_id_with_destination(
+            page_id, restore_to, with_assets, true,
+        )
+    }
 
+    ///
+    /// 解決済み最終配置先へ復元する
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ID
+    /// * `destination` - 再解釈しない配置先
+    /// * `with_assets` - アセットも復元するか
+    ///
+    /// # 戻り値
+    /// 既存復元処理の結果を返す。
+    ///
+    pub(crate) fn undelete_page_by_id_to_path(
+        &self,
+        page_id: &PageId,
+        destination: &NormalizedWikiPath,
+        with_assets: bool,
+    ) -> Result<()> {
+        self.undelete_page_by_id_with_destination(
+            page_id, destination.as_str(), with_assets, false,
+        )
+    }
+
+    ///
+    /// 末尾記法の有無を区別して同一txnで復元する
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ID
+    /// * `restore_to` - 配置先
+    /// * `with_assets` - アセット復元指定
+    /// * `reuse_basename` - 旧末尾記法を解釈するか
+    ///
+    /// # 戻り値
+    /// 既存復元処理の結果。
+    ///
+    pub(crate) fn undelete_page_by_id_with_destination(
+        &self,
+        page_id: &PageId,
+        restore_to: &str,
+        with_assets: bool,
+        reuse_basename: bool,
+    ) -> Result<()> {
+        let txn = self.db.begin_write()?;
+        self.restore_page_in_txn(&txn, page_id, restore_to, with_assets,
+            reuse_basename)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    ///
+    /// 呼出し側txnで復元先mappingとasset復元を実行する
+    ///
+    /// # 引数
+    /// * `txn` - 復元txn
+    /// * `page_id` - 固定起点
+    /// * `restore_to` - 確定配置先
+    /// * `with_assets` - asset復元指定
+    /// * `reuse_basename` - 旧CLI末尾指定
+    ///
+    /// # 戻り値
+    /// 復元対象ID。
+    ///
+    /// # 概要
+    /// 状態・lock・衝突を維持し同txnでindex/source/assetを復元する。
+    ///
+    pub(super) fn restore_page_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        restore_to: &str, with_assets: bool, reuse_basename: bool,
+    ) -> Result<Vec<PageId>> {
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
             let mut deleted_path_table =
@@ -1437,7 +1891,7 @@ impl DatabaseManager {
             let restore_to = if let Some(suffix) =
                 Self::get_suffix(index.path())
             {
-                if restore_to.ends_with('/') {
+                if reuse_basename && restore_to.ends_with('/') {
                     format!("{}{}", restore_to, suffix)
                 } else {
                     restore_to.to_string()
@@ -1505,12 +1959,7 @@ impl DatabaseManager {
             }
         }
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
-        Ok(())
+        Ok(vec![page_id.clone()])
     }
 
     ///
@@ -1533,11 +1982,80 @@ impl DatabaseManager {
         restore_to: &str,
         with_assets: bool,
     ) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
-        let txn = self.db.begin_write()?;
+        self.undelete_pages_recursive_by_id_with_destination(
+            page_id, restore_to, with_assets, true,
+        )
+    }
 
+    ///
+    /// 解決済み最終配置先へ復元する
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ID
+    /// * `destination` - 再解釈しない配置先
+    /// * `with_assets` - アセットも復元するか
+    ///
+    /// # 戻り値
+    /// 既存復元処理の結果を返す。
+    ///
+    pub(crate) fn undelete_pages_recursive_by_id_to_path(
+        &self,
+        page_id: &PageId,
+        destination: &NormalizedWikiPath,
+        with_assets: bool,
+    ) -> Result<()> {
+        self.undelete_pages_recursive_by_id_with_destination(
+            page_id, destination.as_str(), with_assets, false,
+        )
+    }
+
+    ///
+    /// 末尾記法の有無を区別して同一txnで復元する
+    ///
+    /// # 引数
+    /// * `page_id` - 対象ID
+    /// * `restore_to` - 配置先
+    /// * `with_assets` - アセット復元指定
+    /// * `reuse_basename` - 旧末尾記法を解釈するか
+    ///
+    /// # 戻り値
+    /// 既存復元処理の結果。
+    ///
+    pub(crate) fn undelete_pages_recursive_by_id_with_destination(
+        &self,
+        page_id: &PageId,
+        restore_to: &str,
+        with_assets: bool,
+        reuse_basename: bool,
+    ) -> Result<()> {
+        let txn = self.db.begin_write()?;
+        self.restore_recursive_in_txn(&txn, page_id, restore_to, with_assets,
+            reuse_basename)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    ///
+    /// 呼出し側txnで復元先mappingとasset復元を実行する
+    ///
+    /// # 引数
+    /// * `txn` - 復元txn
+    /// * `page_id` - 固定起点
+    /// * `restore_to` - 確定配置先
+    /// * `with_assets` - asset復元指定
+    /// * `reuse_basename` - 旧CLI末尾指定
+    ///
+    /// # 戻り値
+    /// 復元対象ID。
+    ///
+    /// # 概要
+    /// 状態・lock・衝突を維持し同txnでindex/source/assetを復元する。
+    ///
+    pub(super) fn restore_recursive_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        restore_to: &str, with_assets: bool, reuse_basename: bool,
+    ) -> Result<Vec<PageId>> {
+        let affected;
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
             let mut deleted_path_table =
@@ -1568,7 +2086,7 @@ impl DatabaseManager {
             let restore_to = if let Some(suffix) =
                 Self::get_suffix(base_index.path())
             {
-                if restore_to.ends_with('/') {
+                if reuse_basename && restore_to.ends_with('/') {
                     format!("{}{}", restore_to, suffix)
                 } else {
                     restore_to.to_string()
@@ -1596,6 +2114,9 @@ impl DatabaseManager {
                 &base_deleted_path,
             )?;
 
+            affected =
+                targets.iter().map(|item| item.page_id.clone()).collect();
+
             /*
              * 衝突チェックと復帰先生成
              */
@@ -1612,7 +2133,7 @@ impl DatabaseManager {
                         .strip_prefix(&base_prefix)
                         .unwrap_or("");
 
-                    format!("{}/{}", restore_to, suffix)
+                    Self::recursive_destination_path(&restore_to, suffix)
                 };
 
                 if !new_paths.insert(new_path.clone()) {
@@ -1700,12 +2221,7 @@ impl DatabaseManager {
             }
         }
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
-        Ok(())
+        Ok(affected)
     }
 
     ///
@@ -1827,6 +2343,47 @@ impl DatabaseManager {
     where
         S: AsRef<str>,
     {
+        self.rename_page_with_destination(path, dst_path, true)
+    }
+
+    ///
+    /// 解決済み配置先へ非再帰リネームする
+    ///
+    /// # 引数
+    /// * `path` - 現在パス
+    /// * `destination` - 再解釈しない最終パス
+    ///
+    /// # 戻り値
+    /// 既存リネーム処理の結果。
+    ///
+    pub(crate) fn rename_page_to_path(
+        &self,
+        path: &str,
+        destination: &NormalizedWikiPath,
+    ) -> Result<()> {
+        self.rename_page_with_destination(path, destination.as_str(), false)
+    }
+
+    ///
+    /// 配置先の末尾記法を区別する既存処理入口
+    ///
+    /// # 引数
+    /// * `path` - 現在パス
+    /// * `dst_path` - 配置先
+    /// * `reuse_basename` - 旧末尾記法を解釈するか
+    ///
+    /// # 戻り値
+    /// 既存リネーム処理の結果。
+    ///
+    fn rename_page_with_destination<S>(
+        &self,
+        path: S,
+        dst_path: S,
+        reuse_basename: bool,
+    ) -> Result<()>
+    where
+        S: AsRef<str>,
+    {
         if is_root_path(path.as_ref()) {
             return Err(anyhow!(DbError::RootPageProtected));
         }
@@ -1835,7 +2392,7 @@ impl DatabaseManager {
 
         let dst_path = {
             if let Some(suffix) = Self::get_suffix(&path) {
-                if dst_path.as_ref().ends_with("/") {
+                if reuse_basename && dst_path.as_ref().ends_with("/") {
                     format!("{}{}", dst_path.as_ref(), suffix)
                 } else {
                     dst_path.as_ref().to_string()
@@ -1849,7 +2406,32 @@ impl DatabaseManager {
          * 書き込みトランザクション開始
          */
         let txn = self.db.begin_write()?;
+        self.rename_page_in_txn(&txn, &path, &dst_path, None)?;
+        txn.commit()?;
+        Ok(())
+    }
 
+    ///
+    /// 最新indexで確定したID/pathを同txnで移動する
+    ///
+    /// # 引数
+    /// * `txn` - 移動txn
+    /// * `path` - 元path
+    /// * `dst_path` - 最終先path
+    /// * `expected_id` - 認可入口の固定ID、旧CLIはNone
+    ///
+    /// # 戻り値
+    /// 既存移動処理の結果。
+    ///
+    /// # 概要
+    /// pathの別IDへの付替を追従せず、同txnの期待対象を変更する。
+    ///
+    pub(super) fn rename_page_in_txn(
+        &self, txn: &WriteTransaction, path: &str, dst_path: &str,
+        expected_id: Option<&PageId>,
+    ) -> Result<()> {
+        let path = path.to_string();
+        let dst_path = dst_path.to_string();
         {
             let mut path_table = txn.open_table(PAGE_PATH_TABLE)?;
             let mut index_table = txn.open_table(PAGE_INDEX_TABLE)?;
@@ -1862,6 +2444,9 @@ impl DatabaseManager {
                 Some(entry) => entry.value(),
                 None => return Err(anyhow!(DbError::PageNotFound)),
             };
+            if expected_id.is_some_and(|expected| *expected != page_id) {
+                return Err(anyhow!("page path index is inconsistent"));
+            }
 
             if path_table.get(&dst_path)?.is_some() {
                 return Err(anyhow!(DbError::PageAlreadyExists));
@@ -1929,12 +2514,25 @@ impl DatabaseManager {
             path_table.insert(&dst_path, page_id)?;
         }
 
-        /*
-         * コミット
-         */
-        txn.commit()?;
-
         Ok(())
+    }
+
+    ///
+    /// 再帰配置先の区切りをrootでも一度だけ結合する
+    ///
+    /// # 引数
+    /// * `destination` - 解決済み起点の配置先
+    /// * `suffix` - 元の配下から得た相対suffix
+    ///
+    /// # 戻り値
+    /// root指定でも二重区切りにしない配下の配置先を返す。
+    ///
+    fn recursive_destination_path(destination: &str, suffix: &str) -> String {
+        if destination == "/" {
+            format!("/{}", suffix)
+        } else {
+            format!("{}/{}", destination, suffix)
+        }
     }
 
     ///
@@ -1969,5 +2567,30 @@ impl DatabaseManager {
             .rsplit('/')
             .find(|s| !s.is_empty())
             .map(|s| s.to_string())
+    }
+}
+
+
+#[cfg(test)]
+mod final_destination_tests {
+    use super::DatabaseManager;
+
+    ///
+    /// 再帰配置先のroot結合が二重区切りにならないことを検証する
+    ///
+    /// # 注記
+    /// 同じ相対suffixをrootと通常配置先へ結合し最終値を比較する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn recursive_root_destination_preserves_canonical_child_path() {
+        assert_eq!(DatabaseManager::recursive_destination_path(
+            "/", "child/topic",
+        ), "/child/topic");
+        assert_eq!(DatabaseManager::recursive_destination_path(
+            "/archive", "child/topic",
+        ), "/archive/child/topic");
     }
 }

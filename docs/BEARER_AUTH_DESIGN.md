@@ -370,6 +370,8 @@ struct AuthContext {
   - Basic認証時は `None` とする
 
 認証種別そのもの、更新前後の有効期限、TTL延長判定結果は認証文脈へ含めない。
+監査用の不変UserIdは認証成功時のUserInfoから補助情報に保持する。既存のuser_id accessorが
+ユーザ名を表す実装と、JSONLの不変user_idを混同しない。Basicもtoken_id=nullで監査する。
 
 `NoBasicAuth` と `ReadOnly` の責務差分はここで明確に分ける。`NoBasicAuth` は Basic認証入口で 401 判定に使用する属性であり、`ReadOnly` は認証成功後の write 系認可を抑止する属性である。したがって、両者は同じ属性集合に属していても、消費地点は同一ではない。
 
@@ -536,7 +538,11 @@ fn require_scope(
 
 Basic認証時は全スコープを保持している前提のため、この判定を常に通過する。
 
-path prefix 制約判定も同様に共通関数または共通ガードとして提供し、Bearer認証時のみ適用する。
+path prefix 制約判定も共通関数/ガードで提供し、Basicは全領域、Bearerは保存済みprefixで判定する。
+パス規則はREQUIREMENTS.md 2.2を正とし、入力処理と境界判定をHTTP/MCPに依存しない共通責務へ分離する。
+ID対象の状態解決、認可とread snapshot/write txnの一致、cleanup前ガードは
+[REST_API_AUTHORIZATION_DESIGN.md](REST_API_AUTHORIZATION_DESIGN.md)を参照する。
+返却親の404例外はREST_API_SPECS.mdに従う。
 
 ```rust
 fn require_path_prefix(
@@ -566,7 +572,10 @@ fn require_path_prefix(
 - ページ作成は `create`
 - ページ更新、rename、アセット upload は `update`
 - ページ削除とアセット削除は `delete`
-- `GET /api/users/me` は `read`
+- ページ復元は`create`、lock取得/延長は`create`または`update`、lock解除は`update`
+- rollbackは`update`、compactionは`delete`。共有handler全体を候補scopeのORで許可しない
+- `GET /api/hello`と`GET /api/users/me`は`read`、パス認可は適用しない
+- helloのread要求は仕様であり、現行実装のガード欠落は後続で修正する
 
 個別 API の列挙を設計書内へ重複転記して管理し始めると同期漏れの原因になるため、詳細な対応表は `docs/REST_API_SPECS.md` を正とし、本章では実装反映の原則のみを定義する。
 MCP アセット Tools でも同じ Bearer scope 判定原則を適用し、参照系は `read`、upload は `update`、delete は `delete` として扱う。

@@ -15,6 +15,7 @@ pub(crate) mod http_server;
 pub(crate) mod markdown_source;
 pub(crate) mod mcp;
 pub(crate) mod rest_api;
+pub(crate) mod wiki_path;
 
 use std::sync::Arc;
 

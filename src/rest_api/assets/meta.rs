@@ -11,7 +11,7 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::{StatusCode, header};
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use chrono::SecondsFormat;
 use serde_json::json;
 
@@ -20,7 +20,6 @@ use crate::database::types::{AssetId, BearerScope};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
 /// 孤立した user_id を表示する際の代替ユーザ名
-const UNKNOWN_USERNAME: &str = "unknown";
 
 ///
 /// GET /api/assets/{asset_id}/meta の実体
@@ -40,9 +39,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * アセットID解析
@@ -68,39 +68,28 @@ pub async fn get(
     /*
      * アセット情報取得
      */
-    let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "asset not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "asset lookup failed",
-            ));
-        }
-    };
-
-    if asset_info.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
-    }
-
-    /*
-     * ユーザ名の取得
-     */
-    let user_name = match state.db().get_user_name_by_id(&asset_info.user()) {
-        Ok(Some(name)) => name,
-        Ok(None) => UNKNOWN_USERNAME.to_string(),
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "user lookup failed",
-            ));
+    let asset = match state.db().read_asset_authorized(
+        crate::database::AssetSelector::Id(&asset_id),
+        &crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+        crate::database::AssetReadMode::Metadata,
+    ) {
+        Ok(asset) => asset,
+        Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::asset_access_error(
+                &req, &err, "asset lookup failed",
+            ) { return Ok(resp); }
+            return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+                "asset lookup failed"));
         }
     };
+    let target = crate::database::asset_read_target(
+        &asset.owner,
+        Some(&asset.record.info),
+    )
+    .map_err(actix_web::error::ErrorInternalServerError)?;
+    req.extensions_mut().insert(target);
+    let asset_info = asset.record.info;
+    let user_name = asset.record.user_name;
 
     /*
      * レスポンス生成

@@ -36,9 +36,6 @@ use crate::database::types::BearerScope;
 use crate::http_server::app_state::AppState;
 use crate::rest_api::{AuthContext, require_request_scope};
 
-/// ページパスで禁止する文字
-/// (追加しやすいように集約する)
-const FORBIDDEN_PATH_CHARS: &[char] = &['\\'];
 
 #[derive(Deserialize)]
 struct CreatePageQuery {
@@ -70,9 +67,10 @@ pub async fn post(
     state: web::Data<Arc<RwLock<AppState>>>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Create) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * クエリ取得と検証
@@ -89,9 +87,18 @@ pub async fn post(
         }
     };
 
-    if let Err(message) = validate_page_path(&query.path) {
-        return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
-    }
+    let mut query = query.into_inner();
+    query.path = match normalize_page_path(&query.path) {
+        Ok(path) => path,
+        Err(message) => {
+            return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
+        }
+    };
+    crate::rest_api::audit::remember_path(
+        &req,
+        crate::wiki_path::NormalizedWikiPath::from_stored(&query.path),
+    );
+
 
     /*
      * ボディ検証
@@ -134,10 +141,17 @@ pub async fn post(
      */
     let (page_id, lock_info) = match state
         .db()
-        .create_draft_page(&query.path, auth_user)
+        .create_draft_authorized(&query.path, &auth_user,
+            &crate::auth::PageAccessPolicy::new(auth.path_prefixes()))
     {
-        Ok(result) => result,
+        Ok(result) => {
+            req.extensions_mut().insert(result.outcome);
+            result.value
+        },
         Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::mutation_access_error(
+                &req, &err, "create draft failed",
+            ) { return Ok(resp); }
             if let Some(DbError::PageAlreadyExists) =
                 err.downcast_ref::<DbError>()
             {
@@ -184,15 +198,32 @@ pub async fn post(
 /// 検証に成功した場合は`Ok(())`を返す。
 ///
 pub(crate) fn validate_page_path(path: &str) -> Result<(), &'static str> {
+    // CLIの従来配置先末尾記法を保つ入口。RESTは最終値取得を使う。
     if !path.starts_with('/') {
         return Err("path must be absolute");
     }
-
-    if path.chars().any(|ch| FORBIDDEN_PATH_CHARS.contains(&ch)) {
+    if path.contains('\\') {
         return Err("path contains invalid character");
     }
-
     Ok(())
+}
+
+///
+/// 通常入力の最終パスを一度だけ取得する
+///
+/// # 引数
+/// * `path` - 解釈済み入力
+///
+/// # 戻り値
+/// dot解決済みパス、または入力エラーを返す。
+///
+pub(crate) fn normalize_page_path(path: &str) -> Result<String, &'static str> {
+    if !path.starts_with('/') {
+        return Err("path must be absolute");
+    }
+    crate::wiki_path::NormalizedWikiPath::parse(path)
+        .map(|value| value.as_str().to_string())
+        .map_err(|_| "path contains invalid character")
 }
 
 ///

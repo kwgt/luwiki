@@ -15,7 +15,7 @@ use actix_web::{http::header, HttpResponse, web};
 use crate::database::short_id::decode_page_short_id;
 use crate::http_server::app_state::AppState;
 use crate::http_server::static_files;
-use crate::rest_api;
+use crate::wiki_path::NormalizedWikiPath;
 
 ///
 /// ルートページ表示
@@ -250,6 +250,9 @@ pub(crate) async fn get_rev(
 /// # 戻り値
 /// 表示結果のHTTPレスポンス
 ///
+/// # 概要
+/// 解釈済みURLのtailを共通解決してから既存の表示状態を取得する。
+///
 async fn get_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,
@@ -257,10 +260,10 @@ async fn get_by_path(
     /*
      * パスの検証
      */
-    let page_path = normalize_path(&raw_path);
-    if let Err(reason) = rest_api::validate_page_path(&page_path) {
-        return HttpResponse::BadRequest().body(reason);
-    }
+    let page_path = match normalize_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return HttpResponse::BadRequest().body(error.to_string()),
+    };
 
     /*
      * ページ情報の取得
@@ -299,6 +302,9 @@ async fn get_by_path(
 /// # 戻り値
 /// 表示結果のHTTPレスポンス
 ///
+/// # 概要
+/// 共通入力規則を確認してから既存のrevision画面処理を行う。
+///
 async fn get_rev_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,
@@ -306,10 +312,10 @@ async fn get_rev_by_path(
     /*
      * パスの検証
      */
-    let page_path = normalize_path(&raw_path);
-    if let Err(reason) = rest_api::validate_page_path(&page_path) {
-        return HttpResponse::BadRequest().body(reason);
-    }
+    let page_path = match normalize_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return HttpResponse::BadRequest().body(error.to_string()),
+    };
 
     /*
      * ページ情報の取得
@@ -348,6 +354,9 @@ async fn get_rev_by_path(
 /// # 戻り値
 /// 表示結果のHTTPレスポンス
 ///
+/// # 概要
+/// 入力表記を共通解決し、不正表記を編集画面へ引き継がない。
+///
 async fn get_edit_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,
@@ -355,10 +364,10 @@ async fn get_edit_by_path(
     /*
      * パスの検証
      */
-    let page_path = normalize_path(&raw_path);
-    if let Err(reason) = rest_api::validate_page_path(&page_path) {
-        return HttpResponse::BadRequest().body(reason);
-    }
+    let page_path = match normalize_path(&raw_path) {
+        Ok(path) => path,
+        Err(error) => return HttpResponse::BadRequest().body(error.to_string()),
+    };
 
     /*
      * ページ情報の取得
@@ -400,6 +409,9 @@ async fn get_edit_by_path(
 /// # 戻り値
 /// 表示結果のHTTPレスポンス
 ///
+/// # 概要
+/// 一覧URLの入力表記を検証し、一覧データの認可接続はMS3で行う。
+///
 async fn get_pages_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,
@@ -407,9 +419,8 @@ async fn get_pages_by_path(
     /*
      * パスの検証
      */
-    let page_path = normalize_path(&raw_path);
-    if let Err(reason) = rest_api::validate_page_path(&page_path) {
-        return HttpResponse::BadRequest().body(reason);
+    if let Err(error) = normalize_path(&raw_path) {
+        return HttpResponse::BadRequest().body(error.to_string());
     }
 
     /*
@@ -433,15 +444,13 @@ async fn get_pages_by_path(
 /// * `raw_path` - 正規化前のパス
 ///
 /// # 戻り値
-/// 正規化済みのページパス
+/// 正規化済みのページパス、または入力不正を返す。
+/// Actix解釈済みのtailへ一度だけrootを結合し、再decodeしない。
 ///
-fn normalize_path(raw_path: &str) -> String {
-    let trimmed = raw_path.trim_start_matches('/');
-    if trimmed.is_empty() {
-        return "/".to_string();
-    }
-
-    format!("/{}", trimmed)
+fn normalize_path(raw_path: &str) -> anyhow::Result<String> {
+    let absolute = format!("/{}", raw_path);
+    NormalizedWikiPath::parse(&absolute)
+        .map(NormalizedWikiPath::into_string)
 }
 
 ///
@@ -572,4 +581,108 @@ fn render_page_html(
         .insert_header((header::CACHE_CONTROL, "no-store, no-cache"))
         .content_type("text/html; charset=utf-8")
         .body(html)
+}
+
+
+#[cfg(test)]
+mod path_input_tests {
+    use super::normalize_path;
+
+    ///
+    /// 直接URLのtail解決と禁止表記、二重decodeなしを検証する
+    ///
+    /// # 注記
+    /// root、dot、leading slash、末尾/、%表記を入力して比較する。
+    ///
+    /// # 概要
+    /// 操作ごとの許可条件と拒否条件を比較して確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn browser_tail_keeps_raw_validation_and_single_root_join() {
+        assert_eq!(normalize_path("").unwrap(), "/");
+        assert_eq!(normalize_path("docs/../a").unwrap(), "/a");
+        assert_eq!(normalize_path("docs/%2E%2E/a").unwrap(),
+            "/docs/%2E%2E/a");
+        assert!(normalize_path("/docs").is_err());
+        assert!(normalize_path("docs/").is_err());
+        assert!(normalize_path("../docs").is_err());
+    }
+    ///
+    /// 実際のActix routeとPath extractorで直接URL解釈を確認する
+    ///
+    /// # 概要
+    /// productionの閲覧handlerを隔離stateで使い、解決先IDを確認する。
+    ///
+    /// # 注記
+    /// 一回decodeとraw禁止をin-process HTTP requestで検証する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[actix_web::test]
+    async fn browser_http_path_decodes_once_before_common_resolution() {
+        use std::sync::{Arc, RwLock};
+
+        use actix_web::{App, test, web};
+        use tempfile::tempdir;
+
+        use crate::database::DatabaseManager;
+        use crate::fts::FtsIndexConfig;
+        use crate::http_server::app_state::AppState;
+        use crate::http_server::FrontendConfig;
+
+        /*
+         * 閲覧先のroot、dot解決先、percent文字列の保存ページを用意する
+         */
+        let dir = tempdir().unwrap();
+        let manager = DatabaseManager::open(
+            dir.path().join("direct-url.redb"), dir.path().join("assets"),
+        ).unwrap();
+        manager.add_user("url_test", "pass", None).unwrap();
+        let mut ids = Vec::new();
+        for path in ["/", "/a", "/docs/%2E%2E/a"] {
+            let id = manager.create_page(path, "url_test", "body".to_string())
+                .unwrap();
+            ids.push(id.to_string());
+        }
+        let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
+            manager, FrontendConfig::default(),
+            FtsIndexConfig::new(dir.path().join("fts")),
+            None, "URL test".to_string(), None, 1024, None,
+        ))));
+        let app = test::init_service(App::new().app_data(state)
+            .route("/wiki/{page_path:.*}", web::get().to(super::get)))
+            .await;
+
+        /*
+         * HTTP解釈後のdot解決とpercent保持が正しい保存IDを選ぶ
+         */
+        for (uri, id) in [
+            ("/wiki/", &ids[0]),
+            ("/wiki/docs/%2E%2E/a", &ids[1]),
+            ("/wiki/docs/%252E%252E/a", &ids[2]),
+        ] {
+            let response = test::call_service(&app,
+                test::TestRequest::get().uri(uri).to_request()).await;
+            assert_eq!(response.status(), 200);
+            let body = test::read_body(response).await;
+            assert!(std::str::from_utf8(&body).unwrap().contains(id));
+        }
+
+        /*
+         * leading区切りを消さず禁止文字とroot越えも拒否する
+         */
+        for uri in [
+            "/wiki/%2Fdocs", "/wiki/docs/", "/wiki/docs/%20a",
+            "/wiki/docs/%00a", "/wiki/%2E%2E/a",
+        ] {
+            let response = test::call_service(&app,
+                test::TestRequest::get().uri(uri).to_request()).await;
+            assert_eq!(response.status(), 400, "{uri}");
+        }
+    }
+
 }

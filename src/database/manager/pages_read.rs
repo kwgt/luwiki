@@ -15,6 +15,8 @@ use chrono::Local;
 use redb::{ReadableDatabase, ReadableMultimapTable, ReadableTable};
 
 use super::DatabaseManager;
+use super::authorized_pages::PathPrefixDenied;
+use crate::auth::PageAccessPolicy;
 use crate::database::entries::{PageIndexEntry, PageListEntry, PageSourceEntry};
 use crate::database::schema::{
     DELETED_PAGE_PATH_TABLE,
@@ -566,9 +568,63 @@ impl DatabaseManager {
         base_path: &str,
         with_deleted: bool,
     ) -> Result<Vec<PageListEntry>> {
+        self.list_page_entries_by_prefix_with_policy(
+            base_path, with_deleted, None,
+        )
+    }
+
+    ///
+    /// 最終prefixを認可して同snapshotの候補DTOを取得する
+    ///
+    /// # 引数
+    /// * `base_path` - 入力解決済み要求prefix
+    /// * `with_deleted` - 削除済み候補を含めるか
+    /// * `policy` - 許可prefix
+    ///
+    /// # 戻り値
+    /// 認可済み一覧または型付き拒否/内部不整合。
+    ///
+    pub(crate) fn list_authorized_page_entries(
+        &self,
+        base_path: &str,
+        with_deleted: bool,
+        policy: &PageAccessPolicy<'_>,
+    ) -> Result<Vec<PageListEntry>> {
+        self.list_page_entries_by_prefix_with_policy(
+            base_path, with_deleted, Some(policy),
+        )
+    }
+
+    ///
+    /// 同snapshot一覧処理を旧入口と認可入口で共有する
+    ///
+    /// # 引数
+    /// * `base_path` - 起点prefix
+    /// * `with_deleted` - 削除済み候補を含めるか
+    /// * `policy` - REST認可制約、旧入口はNone
+    ///
+    /// # 戻り値
+    /// 候補DTO、または対象認可/整合性エラー。
+    ///
+    /// # 概要
+    /// 認可済みprefix候補に同じread txnのindex/source/userを適用する。
+    ///
+    fn list_page_entries_by_prefix_with_policy(
+        &self,
+        base_path: &str,
+        with_deleted: bool,
+        policy: Option<&PageAccessPolicy<'_>>,
+    ) -> Result<Vec<PageListEntry>> {
         /*
          * 読み取りトランザクション開始
          */
+        if let Some(policy) = policy {
+            if !policy.allows(base_path) {
+                return Err(PathPrefixDenied {
+                    path: base_path.to_string(), parent_candidate: false,
+                }.into());
+            }
+        }
         let txn = self.db.begin_read()?;
         let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
         let path_table = txn.open_table(PAGE_PATH_TABLE)?;
@@ -586,6 +642,7 @@ impl DatabaseManager {
             &user_table,
             base_path,
             &mut entries,
+            policy,
         )?;
 
         /*
@@ -601,6 +658,7 @@ impl DatabaseManager {
                 &user_table,
                 base_path,
                 &mut entries,
+                policy,
             )?;
         }
 
@@ -882,6 +940,43 @@ impl DatabaseManager {
         &self,
         page_id: &PageId,
     ) -> Result<Option<AppendConflictState>> {
+        self.append_conflict_state_with_policy(page_id, None)
+    }
+
+    ///
+    /// append待機状態を同snapshotの最新path認可後に取得する
+    ///
+    /// # 引数
+    /// * `page_id` - 固定対象
+    /// * `policy` - 保存prefix制約
+    ///
+    /// # 戻り値
+    /// 既存待機状態または最新対象認可拒否。
+    ///
+    pub(crate) fn get_authorized_append_conflict_state(
+        &self, page_id: &PageId, policy: &PageAccessPolicy<'_>,
+    ) -> Result<Option<AppendConflictState>> {
+        self.append_conflict_state_with_policy(page_id, Some(policy))
+    }
+
+    ///
+    /// 同snapshotでappend待機状態を生成する
+    ///
+    /// # 引数
+    /// * `page_id` - 固定対象
+    /// * `policy` - 認可入口の制約、旧入口はNone
+    ///
+    /// # 戻り値
+    /// 最新状態から得た待機情報。
+    ///
+    /// # 概要
+    /// index/source/lockを一つのread snapshotで読む。
+    ///
+    fn append_conflict_state_with_policy(
+        &self,
+        page_id: &PageId,
+        policy: Option<&PageAccessPolicy<'_>>,
+    ) -> Result<Option<AppendConflictState>> {
         /*
          * 読み取りトランザクション開始
          */
@@ -899,6 +994,13 @@ impl DatabaseManager {
         /*
          * draft / 通常ページの状態を組み立てる
          */
+        if let Some(policy) = policy {
+            super::authorized_pages::authorize_index(&index, policy)?;
+            if index.deleted() {
+                return Err(anyhow!(crate::database::DbError::PageDeleted));
+            }
+        }
+
         if index.is_draft() {
             let locked = match find_lock_by_page(&lock_table, page_id)? {
                 Some((_, info)) => info.expire() > now,
@@ -1013,6 +1115,7 @@ impl DatabaseManager {
 /// * `user_table` - ユーザ情報テーブル
 /// * `base_path` - 起点パス
 /// * `entries` - 収集結果の格納先
+/// * `policy` - 認可付き入口のprefix制約、旧入口はNone
 ///
 /// # 戻り値
 /// 収集に成功した場合は`Ok(())`を返す。
@@ -1024,6 +1127,7 @@ fn collect_page_list_entries<T1, T2, T3, T4>(
     user_table: &T4,
     base_path: &str,
     entries: &mut Vec<PageListEntry>,
+    policy: Option<&PageAccessPolicy<'_>>,
 ) -> Result<()>
 where
     T1: ReadableTable<String, PageId>,
@@ -1059,6 +1163,13 @@ where
 
         if index.deleted() {
             continue;
+        }
+
+        if let Some(policy) = policy {
+            let actual = index.authorization_path()?;
+            if actual.as_str() != path || !policy.allows(actual.as_str()) {
+                return Err(anyhow!("page path index is inconsistent"));
+            }
         }
 
         let latest_revision = index.latest();
@@ -1097,6 +1208,7 @@ where
 /// * `user_table` - ユーザ情報テーブル
 /// * `base_path` - 起点パス
 /// * `entries` - 収集結果の格納先
+/// * `policy` - 認可付き入口のprefix制約、旧入口はNone
 ///
 /// # 戻り値
 /// 収集に成功した場合は`Ok(())`を返す。
@@ -1108,6 +1220,7 @@ fn collect_deleted_page_list_entries<T1, T2, T3, T4>(
     user_table: &T4,
     base_path: &str,
     entries: &mut Vec<PageListEntry>,
+    policy: Option<&PageAccessPolicy<'_>>,
 ) -> Result<()>
 where
     T1: ReadableMultimapTable<String, PageId>,
@@ -1144,6 +1257,13 @@ where
 
             if !index.deleted() {
                 continue;
+            }
+
+            if let Some(policy) = policy {
+                let actual = index.authorization_path()?;
+                if actual.as_str() != path || !policy.allows(actual.as_str()) {
+                    return Err(anyhow!("page path index is inconsistent"));
+                }
             }
 
             let latest_revision = index.latest();

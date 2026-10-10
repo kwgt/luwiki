@@ -8,6 +8,10 @@
 //! HTTPサーバに関する処理を集約するモジュール
 //!
 
+#[cfg(test)]
+mod startup_audit_tests;
+#[cfg(test)]
+mod lifecycle_tests;
 pub(crate) mod app_state;
 pub(crate) mod logger;
 pub(crate) mod page_view;
@@ -29,7 +33,8 @@ use anyhow::{Result, anyhow};
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{info, warn};
 use tokio::runtime::Builder;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
+use tokio::task::JoinHandle;
 #[cfg(target_os = "windows")]
 use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
 use tokio::time;
@@ -184,15 +189,10 @@ pub(crate) fn run(
     /*
      * サーバインスタンスの生成
      */
-    let audit_sink = if mcp_endpoint.is_some() {
-        let config = audit_config
-            .clone()
-            .ok_or_else(|| anyhow!("audit config missing for MCP"))?;
-        run_audit_retention(&config)?;
-        Some(Arc::new(RwLock::new(build_audit_sink(&config))))
-    } else {
-        None
-    };
+    let audit_sink = initialize_audit_sink(audit_config.as_ref())?;
+    let retention = AuditRetentionPolicy::new(
+        audit_config.as_ref().unwrap().retention,
+    );
     let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
         manager,
         frontend_config,
@@ -201,20 +201,12 @@ pub(crate) fn run(
         wiki_title,
         wiki_icon,
         asset_limit_size,
-        audit_sink,
+        Some(audit_sink.clone()),
     ))));
     let mcp_session_manager =
         mcp_endpoint.as_ref().map(|_| ManagedSessionManager::new());
 
-    /*
-     * MCP session sweep task を Tokio runtime 上で起動する
-     */
-    if let Some(manager) = mcp_session_manager.as_ref() {
-        let _guard = rt.enter();
-        manager.start_background_sweep();
-    }
-
-    let server = create_server(
+    let server = match create_server(
         addr,
         port,
         state.clone(),
@@ -224,73 +216,315 @@ pub(crate) fn run(
         cert_is_explicit,
         key_path,
         mcp_endpoint,
-        mcp_session_manager,
-    )?;
+        mcp_session_manager.clone(),
+    ) {
+        Ok(server) => server,
+        Err(error) => return complete_shutdown(
+            Err(error), None, Ok(()), &audit_sink,
+        ),
+    };
+
+
+    /*
+     * MCP session sweep task を Tokio runtime 上で起動する
+     */
+    if let Some(manager) = mcp_session_manager.as_ref() {
+        let _guard = rt.enter();
+        manager.start_background_sweep();
+    }
 
     #[allow(unused)]
     let has_external_shutdown = shutdown_signal.is_some();
 
     /*
-     * ロック期限切れ監視タスクの起動
+     * 同期sink保守と既存lock cleanupへ停止通知/JoinHandleを保持する
      */
-    rt.spawn(lock_cleanup_task(state));
-
-    /*
-     * 外部停止通知待ちタスクの起動
-     */
-    if let Some(signal) = shutdown_signal {
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let retention_task = rt.spawn(audit_retention_task(
+        audit_sink.clone(), retention, stop_rx.clone(),
+    ));
+    let cleanup_task = rt.spawn(lock_cleanup_task(state.clone(), stop_rx));
+    let signal_task = if let Some(signal) = shutdown_signal {
         let _guard = rt.enter();
-        shutdown_signal_hook(server.handle(), signal);
-    }
+        Some(shutdown_signal_hook(server.handle(), signal))
+    } else { None };
+    let handle = server.handle();
 
     /*
-     * 起動完了通知
+     * 起動callback失敗は未poll serverとstopを並行に処理する
      */
-    if let Some(callback) = on_started {
-        callback()?;
-    }
-
-    /*
-     * Tokioランタイムでのサーバの起動
-     */
+    let startup_error = on_started.and_then(|callback| callback().err());
+    let startup_failed = startup_error.is_some();
     info!("HTTP server start");
-
-    match rt.block_on(async {
+    let (server_result, background_result) = rt.block_on(async {
         #[cfg(target_os = "windows")]
-        if !has_external_shutdown {
-            windows_event_fook(server.handle());
+        if !has_external_shutdown && !startup_failed {
+            windows_event_fook(handle.clone());
         }
+        let result = if startup_failed {
+            let (result, ()) = tokio::join!(server, handle.stop(true));
+            result
+        } else {
+            server.await
+        };
 
-        server.await
-    }) {
-        Ok(()) => {
-            info!("HTTP server exit");
-            Ok(())
+        /*
+         * 稼働要求終了後に補助taskを停止しguardなしで完了待ちする
+         */
+        let _ = stop_tx.send(true);
+        let (retention, cleanup) = tokio::join!(retention_task, cleanup_task);
+
+        /*
+         * 同期MCP業務/recordをstate barrierで待ちqueued業務を止める
+         */
+        let gate_failed = match state.write() {
+            Ok(mut state) => { state.begin_shutdown(); false }
+            Err(_) => true,
+        };
+        let session_failed = if let Some(manager) = mcp_session_manager {
+            manager.shutdown().await.is_err()
+        } else { false };
+        if let Some(task) = signal_task {
+            task.abort();
+            let _ = task.await;
         }
+        let background = if retention.is_err() || cleanup.is_err()
+            || gate_failed || session_failed
+        {
+            Err(anyhow!("background task completion failed"))
+        } else { Ok(()) };
+        (result.map_err(anyhow::Error::from), background)
+    });
 
-        Err(err) => {
-            info!("HTTP server failed");
-            Err(err.into())
+    /*
+     * server Errでも保留appendとwriter最終flushを試み終了Resultへ返す
+     */
+    complete_shutdown(
+        server_result, startup_error, background_result, &audit_sink,
+    )
+}
+
+///
+/// 監査保持の固定内部周期（秒）
+///
+const AUDIT_MAINTENANCE_SECS: u64 = 60;
+
+///
+/// 終了時に確認した独立した失敗
+///
+#[derive(Debug)]
+struct ShutdownFailure {
+    /// server.await又はbindの元error
+    server: Option<anyhow::Error>,
+    /// 起動callbackの元error
+    startup: Option<anyhow::Error>,
+    /// 補助taskの完了error
+    background: Option<anyhow::Error>,
+    /// 保留append/writer flush/lockのerror
+    audit: Option<anyhow::Error>,
+}
+
+impl std::fmt::Display for ShutdownFailure {
+    ///
+    /// 内部FS pathや例外本文を出さず失敗種別を表示する
+    ///
+    /// # 引数
+    /// * `formatter` - 診断出力先
+    ///
+    /// # 戻り値
+    /// 固定診断の書込結果。
+    ///
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>)
+        -> std::fmt::Result
+    {
+        write!(formatter,
+            "shutdown failed: server={} startup={} background={} audit={}",
+            self.server.is_some(), self.startup.is_some(),
+            self.background.is_some(), self.audit.is_some())
+    }
+}
+
+impl std::error::Error for ShutdownFailure {}
+
+///
+/// 稼働要求と補助task終了後に最終flushと結果統合を行う
+///
+/// # 引数
+/// * `server` - 元server/bind結果
+/// * `startup` - 起動callback error
+/// * `background` - 補助task完了結果
+/// * `sink` - 終了後も保持した共通sink参照
+///
+/// # 戻り値
+/// 全成功ならOk、独立した元失敗を保持した終了Err。
+///
+/// # 概要
+/// server/bind失敗でも監査最終flushを試み、成功終了としない。
+///
+fn complete_shutdown(
+    server: Result<()>,
+    startup: Option<anyhow::Error>,
+    background: Result<()>,
+    sink: &Arc<RwLock<AuditSink>>,
+) -> Result<()> {
+    /*
+     * DB/state guardやtask joinを跨がず同期flushを試行する
+     */
+    let audit = match sink.write() {
+        Ok(mut sink) => sink.flush(),
+        Err(_) => Err(anyhow!("audit shutdown lock unavailable")),
+    };
+    let failure = ShutdownFailure {
+        server: server.err(), startup,
+        background: background.err(), audit: audit.err(),
+    };
+
+    /*
+     * 独立した元errorを保持し固定診断だけを出す
+     */
+    if failure.server.is_some() || failure.startup.is_some()
+        || failure.background.is_some() || failure.audit.is_some()
+    {
+        warn!("server shutdown failed");
+        Err(anyhow::Error::new(failure))
+    } else {
+        info!("HTTP server exit");
+        Ok(())
+    }
+}
+
+///
+/// 保持処理を同sink lockで一周期だけ実行する
+///
+/// # 引数
+/// * `sink` - 共通writer参照
+/// * `policy` - 既存保持設定
+///
+/// # 戻り値
+/// 正常列挙ならtrue、dir/lock障害ならfalse。
+///
+/// # 概要
+/// 個別削除失敗は既存固定診断/継続、周期障害も次周期へ進む。
+///
+fn audit_maintenance_tick(
+    sink: &Arc<RwLock<AuditSink>>,
+    policy: &AuditRetentionPolicy,
+) -> bool {
+    /*
+     * 同期lock内で既存plan/executeを直列化する
+     */
+    match sink.write() {
+        Ok(mut sink) => match sink.maintenance(policy, Utc::now()) {
+            Ok(_) => true,
+            Err(_) => {
+                warn!("audit maintenance failed");
+                false
+            }
+        },
+        Err(_) => {
+            warn!("audit maintenance lock unavailable");
+            false
         }
     }
 }
 
 ///
-/// 監査ログ投入入口を設定値から生成する
+/// 固定60秒周期で共通監査の保持taskを実行する
 ///
 /// # 引数
-/// * `config` - 監査ログ設定
+/// * `sink` - 共通sink
+/// * `policy` - 既存保持設定
+/// * `stop` - 明示終了通知
 ///
 /// # 戻り値
-/// 設定値で初期化した監査ログ投入入口を返す。
+/// 通知後に同期処理を完了して返る。
 ///
-fn build_audit_sink(config: &AuditLogConfig) -> AuditSink {
-    let writer = AuditWriter::new(AuditWriterConfig {
+async fn audit_retention_task(
+    sink: Arc<RwLock<AuditSink>>,
+    policy: AuditRetentionPolicy,
+    stop: watch::Receiver<bool>,
+) {
+    audit_retention_loop(
+        sink, policy, stop, Duration::from_secs(AUDIT_MAINTENANCE_SECS),
+    ).await;
+}
+
+///
+/// 次周期継続と完了待ちを検証できる内部保持loop
+///
+/// # 引数
+/// * `sink` - 共通sink
+/// * `policy` - 既存保持設定
+/// * `stop` - 終了通知
+/// * `period` - 内部周期。製品呼出しは常に60秒
+///
+/// # 戻り値
+/// 通知後に完了。公開設定は追加しない。
+///
+/// # 概要
+/// lockをawaitへ持ち越さず、失敗でも次周期の待機を継続する。
+///
+async fn audit_retention_loop(
+    sink: Arc<RwLock<AuditSink>>,
+    policy: AuditRetentionPolicy,
+    mut stop: watch::Receiver<bool>,
+    period: Duration,
+) {
+    /*
+     * 起動保持処理と重複せず最初の定期tickを60秒後にする
+     */
+    let mut interval = time::interval_at(time::Instant::now() + period, period);
+    loop {
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() { break; }
+            }
+            _ = interval.tick() => {
+                audit_maintenance_tick(&sink, &policy);
+            }
+        }
+    }
+}
+
+///
+/// REST/MCP共通sinkを既存設定から一度準備する
+///
+/// # 引数
+/// * `config` - 常に必要な既存監査設定
+///
+/// # 戻り値
+/// 共通Arc、又は固定診断による起動失敗。
+///
+/// # 概要
+/// MCP公開有無に依存せず出力準備・起動保持処理を完了する。
+///
+fn initialize_audit_sink(
+    config: Option<&AuditLogConfig>,
+) -> Result<Arc<RwLock<AuditSink>>> {
+    /*
+     * CLIと同じ既存正値契約を内側の起動入口でも確認する
+     */
+    let config = config.ok_or_else(|| anyhow!("audit config missing"))?;
+    if config.retention <= ChronoDuration::zero() || config.rotate_size == 0 {
+        return Err(anyhow!("audit config invalid"));
+    }
+
+    /*
+     * 初回request以前にdir/open依存失敗を検出する
+     */
+    let mut writer = AuditWriter::new(AuditWriterConfig {
         output_dir: config.output_dir.clone(),
         rotation_policy: AuditRotationPolicy::new(config.rotate_size),
     });
+    writer.prepare()
+        .map_err(|_| anyhow!("audit output preparation failed"))?;
+    run_audit_retention(config)
+        .map_err(|_| anyhow!("audit startup retention failed"))?;
 
-    AuditSink::new(AppendAuditBuffer::new(), writer)
+    Ok(Arc::new(RwLock::new(AuditSink::new(
+        AppendAuditBuffer::new(), writer,
+    ))))
 }
 
 ///
@@ -458,11 +692,13 @@ fn windows_event_fook(handle: ServerHandle) {
 /// * `handle` - 停止対象サーバハンドル
 /// * `signal` - 外部停止通知受信口
 ///
-fn shutdown_signal_hook(handle: ServerHandle, signal: ShutdownSignal) {
+fn shutdown_signal_hook(
+    handle: ServerHandle, signal: ShutdownSignal,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let _ = signal.await;
         handle.stop(true).await;
-    });
+    })
 }
 
 ///
@@ -473,18 +709,29 @@ fn shutdown_signal_hook(handle: ServerHandle, signal: ShutdownSignal) {
 ///
 /// # 引数
 /// * `state` - アプリケーション状態
+/// * `stop` - 明示終了通知
 ///
 /// # 戻り値
-/// なし
+/// 通知後に処理を完了して返る。
 ///
-async fn lock_cleanup_task(state: web::Data<Arc<RwLock<AppState>>>) {
+async fn lock_cleanup_task(
+    state: web::Data<Arc<RwLock<AppState>>>,
+    mut stop: watch::Receiver<bool>,
+) {
     /*
      * 監視間隔の初期化
      */
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {
-        interval.tick().await;
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() { break; }
+                continue;
+            }
+            _ = interval.tick() => {}
+        }
 
         /*
          * 期限切れロックの削除
@@ -503,8 +750,8 @@ async fn lock_cleanup_task(state: web::Data<Arc<RwLock<AppState>>>) {
         /*
          * エラーの記録
          */
-        if let Err(err) = result {
-            warn!("lock cleanup failed: {}", err);
+        if result.is_err() {
+            warn!("lock cleanup failed");
         }
     }
 }

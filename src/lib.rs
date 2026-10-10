@@ -18,5 +18,6 @@ pub mod markdown_source;
 pub mod mcp;
 pub mod fts;
 pub mod rest_api;
+pub(crate) mod wiki_path;
 
 pub use database::page_source_exists_for_test;

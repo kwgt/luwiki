@@ -41,9 +41,11 @@ pub async fn get_by_path(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * クエリ取得と検証
@@ -60,9 +62,18 @@ pub async fn get_by_path(
         }
     };
 
-    if let Err(message) = super::validate_page_path(&query.path) {
-        return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
-    }
+    let mut query = query.into_inner();
+    query.path = match super::normalize_page_path(&query.path) {
+        Ok(path) => path,
+        Err(message) => {
+            return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
+        }
+    };
+    crate::rest_api::audit::remember_path(
+        &req,
+        crate::wiki_path::NormalizedWikiPath::from_stored(&query.path),
+    );
+
 
     /*
      * path 形式の追加制約確認
@@ -90,9 +101,16 @@ pub async fn get_by_path(
     /*
      * page path から短縮URL対象を解決
      */
-    let resolved = match state.db().resolve_page_state_by_path(&query.path) {
+    let resolved = match state.db().resolve_authorized_page_path(
+        &query.path, &policy,
+    ) {
         Ok(resolved) => resolved,
-        Err(_) => {
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "page lookup failed",
@@ -136,9 +154,11 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -167,16 +187,21 @@ pub async fn get(
     /*
      * ページ状態取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
+    let page_index = match state.db().read_authorized_page(
+        &page_id, None, false, &policy,
+    ) {
+        Ok(page) => {
+            crate::rest_api::audit::remember_page(&req, &page);
+            page.index
+        },
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
+                StatusCode::INTERNAL_SERVER_ERROR, "page lookup failed"));
         }
     };
 

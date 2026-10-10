@@ -278,6 +278,17 @@ struct RenameInfo {
 - rename、soft delete、undeleteではprompt候補を更新せず、公開時に最新の
   ページ状態と合流する
 
+### 4.0 パス認可と操作対象の一致
+
+REST/MCPの入力パスはREQUIREMENTS.md 2.2を正とする。認可付きDB入口、
+read snapshotによる認可/返却対象一致、write txn内の最新ID・path再解決と認可、
+再帰配下mapping・拒否無更新、assetファイル保存前認可の具体設計は
+[REST_API_AUTHORIZATION_DESIGN.md](REST_API_AUTHORIZATION_DESIGN.md)を参照する。
+AppStateのread lockだけを並行更新の排除とみなさない。lock情報取得のcleanupも
+副作用なので認可後に同じtxnで行う。DB commit後のFTS等の失敗と認可拒否を区別する。
+本節は設計反映であり、productionコードの対応・検証は未完了である。
+
+
 ### 4.1 MCP primitive名前索引の初期構築
 
 - 名前索引の構築状態が未登録の場合は、DB初期化と同じwrite transactionで

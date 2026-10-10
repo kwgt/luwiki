@@ -818,7 +818,8 @@ watch(pageTitle, (value) => {
                     コピー
                   </button>
                   <button
-                    class="link link-hover text-error"
+                    class="link link-hover text-error disabled:opacity-50
+                      disabled:cursor-not-allowed"
                     type="button"
                     :disabled="isWriteActionDisabled(isReadOnlyUser)"
                     @click="openAssetDeleteConfirm(asset)"

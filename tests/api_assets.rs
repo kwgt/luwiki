@@ -447,6 +447,11 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     fs::create_dir_all(&assets_dir).expect("create assets dir failed");
     fs::write(&config_path, "[global]\nuse_tls = false\n").expect("write config failed");
 
+    let config_suffix = config_path.strip_prefix(&base_dir)
+        .expect("config path outside fixture base").to_path_buf();
+    let (base_dir, db_path, assets_dir) =
+        common::absolute_test_paths(base_dir, db_path, assets_dir);
+    let config_path = base_dir.join(config_suffix);
     (base_dir, db_path, assets_dir, config_path)
 }
 

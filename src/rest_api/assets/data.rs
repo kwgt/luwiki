@@ -11,7 +11,7 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::{StatusCode, header};
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 
 use super::super::resp_error_json;
 use crate::database::types::{AssetId, BearerScope};
@@ -42,9 +42,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * アセットID解析
@@ -70,37 +71,31 @@ pub async fn get(
     /*
      * アセット情報取得
      */
-    let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "asset not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "asset lookup failed",
-            ));
+    let asset = match state.db().read_asset_authorized(
+        crate::database::AssetSelector::Id(&asset_id),
+        &crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+        crate::database::AssetReadMode::Data { max_bytes: None },
+    ) {
+        Ok(asset) => asset,
+        Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::asset_access_error(
+                &req, &err, "asset lookup failed",
+            ) { return Ok(resp); }
+            return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+                "asset read failed"));
         }
     };
-
-    if asset_info.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
-    }
-
-    /*
-     * アセットデータ取得
-     */
-    let data = match state.db().read_asset_data(&asset_id) {
-        Ok(data) => data,
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "asset read failed",
-            ));
-        }
+    let target = crate::database::asset_read_target(
+        &asset.owner,
+        Some(&asset.record.info),
+    )
+    .map_err(actix_web::error::ErrorInternalServerError)?;
+    req.extensions_mut().insert(target);
+    let asset_info = asset.record.info;
+    let data = match asset.data {
+        Some(data) => data,
+        None => return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+            "asset read failed")),
     };
 
     /*

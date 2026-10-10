@@ -436,6 +436,11 @@ impl LuwikiMcpServer {
                 None,
             )
         })?;
+        if state.is_shutting_down() {
+            return Err(McpProtocolError::internal_error(
+                "server shutting down", None,
+            ));
+        }
         f(&state)
     }
 

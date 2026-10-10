@@ -17,14 +17,12 @@ use serde_json::json;
 
 use super::super::resp_error_json;
 use crate::database::DbError;
-use crate::database::types::{BearerScope, LockToken, PageId, UserId};
+use crate::database::types::{BearerScope, PageId};
 use crate::http_server::app_state::AppState;
 use crate::rest_api::AuthContext;
 use crate::rest_api::{CACHE_CONTROL_NO_STORE, require_request_scope};
 /// ロック認証ヘッダの名称
-const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
 /// 孤立した user_id を表示する際の代替ユーザ名
-const UNKNOWN_USERNAME: &str = "unknown";
 
 ///
 /// GET /api/pages/{page_id}/assets の実体
@@ -44,9 +42,10 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * ページID解析
@@ -72,41 +71,28 @@ pub async fn get(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
-     * アセット情報取得
-     */
-    let asset_infos = match state.db().list_page_assets(&page_id) {
-        Ok(assets) => assets,
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "asset lookup failed",
-            ));
+    let (owner, asset_infos) = match state.db().list_assets_authorized(
+        crate::database::AssetPageSelector::Id(&page_id),
+        &crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::asset_access_error(
+                &req, &err, "asset lookup failed",
+            ) { return Ok(resp); }
+            return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+                "asset lookup failed"));
         }
     };
+    req.extensions_mut().insert(crate::database::asset_read_target(&owner, None)
+        .map_err(actix_web::error::ErrorInternalServerError)?);
 
     /*
      * レスポンス生成
      */
     let mut assets = Vec::new();
-    for asset in asset_infos {
+    for record in asset_infos {
+        let asset = record.info;
         /*
          * 削除済みアセットの除外
          */
@@ -117,10 +103,7 @@ pub async fn get(
         /*
          * ユーザ名の取得
          */
-        let user_name = match resolve_asset_username(state.db(), &asset.user()) {
-            Ok(name) => name,
-            Err(resp) => return Ok(resp),
-        };
+        let user_name = record.user_name;
 
         /*
          * レスポンス用データの整形
@@ -139,35 +122,13 @@ pub async fn get(
         }));
     }
 
+    crate::rest_api::audit::update_metadata(&req, |metadata| {
+        metadata.count = Some(assets.len());
+    });
     Ok(HttpResponse::Ok()
         .content_type("application/json")
         .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
         .body(json!(assets).to_string()))
-}
-
-///
-/// アセット所有者の表示名を解決する
-///
-/// # 引数
-/// * `db` - データベース参照
-/// * `user_id_raw` - 所有者ユーザID文字列
-///
-/// # 戻り値
-/// ユーザが存在する場合はユーザ名を返し、
-/// 存在しない場合は代替表示名を返す。
-///
-fn resolve_asset_username(
-    db: &crate::database::DatabaseManager,
-    user_id: &UserId,
-) -> Result<String, HttpResponse> {
-    match db.get_user_name_by_id(&user_id) {
-        Ok(Some(name)) => Ok(name),
-        Ok(None) => Ok(UNKNOWN_USERNAME.to_string()),
-        Err(_) => Err(resp_error_json(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "user lookup failed",
-        )),
-    }
 }
 
 ///
@@ -192,9 +153,10 @@ pub async fn post(
     path: web::Path<(String, String)>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Update) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * パス情報の取得
@@ -258,121 +220,53 @@ pub async fn post(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
+    let token = crate::rest_api::auth::mutation_lock_input(&req);
+    let access = crate::database::MutationAccess {
+        policy: crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+        lock: crate::database::MutationLock::Token {
+            user_name: &auth_user,
+            token: token
+                .as_ref()
+                .map(|value| value.as_ref())
+                .map_err(|err| *err),
+            validate_unlocked: false,
+            invalid_token_reason: "lock token invalid",
+        },
+        allow_draft: true, allow_deleted: false,
+        cleanup_draft: true, expected_version: None,
+    };
+    let asset_id = match state.db().create_asset_authorized(
+        crate::database::AssetPageSelector::Id(&page_id), &file_name, &mime,
+        &auth_user, body.as_ref(), &access,
+    ) {
+        Ok(result) => {
+            req.extensions_mut().insert(result.outcome);
+            result.value.info.id()
         }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
+        Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::asset_access_error(
+                &req,
+                &err,
+                "asset create failed",
+            ) {
+                return Ok(resp);
+            }
+            if let Some(DbError::AssetAlreadyExists) =
+                err.downcast_ref::<DbError>()
+            {
+                return Ok(resp_error_json(
+                    StatusCode::CONFLICT,
+                    "asset already exists",
+                ));
+            }
+            if let Some(DbError::UserNotFound) = err.downcast_ref::<DbError>() {
+                return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+                    "user not found"));
+            }
+            return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+                "asset create failed"));
         }
     };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
-     * ロック検証
-     */
-    let lock_info = match state.db().get_page_lock_info(&page_id) {
-        Ok(info) => info,
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock lookup failed",
-            ));
-        }
-    };
-
-    if let Some(lock_info) = lock_info {
-        if !req.headers().contains_key(LOCK_AUTH_HEADER) {
-            return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
-        }
-
-        let token = match parse_lock_token(&req) {
-            Ok(token) => token,
-            Err(resp) => return Ok(resp),
-        };
-
-        if lock_info.token() != token {
-            return Ok(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-
-        let user_id = match state.db().get_user_id_by_name(&auth_user) {
-            Ok(Some(user_id)) => user_id,
-            Ok(None) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "user not found",
-                ));
-            }
-            Err(_) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "user lookup failed",
-                ));
-            }
-        };
-
-        if lock_info.user() != user_id {
-            return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
-        }
-    }
-
-    /*
-     * アセット作成
-     */
-    let asset_id =
-        match state
-            .db()
-            .create_asset(
-                &page_id,
-                &file_name,
-                &mime,
-                &auth_user,
-                body.as_ref(),
-            )
-        {
-            Ok(asset_id) => asset_id,
-            Err(err) => {
-                if let Some(DbError::AssetAlreadyExists) =
-                    err.downcast_ref::<DbError>()
-                {
-                    return Ok(resp_error_json(
-                        StatusCode::CONFLICT,
-                        "asset already exists",
-                    ));
-                }
-                if let Some(DbError::PageNotFound) =
-                    err.downcast_ref::<DbError>()
-                {
-                    return Ok(resp_error_json(
-                        StatusCode::NOT_FOUND,
-                        "page not found",
-                    ));
-                }
-                if let Some(DbError::UserNotFound) =
-                    err.downcast_ref::<DbError>()
-                {
-                    return Ok(resp_error_json(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "user not found",
-                    ));
-                }
-
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "asset create failed",
-                ));
-            }
-        };
 
     /*
      * レスポンス生成
@@ -408,9 +302,10 @@ pub async fn redirect(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<(String, String)>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * パス情報の取得
@@ -442,83 +337,31 @@ pub async fn redirect(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
-     * アセットIDの解決
-     */
-    let asset_id = match state
-        .db()
-        .get_asset_id_by_page_file(&page_id, &file_name)
-    {
-        Ok(Some(asset_id)) => asset_id,
-        Ok(None) => {
-            match state
-                .db()
-                .has_deleted_asset_by_page_file(&page_id, &file_name)
-            {
-                Ok(true) => {
-                    return Ok(resp_error_json(
-                        StatusCode::GONE,
-                        "asset deleted",
-                    ));
-                }
-                Ok(false) => {}
-                Err(_) => {
-                    return Ok(resp_error_json(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "asset lookup failed",
-                    ));
-                }
-            }
-
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "asset not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "asset lookup failed",
-            ));
+    let asset = match state.db().read_asset_authorized(
+        crate::database::AssetSelector::File {
+            page: crate::database::AssetPageSelector::Id(&page_id),
+            file_name: &file_name,
+        },
+        &crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+        crate::database::AssetReadMode::Metadata,
+    ) {
+        Ok(asset) => asset,
+        Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::asset_access_error(
+                &req, &err, "asset lookup failed",
+            ) { return Ok(resp); }
+            return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+                "asset lookup failed"));
         }
     };
-
-    let asset_info = match state.db().get_asset_info_by_id(&asset_id) {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "asset not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "asset lookup failed",
-            ));
-        }
-    };
-
-    if asset_info.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "asset deleted"));
-    }
+    req.extensions_mut().insert(
+        crate::database::asset_read_target(
+            &asset.owner,
+            Some(&asset.record.info),
+        )
+        .map_err(actix_web::error::ErrorInternalServerError)?,
+    );
+    let asset_id = asset.record.info.id();
 
     /*
      * レスポンス生成
@@ -548,65 +391,5 @@ fn parse_page_id(raw: String) -> Result<PageId, HttpResponse> {
     match PageId::from_string(&raw) {
         Ok(page_id) => Ok(page_id),
         Err(_) => Err(resp_error_json(StatusCode::NOT_FOUND, "page not found")),
-    }
-}
-
-///
-/// ロック解除トークンの解析
-///
-fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
-    /*
-     * ヘッダ値の取得
-     */
-    let raw = match req.headers().get(LOCK_AUTH_HEADER) {
-        Some(raw) => raw,
-        None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-    };
-
-    /*
-     * トークン文字列の抽出
-     */
-    let raw = match raw.to_str() {
-        Ok(raw) => raw.trim(),
-        Err(_) => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-    };
-
-    let mut token_value = None;
-    for part in raw.split_whitespace() {
-        if let Some(value) = part.strip_prefix("token=") {
-            token_value = Some(value);
-            break;
-        }
-    }
-
-    let token = match token_value {
-        Some(value) => value,
-        None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-    };
-
-    /*
-     * LockTokenへの変換
-     */
-    match LockToken::from_string(token) {
-        Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(
-            StatusCode::FORBIDDEN,
-            "lock token invalid",
-        )),
     }
 }

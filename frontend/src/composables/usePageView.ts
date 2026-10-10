@@ -602,6 +602,7 @@ export function usePageView() {
       pageMoveError.value = '移動先パスが不正です';
       return;
     }
+    const finalPath = pageMovePreviewPath.value;
     pageMoveLoading.value = true;
     pageMoveError.value = '';
     try {
@@ -610,7 +611,7 @@ export function usePageView() {
         resolved,
         pageMoveRecursive.value,
       );
-      const nextUrl = resolved === '/' ? '/wiki/' : `/wiki${resolved}`;
+      const nextUrl = finalPath === '/' ? '/wiki/' : `/wiki${finalPath}`;
       window.location.replace(nextUrl);
     } catch (err: unknown) {
       pageMoveError.value = toErrorMessage(err);

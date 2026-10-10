@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::resp_error_json;
-use crate::database::types::{BearerScope, LockToken, PageId};
+use crate::database::types::{BearerScope, PageId};
 use crate::fts;
 use crate::http_server::app_state::AppState;
 use crate::markdown_source::front_matter::{
@@ -33,7 +33,6 @@ use crate::rest_api::{
     CACHE_CONTROL_REVALIDATE_PRIVATE,
 };
 /// ロック認証ヘッダの名称
-const LOCK_AUTH_HEADER: &str = "X-Lock-Authentication";
 
 #[derive(Deserialize)]
 struct GetSourceQuery {
@@ -150,9 +149,11 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * クエリ取得と検証
@@ -209,45 +210,31 @@ pub async fn get(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
+    let page = match state.db().read_authorized_page(
+        &page_id, revision, true, &policy,
+    ) {
+        Ok(page) => {
+            crate::rest_api::audit::remember_page(&req, &page);
+            page
+        },
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
+                StatusCode::INTERNAL_SERVER_ERROR, "page lookup failed"));
         }
     };
-
-    if page_index.is_draft() {
+    if page.index.is_draft() {
         return Ok(resp_error_json(
-            StatusCode::NOT_FOUND,
-            "draft has no source yet",
-        ));
+            StatusCode::NOT_FOUND, "draft has no source yet"));
     }
-
-    let revision = revision.unwrap_or(page_index.latest());
-
-    /*
-     * ページソース取得
-     */
-    let page_source = match state.db().get_page_source(&page_id, revision) {
-        Ok(Some(source)) => source,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::NOT_FOUND,
-                "page source not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page source lookup failed",
-            ));
-        }
+    let page_source = match page.source {
+        Some(source) => source,
+        None => return Ok(resp_error_json(
+            StatusCode::NOT_FOUND, "page source not found")),
     };
 
     /*
@@ -310,9 +297,10 @@ pub async fn put(
     path: web::Path<String>,
     body: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Update) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
 
     /*
      * クエリ取得と検証
@@ -340,6 +328,10 @@ pub async fn put(
         }
         None => false,
     };
+    crate::rest_api::audit::update_metadata(&req, |metadata| {
+        metadata.amend = Some(amend);
+    });
+
 
     /*
      * Content-Typeヘッダ検証
@@ -424,86 +416,31 @@ pub async fn put(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
-     * ロック検証
-     */
-    let lock_info = match state.db().get_page_lock_info(&page_id) {
-        Ok(info) => info,
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock lookup failed",
-            ));
-        }
-    };
-
-    let mut lock_token = None;
-    if let Some(lock_info) = lock_info {
-        if !req.headers().contains_key(LOCK_AUTH_HEADER) {
-            return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
-        }
-
-        let token = match parse_lock_token(&req) {
-            Ok(token) => token,
-            Err(resp) => return Ok(resp),
-        };
-
-        if lock_info.token() != token {
-            return Ok(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-
-        let user_id = match state.db().get_user_id_by_name(&auth_user) {
-            Ok(Some(user_id)) => user_id,
-            Ok(None) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "user not found",
-                ));
-            }
-            Err(_) => {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "user lookup failed",
-                ));
-            }
-        };
-
-        if lock_info.user() != user_id {
-            return Ok(resp_error_json(StatusCode::FORBIDDEN, "lock forbidden"));
-        }
-
-        lock_token = Some(token);
-    }
-
-    /*
-     * ページ更新
-     */
     let source_for_error = source.clone();
-    let update_result =
-        state.db().put_page(&page_id, &auth_user, source, amend);
-    match update_result {
-        Ok(()) => {}
+    let token = crate::rest_api::auth::mutation_lock_input(&req);
+    let access = crate::database::MutationAccess {
+        policy: crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+        lock: crate::database::MutationLock::Token {
+            user_name: &auth_user,
+            token: token
+                .as_ref()
+                .map(|value| value.as_ref())
+                .map_err(|err| *err),
+            validate_unlocked: false,
+            invalid_token_reason: "lock token invalid",
+        },
+        allow_draft: true, allow_deleted: false, cleanup_draft: true,
+        expected_version: None,
+    };
+    let update_result = state.db().put_page_authorized(
+        &page_id, &auth_user, source, amend, &access,
+    );
+    let _committed = match update_result {
+        Ok(result) => result.outcome,
         Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::mutation_access_error(
+                &req, &err, "page update failed",
+            ) { return Ok(resp); }
             if let Some(front_matter_err) =
                 err.downcast_ref::<FrontMatterError>()
             {
@@ -542,38 +479,9 @@ pub async fn put(
                 "page update failed",
             ));
         }
-    }
+    };
 
-    /*
-     * ロック解除
-     */
-    if let Some(token) = lock_token {
-        if let Err(err) =
-            state.db().release_page_lock(&page_id, &auth_user, &token)
-        {
-            if let Some(crate::database::DbError::LockNotFound) =
-                err.downcast_ref::<crate::database::DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "lock not found",
-                ));
-            }
-            if let Some(crate::database::DbError::LockForbidden) =
-                err.downcast_ref::<crate::database::DbError>()
-            {
-                return Ok(resp_error_json(
-                    StatusCode::FORBIDDEN,
-                    "lock forbidden",
-                ));
-            }
-
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock release failed",
-            ));
-        }
-    }
+    req.extensions_mut().insert(_committed);
 
     /*
      * FTSの更新
@@ -595,64 +503,4 @@ pub async fn put(
      * レスポンス生成
      */
     Ok(HttpResponse::NoContent().finish())
-}
-
-///
-/// ロック解除トークンの解析
-///
-fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
-    /*
-     * ヘッダ値の取得
-     */
-    let raw = match req.headers().get(LOCK_AUTH_HEADER) {
-        Some(raw) => raw,
-        None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-    };
-
-    /*
-     * トークン文字列の抽出
-     */
-    let raw = match raw.to_str() {
-        Ok(raw) => raw.trim(),
-        Err(_) => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-    };
-
-    let mut token_value = None;
-    for part in raw.split_whitespace() {
-        if let Some(value) = part.strip_prefix("token=") {
-            token_value = Some(value);
-            break;
-        }
-    }
-
-    let token = match token_value {
-        Some(value) => value,
-        None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
-        }
-    };
-
-    /*
-     * LockTokenへの変換
-     */
-    match LockToken::from_string(token) {
-        Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(
-            StatusCode::FORBIDDEN,
-            "lock token invalid",
-        )),
-    }
 }

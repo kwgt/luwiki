@@ -11,7 +11,7 @@
 認証方式として、`Authorization`ヘッダによる Basic 認証または Bearer 認証を受け付ける。
 
 - Basic 認証は主にブラウザUIからの利用を想定する
-- Bearer 認証は API クライアントおよび将来の MCP サーバ機能からの利用を想定する
+- Bearer 認証は API クライアントおよび MCP サーバ機能からの利用を想定する
 - Bearer 認証では、トークンに紐づくユーザを操作主体として扱う
 - `NoBasicAuth` 属性を持つユーザでは Basic 認証を禁止し、Bearer 認証のみを許可する
 - `ReadOnly` 属性を持つユーザでは、Basic / Bearer を問わず write 系操作を禁止する
@@ -73,7 +73,45 @@ properties:
 M1 時点では `PUT /api/pages/{page_id}/source` における front matter 起因の保存失敗がこれに該当する。
 
 ### ページパスの指定
-クエリーパラメータでページパスを渡す場合は絶対パスで渡すことを前提としている(それ以外はエラー)。
+クエリーパラメータのページパスは絶対パスとし、`REQUIREMENTS.md` 2.2のraw検証→dot解決→最終検証を適用する。不正入力は400。URLデコードとWikiパス解決を区別する。
+`rename_to`・`restore_to`だけは末尾`/`（`/`自身を含む）で元のページ名を再利用し、最終配置先を認可する。
+### パス認可・状態・返却範囲
+
+本節は合意した公開仕様を記述する。2026-10-11のMS1時点では未実装・未検証
+だったが、MS2〜4で実装し、MS5グループ2〜4で必要な統合・回帰・実UIを確認した。
+実行条件と制約は正式作業記録を参照し、最終SC評価・CP5とは区別する。
+実装・結果の対応は[検証観点・証拠参照](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)を参照する。
+内部設計は[REST認可設計](REST_API_AUTHORIZATION_DESIGN.md)、監査は
+[MCP_AUDIT_LOG_DESIGN.md](MCP_AUDIT_LOG_DESIGN.md)第11節を参照する。
+
+| 操作 | 認可対象・返却条件 |
+|---|---|
+| path指定・作成 | `REQUIREMENTS.md` 2.2で解決した最終path。作成・ロック等の副作用前に認可する |
+| ID指定・本文/メタ/ロック/削除 | 通常はcurrent path、draftは保持path、削除済みはlast_deleted path。履歴revもこのpathで認可し、状態ごとの実行可否は従来仕様に従う |
+| 一覧 | 要求prefix自体を認可し、許可範囲より上位prefixも403。cursorは形式検証・比較だけで独立認可・存在確認しない。範囲外cursorでも拒否せず、結果/has_more/anchorはprefix内で算出 |
+| 検索・テンプレート | 候補ページのcurrent/削除時pathで絞り、ID・名称・説明・snippetを含め範囲外候補を返さない。候補なしは200と空配列。検索100件上限は許可候補へ適用し、複数targetのdedup/最大score採用後も100件 |
+| 親取得 | 指定ページは通常認可し範囲外なら403。通常探索で得た親候補が範囲外なら親なしと同じ404/reason。非認可親を飛ばして別親を探索する変更は行わない |
+| 移動・復元 | currentまたは削除時の元pathと最終配置先の双方。末尾/特例はページ名付加後の配置先を認可。再帰対象を起点配下へ限定し、相対配置を維持、拒否時は部分更新なし |
+| asset | 所属ページのcurrent/削除時pathで認可。IDを知るだけで免除しない。page_idなしのzombieは本体/メタ/削除とも410。page_idありの所属index不在は内部不整合で、zombie扱いしない |
+| hello/users/me | Wiki pathを持たずパス制約対象外。認証・Bearer readは必要。監査対象 |
+
+本文・メタ・short path・lock情報・asset本体・302 Location・304を返す前に認可する。
+認可ページ自身の本文・履歴の過去path・日時・`rename_info.link_refs`は加工しない。
+これらの識別情報を用いる後続要求では対象ページを独立して認可する。
+
+当該アクションで成立する条件間で403 > 410 > 404とする。ID不在でpathが
+解決不能ならpath403を作らない。削除済みを扱える本文/履歴操作には状態だけの
+410を追加しない。親候補非認可404は明示例外で、親不存在と同じ`reason`を返す。
+401/400/409/423/500との一般優先順位を新設しない。パス認可はlock token確認だけでなく、
+期限切れcleanup等の副作用を持つlock情報取得より先に行う。
+
+### REST監査
+
+Basic/Bearerとも認証後の定義済み操作を公開要求単位で一記録する。
+固定operation、actor/tokenの欠損、結果・summary・commit後失敗の補足は監査設計第11節を正とする。
+通常HTTPログを併用し、認証失敗・未登録route・未対応methodはHTTPログで扱う。
+MCP無効でも共通基盤を稼働させる。
+
 
 ### 本書の対象外エンドポイント
 
@@ -149,6 +187,7 @@ M1 時点では `PUT /api/pages/{page_id}/source` における front matter 起�
 
   | ステータス | 説明
   |:--|:--
+  | 403 Forbidden | Bearerのreadスコープを満たさない
   | 401 Unauthorized | 認証に失敗した
   | 400 Bad Request | `Authorization` ヘッダ件数または形式が不正
 
@@ -385,9 +424,9 @@ properties:
   | 410 Gone | `path`で指定されたページが削除済みである
 
 #### 注記
-  - `path` には正規化済みの絶対ページパスを指定する
+  - `path`には絶対ページパスを指定し、共通規則のdot解決後に正規形を検証する
   - `path` には `/wiki/...` のような閲覧URL形式を指定しない
-  - サーバは `path` を追加変換せず、そのままページパスとして解決する
+  - サーバは共通規則でdotを解決し、最終パスを認可・DB解決に使う。閲覧URLへの変換はしない
 
 <a id="get-page-id"></a>
 ### `GET /api/pages/id?path={page_path}`
@@ -1155,7 +1194,7 @@ properties:
   | ステータス | 説明
   |:--|:--
   | 401 Unauthorized | 認証に失敗した
-  | 404 Not Found | `page_id`で指定されたページが存在しない<br>親ページが存在しない
+  | 404 Not Found | `page_id`で指定されたページが存在しない<br>親ページが存在しない、または返却候補の親が認可されていない（同一reason）
   | 410 Gone | 削除済みのページが指定された
 
 <a id="rename-page-path"></a>
@@ -1174,7 +1213,7 @@ properties:
 #### クエリーパラメータ
   |名称|型|説明|必須|
   |:--|:--|:--|:--|
-  | `rename_to` | string | リネーム先のパス | 必須 |
+  | `rename_to` | string | 最終配置先。末尾`/`では元のページ名を付加（`/`も同様） | 必須 |
   | `recursive` | boolean | 配下ページを含めて移動する | 任意 |
 
 #### レスポンス
@@ -1212,7 +1251,7 @@ properties:
 #### クエリーパラメータ
   |名称|型|説明|必須|
   |:--|:--|:--|:--|
-  | `restore_to` | string | 復帰先のパス | 必須 |
+  | `restore_to` | string | 最終配置先。末尾`/`では削除時ページ名を付加（`/`も同様） | 必須 |
   | `recursive` | boolean | 配下ページを含めて復帰する | 任意 |
 
 #### レスポンス
@@ -1657,7 +1696,7 @@ properties:
 #### 認証・権限
 
 - Basic 認証または Bearer 認証が必要
-- Bearer 認証時の必要スコープは `create`
+- Bearer 認証時の必要スコープは `delete`
 - ロックされているページの削除では、必要に応じて `X-Lock-Authentication` によるロック解除認証も必要
 
 #### パスエレメント

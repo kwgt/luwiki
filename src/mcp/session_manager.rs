@@ -24,6 +24,7 @@ use rmcp::transport::streamable_http_server::session::{
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManager,
     LocalSessionManagerError,
+    SessionError,
 };
 use tokio::sync::{RwLock, oneshot};
 use tokio::task::JoinHandle;
@@ -503,6 +504,52 @@ impl ManagedSessionManager {
     }
 
     ///
+    /// HTTP終了後に既存sweep停止待ちとsession closeを行う
+    ///
+    /// # 戻り値
+    /// 全停止通知成功、又は固定診断の終了失敗。
+    ///
+    /// # 概要
+    /// backend closeは送信のみ。業務完了はAppState barrierで保証する。
+    ///
+    pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+        /*
+         * std mutexを解放してからsweepの停止完了を待つ
+         */
+        let sweep = self.sweep_task.lock()
+            .map_err(|_| anyhow::anyhow!("session sweep lock unavailable"))?
+            .take();
+        let mut failed = false;
+        if let Some(task) = sweep {
+            task.abort();
+            if let Err(error) = task.await {
+                failed = !error.is_cancelled();
+            }
+        }
+
+        /*
+         * 既存backendのsessionへcloseを通知しmetadataを解放する
+         */
+        let ids = self.inner.sessions.read().await.keys()
+            .cloned().collect::<Vec<_>>();
+        for id in ids {
+            match self.inner.close_session(&id).await {
+                Ok(()) => {},
+                Err(LocalSessionManagerError::SessionError(
+                    SessionError::SessionServiceTerminated,
+                )) => {
+                    // HTTP worker終了で既に閉じたactorは停止完了済み。
+                }
+                Err(_) => { failed = true; }
+            }
+        }
+        self.metadata.write().await.clear();
+        if failed {
+            Err(anyhow::anyhow!("MCP session shutdown failed"))
+        } else { Ok(()) }
+    }
+
+    ///
     /// session metadata を登録する
     ///
     /// # 引数
@@ -944,6 +991,22 @@ mod tests {
         ServerSseMessage,
         SessionManagerConfig,
     };
+
+    ///
+    /// 既終了actorを正常停止として扱いsession/metadataを解放する。
+    ///
+    /// # 注記
+    /// 通常closeのerror分類は変更せず、停止入口だけを検証する。
+    ///
+    #[tokio::test]
+    async fn shutdown_accepts_already_terminated_session_actor() {
+        let manager = ManagedSessionManager::new();
+        let (_, transport) = manager.create_session().await.unwrap();
+        drop(transport);
+        manager.shutdown().await.unwrap();
+        assert!(manager.inner.sessions.read().await.is_empty());
+        assert_eq!(manager.metadata_len().await, 0);
+    }
 
     ///
     /// session 作成時に metadata が生成されることを確認する。

@@ -2491,6 +2491,56 @@ mod tests {
 
 
     ///
+    /// handlerからのアセット入力でも禁止表記を拒否する
+    ///
+    /// # 概要
+    /// 正常なページが存在してもraw入力不正を別の失敗と混同しない。
+    ///
+    /// # 注記
+    /// 末尾/等を渡しInvalidInputと元ページの保持を確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn handle_asset_path_rejects_invalid_raw_input() {
+        /*
+         * 正常なページとhandlerを準備する
+         */
+        let dir = tempdir().unwrap();
+        let manager = DatabaseManager::open(
+            dir.path().join("path-input.redb"), dir.path().join("assets"),
+        ).unwrap();
+        manager.add_user("alice", "pass", None).unwrap();
+        let page_id = manager.create_page(
+            "/mcp/assets", "alice", "body".to_string(),
+        ).unwrap();
+        let handler = McpHandler::new(
+            McpAuthGateway::new(), McpService::new(), None,
+        );
+        let auth = AuthContext::new(
+            AuthUser::new("alice".to_string()),
+            BearerScopeSet::from_iter([BearerScope::Read]),
+            PathPrefixSet::from_iter(["/mcp"]), None,
+        );
+
+        /*
+         * 入力不正の分類と保存済みページの無変更を確認する
+         */
+        for path in [
+            "/mcp/assets/", "/mcp//assets", "/mcp/../../assets",
+            "/mcp/asset s",
+        ] {
+            let error = handler.handle_list_page_assets(
+                &auth, &manager, None, path,
+            ).unwrap_err();
+            assert_eq!(error.code(), McpErrorCode::InvalidInput);
+        }
+        assert_eq!(manager.get_page_id_by_path("/mcp/assets").unwrap(),
+            Some(page_id));
+    }
+
+    ///
     /// 参照系アセット一覧の成功監査ログを確認する。
     ///
     /// # 注記
@@ -2549,7 +2599,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "/mcp/assets/",
+                "/mcp/./assets",
             )
             .expect("list page assets must succeed");
         sink.write()
@@ -2631,7 +2681,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "asset.bin",
             )
             .expect("get page asset data must succeed");
@@ -2873,7 +2923,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "/mcp/assets/",
+                "/mcp/./assets",
             )
             .expect("list page assets must succeed");
         handler
@@ -2881,7 +2931,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "asset.bin",
             )
             .expect("resolve page asset must succeed");
@@ -2890,7 +2940,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "asset.bin",
             )
             .expect("get page asset metadata must succeed");
@@ -2899,7 +2949,7 @@ mod tests {
                 &auth,
                 &manager,
                 None,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "asset.bin",
             )
             .expect("get page asset data must succeed");
@@ -3219,7 +3269,7 @@ mod tests {
                 &auth,
                 &manager,
                 address,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "secret.bin",
                 "application/octet-stream",
                 "c2VjcmV0LXBheWxvYWQ=",
@@ -3251,7 +3301,7 @@ mod tests {
                 &auth,
                 &manager,
                 address,
-                "/mcp/assets/",
+                "/mcp/./assets",
                 "secret.bin",
             )
             .expect("delete page asset failed");

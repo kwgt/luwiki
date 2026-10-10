@@ -38,6 +38,24 @@ pub(crate) use entries::{
     TemplateCandidateListEntry,
 };
 pub(crate) use manager::DatabaseManager;
+pub(crate) use manager::authorized_assets::{
+    asset_read_target, AssetAccessTarget, AssetBodyReadFailure,
+    AssetFileRecoveryError, AssetUploadPreCommit,
+    AssetDataTooLarge, AssetLookupMetadataMissing, AssetLookupMismatch,
+    AssetPageSelector, AssetReadMode, AssetRecord, AssetSelector,
+    AuthorizedAssetRead,
+};
+pub(crate) use manager::authorized_pages::{
+    AuthorizedPage, PageAccessTarget, PageSourceNotFound, ParentNotFound,
+    PathPrefixDenied,
+};
+pub(crate) use manager::authorized_writes::{
+    MoveDeniedSide, PageDestination, PageNotDeleted, RevisionAccessTarget,
+};
+pub(crate) use manager::locks::LockTokenInputError;
+pub(crate) use manager::mutation::{
+    MutationAccess, MutationLock, MutationOutcome, MutationVersionError,
+};
 pub(crate) use manager::bearer_tokens::VerifyBearerTokenFailureReason;
 pub(crate) use manager::pages_read::AppendConflictState;
 pub(crate) use manager::pages_read::PagePathResolveState;

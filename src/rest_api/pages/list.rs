@@ -49,9 +49,11 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * クエリ取得と検証
@@ -66,20 +68,35 @@ pub async fn get(
         }
     };
 
-    if let Err(message) = super::validate_page_path(&query.prefix) {
-        return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
-    }
-
-    if let Some(forward) = query.forward.as_deref() {
-        if let Err(message) = super::validate_page_path(forward) {
+    let mut query = query.into_inner();
+    query.prefix = match super::normalize_page_path(&query.prefix) {
+        Ok(path) => path,
+        Err(message) => {
             return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
         }
+    };
+    crate::rest_api::audit::remember_path(
+        &req,
+        crate::wiki_path::NormalizedWikiPath::from_stored(&query.prefix),
+    );
+
+
+    if let Some(forward) = query.forward.as_deref() {
+        query.forward = match super::normalize_page_path(forward) {
+            Ok(path) => Some(path),
+            Err(message) => {
+                return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
+            }
+        };
     }
 
     if let Some(rewind) = query.rewind.as_deref() {
-        if let Err(message) = super::validate_page_path(rewind) {
-            return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
-        }
+        query.rewind = match super::normalize_page_path(rewind) {
+            Ok(path) => Some(path),
+            Err(message) => {
+                return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
+            }
+        };
     }
 
     if query.forward.is_some() && query.rewind.is_some() {
@@ -120,10 +137,15 @@ pub async fn get(
      */
     let entries = match state
         .db()
-        .list_page_entries_by_prefix(&query.prefix, with_deleted)
+        .list_authorized_page_entries(&query.prefix, with_deleted, &policy)
     {
         Ok(entries) => entries,
-        Err(_) => {
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "page list failed",
@@ -167,6 +189,10 @@ pub async fn get(
         })
         .collect::<Vec<_>>();
 
+    crate::rest_api::audit::update_metadata(&req, |metadata| {
+        metadata.count = Some(items.len());
+        metadata.has_more = Some(has_more);
+    });
     let body = if let Some(anchor) = anchor {
         json!({
             "items": items,

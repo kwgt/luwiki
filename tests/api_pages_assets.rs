@@ -489,7 +489,7 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
 
     fs::create_dir_all(&assets_dir).expect("create assets dir failed");
 
-    (base_dir, db_path, assets_dir)
+    common::absolute_test_paths(base_dir, db_path, assets_dir)
 }
 
 ///

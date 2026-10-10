@@ -14,7 +14,7 @@
 use std::sync::{Arc, RwLock};
 
 use actix_web::http::{header, StatusCode};
-use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, web};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -50,9 +50,11 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -81,16 +83,21 @@ pub async fn get(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
+    let page_index = match state.db().read_authorized_page(
+        &page_id, None, false, &policy,
+    ) {
+        Ok(page) => {
+            crate::rest_api::audit::remember_page(&req, &page);
+            page.index
+        },
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
+                StatusCode::INTERNAL_SERVER_ERROR, "page lookup failed"));
         }
     };
 
@@ -130,9 +137,6 @@ pub async fn post(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
 
     /*
      * クエリ取得と検証
@@ -168,12 +172,31 @@ pub async fn post(
             ));
         };
 
+    crate::rest_api::audit::update_metadata(&req, |metadata| {
+        metadata.action = Some(if is_restore {
+            crate::rest_api::audit::RestAuditAction::Restore
+        } else { crate::rest_api::audit::RestAuditAction::Rename });
+    });
+
+    let auth = match require_request_scope(&req,
+        if is_restore { BearerScope::Create } else { BearerScope::Update },
+    ) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+
     // 再帰指定されているか否かの取得
     let recursive = query.recursive.unwrap_or(false);
 
-    if let Err(message) = super::validate_page_path(&target_path) {
-        return Ok(resp_error_json(StatusCode::BAD_REQUEST, message));
-    }
+    let destination = match crate::wiki_path::DestinationPathInput::parse(
+        &target_path,
+    ) {
+        Ok(destination) => destination,
+        Err(_) => {
+            return Ok(resp_error_json(StatusCode::BAD_REQUEST,
+                "invalid destination path"));
+        }
+    };
 
     /*
      * ページID解析
@@ -202,114 +225,31 @@ pub async fn post(
     /*
      * ページ情報取得
      */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
+    let access = crate::database::MutationAccess {
+        policy: crate::auth::PageAccessPolicy::new(auth.path_prefixes()),
+        lock: crate::database::MutationLock::Unlocked,
+        allow_draft: false, allow_deleted: is_restore,
+        cleanup_draft: false, expected_version: None,
     };
+    let result = state.db().move_page_authorized(
+        &page_id, crate::database::PageDestination::Rest(&destination),
+        is_restore, recursive, &access, true,
+    );
 
-    // 移動の場合で対象ページが
-    // 削除されている場合はエラー
-    if !is_restore && page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    // 対象ページがドラフト状態の場合はエラー
-    if page_index.is_draft() {
-        return Ok(resp_error_json(
-            StatusCode::BAD_REQUEST,
-            "draft page cannot be renamed",
-        ));
-    }
-
-    // 対象ページがrootの場合はエラー
-    if page_index.path() == "/" {
-        return Ok(resp_error_json(
-            StatusCode::BAD_REQUEST,
-            "root page is protected",
-        ));
-    }
-
-    /*
-     * ロック検証
-     */
-    match state.db().get_page_lock_info(&page_id) {
-        Ok(Some(_)) => {
-            // ロックされている場合はエラー
-            return Ok(resp_error_json(StatusCode::LOCKED, "page locked"));
-        }
-
-        Ok(None) => {
-            // ロックされていなければ正常
-        }
-
-        Err(_) => {
-            // DBからの読み出しに失敗した場合はエラー
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock lookup failed",
-            ));
-        }
-    };
-
-    /*
-     * 同一パスの場合は何もしなくてもよい
-     */
-    if !is_restore && page_index.path() == target_path {
-        return Ok(HttpResponse::NoContent().finish());
-    }
-
-    /*
-     * パス更新実行
-     */
-    let result = if is_restore {
-        // ページが作成されていない場合はエラー
-        if !page_index.deleted() {
-            return Ok(resp_error_json(
-                StatusCode::CONFLICT,
-                "page not deleted",
-            ));
-        }
-
-        if recursive {
-            state
-                .db()
-                .undelete_pages_recursive_by_id(&page_id, &target_path, true)
-        } else {
-            state.db().undelete_page_by_id(&page_id, &target_path, true)
-        }
-    } else {
-        if recursive {
-            state
-                .db()
-                .rename_pages_recursive_by_id(&page_id, &target_path)
-        } else {
-            let current_path = match page_index.current_path() {
-                Some(path) => path.to_string(),
-                None => {
-                    return Ok(resp_error_json(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "page path not found",
-                    ));
-                }
-            };
-
-            state
-                .db()
-                .rename_page(current_path.as_str(), target_path.as_str())
-        }
-    };
-
-    match result {
-        Ok(()) => {}
+    let (changed, outcome) = match result {
+        Ok(result) => (result.value, result.outcome),
         Err(err) => {
+            if let Some(resp) = crate::rest_api::auth::mutation_access_error(
+                &req, &err, "page path update failed",
+            ) { return Ok(resp); }
+            if err.downcast_ref::<crate::database::PageNotDeleted>().is_some() {
+                return Ok(resp_error_json(StatusCode::CONFLICT,
+                    "page not deleted"));
+            }
+            if let Some(DbError::DraftPage) = err.downcast_ref::<DbError>() {
+                return Ok(resp_error_json(StatusCode::BAD_REQUEST,
+                    "draft page cannot be renamed"));
+            }
             log::error!("page rename failed: {:?}", err);
 
             if let Some(DbError::PageAlreadyExists) =
@@ -351,55 +291,19 @@ pub async fn post(
                 "page path update failed",
             ));
         }
-    }
+    };
+    req.extensions_mut().insert(outcome.clone());
+    if !changed { return Ok(HttpResponse::NoContent().finish()); }
 
     /*
      * FTSの更新
      */
-    if recursive {
-        let target_ids = match fts::collect_page_ids_by_path_prefix(
-            state.db(),
-            &target_path,
-        ) {
-            Ok(target_ids) => target_ids,
-            Err(err) => {
-                log::error!("fts target collect failed: {:?}", err);
-                return Ok(resp_error_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "fts update failed",
-                ));
-            }
-        };
-        if let Err(err) =
-            fts::update_pages_index(
-                state.fts_config(),
-                state.db(),
-                &target_ids,
-                false,
-            )
-        {
-            log::error!("fts update failed: {:?}", err);
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "fts update failed",
-            ));
-        }
-    } else {
-        let target_ids = [page_id.clone()];
-        if let Err(err) =
-            fts::update_pages_index(
-                state.fts_config(),
-                state.db(),
-                &target_ids,
-                false,
-            )
-        {
-            log::error!("fts update failed: {:?}", err);
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "fts update failed",
-            ));
-        }
+    if let Err(err) = fts::update_pages_index(
+        state.fts_config(), state.db(), &outcome.affected_page_ids, false,
+    ) {
+        log::error!("fts update failed: {:?}", err);
+        return Ok(resp_error_json(StatusCode::INTERNAL_SERVER_ERROR,
+            "fts update failed"));
     }
 
     /*

@@ -12,6 +12,7 @@ use anyhow::{Result, anyhow};
 use redb::{ReadableDatabase, ReadableTable, WriteTransaction};
 
 use super::DatabaseManager;
+use crate::auth::PageAccessPolicy;
 use crate::database::entries::TemplateCandidateListEntry;
 use crate::database::schema::{
     PAGE_INDEX_TABLE,
@@ -184,40 +185,73 @@ impl DatabaseManager {
     pub(crate) fn list_template_candidates(
         &self,
     ) -> Result<Vec<TemplateCandidateListEntry>> {
+        self.list_template_candidates_with_policy(None)
+    }
+
+    ///
+    /// 同snapshotのcurrent pathで候補を認可してDTOを生成する
+    ///
+    /// # 引数
+    /// * `policy` - 許可prefix
+    ///
+    /// # 戻り値
+    /// 許可候補の一覧。候補なしは空配列。
+    ///
+    pub(crate) fn list_authorized_template_candidates(
+        &self,
+        policy: &PageAccessPolicy<'_>,
+    ) -> Result<Vec<TemplateCandidateListEntry>> {
+        self.list_template_candidates_with_policy(Some(policy))
+    }
+
+    ///
+    /// 同read txnで候補indexを解決する
+    ///
+    /// # 引数
+    /// * `policy` - REST制約、旧入口はNone
+    ///
+    /// # 戻り値
+    /// current/non-draft候補から生成したDTO。
+    ///
+    /// # 概要
+    /// 候補名等をDTOへコピーするより先にindexの実pathを判定する。
+    ///
+    fn list_template_candidates_with_policy(
+        &self,
+        policy: Option<&PageAccessPolicy<'_>>,
+    ) -> Result<Vec<TemplateCandidateListEntry>> {
+        /*
+         * candidateとindexを同じsnapshotで開く
+         */
         let txn = self.db.begin_read()?;
         let table = txn.open_table(TEMPLATE_CANDIDATE_TABLE)?;
-        let mut raw_entries = Vec::new();
-        let mut page_ids = Vec::new();
-
+        let indexes = txn.open_table(PAGE_INDEX_TABLE)?;
+        let mut entries = Vec::new();
         for entry in table.iter()? {
             let (page_id, candidate) = entry?;
-            let page_id = page_id.value().clone();
-            page_ids.push(page_id.clone());
-            raw_entries.push((page_id, candidate.value()));
-        }
+            let page_id = page_id.value();
+            let Some(index) = indexes.get(page_id.clone())? else { continue; };
+            let index = index.value();
+            if index.deleted() || index.is_draft() { continue; }
 
-        drop(table);
-        drop(txn);
-
-        let current_paths = self.get_current_page_paths_by_ids(&page_ids)?;
-        let mut entries = Vec::new();
-        for (page_id, candidate) in raw_entries {
-            let Some(path_info) = current_paths.get(&page_id) else {
-                continue;
+            /*
+             * 保存current pathの認可後に候補DTOを生成する
+             */
+            let path = if let Some(policy) = policy {
+                let path = index.authorization_path()?;
+                if !policy.allows(path.as_str()) { continue; }
+                path.as_str().to_string()
+            } else {
+                index.current_path().ok_or_else(|| anyhow!(
+                    "template current path is missing"))?.to_string()
             };
-            if path_info.deleted() || path_info.draft() {
-                continue;
-            }
-
+            let candidate = candidate.value();
             entries.push(TemplateCandidateListEntry::new(
-                page_id,
-                path_info.current_path().to_string(),
-                candidate.name().to_string(),
+                page_id, path, candidate.name().to_string(),
                 candidate.description().map(str::to_string),
                 candidate.macro_expand(),
             ));
         }
-
         Ok(entries)
     }
 

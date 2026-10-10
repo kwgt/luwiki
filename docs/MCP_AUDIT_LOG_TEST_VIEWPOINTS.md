@@ -149,7 +149,8 @@ MCP設計書群から参照される
 1. 1 レコードが 1 行の JSON object として書き込まれること
 2. 各レコード末尾に LF が付くこと
 3. 文字コードが UTF-8 BOM なしであること
-4. `operation` と `result` が安定した小文字スネークケースで出力されること
+4. MCP operation/resultの既存snake_caseを維持すること。
+   REST operationは固定HTTP method＋route template、resultは固定分類とすること
 5. `timestamp` が UTC の ISO8601 / RFC3339 形式で出力されること
 
 ### 7.2 明示 flush / 終了時 flush
@@ -158,7 +159,16 @@ MCP設計書群から参照される
 2. 終了時 flush が writer の終了シーケンスに含まれること
 3. flush 実行後に保留中 `append` が書き残されないこと
 4. flush 失敗時に保留状態を安易に破棄しないこと
-5. flush 失敗が内部失敗として上位へ通知できること
+5. flush失敗が正常終了にならず上位の終了Resultへ通知されること
+6. 停止snapshotのtimestamp/count/outcome/summaryが再flushで変わらないこと
+7. write成功groupだけを退役し、失敗/未試行groupを保持すること
+8. append write失敗でもwriter最終flushを試すこと
+9. 部分write後の停止snapshotを自動再投入せず、最終flush失敗時も
+   成功groupをbufferへ戻さないこと。保持を永続復旧保証とみなさないこと
+10. HTTP終了後に保守taskをjoinし、同期MCP業務/recordをstate barrierで待ち、
+    queued処理を停止してから最終flushすること
+11. Unixの隔離実binaryのMCP off/onでSIGTERMと有界waitによる成功終了を確認すること。
+    kill/Dropを正常停止flushの証拠にしないこと
 
 ## 8. rotation の観点
 
@@ -195,13 +205,17 @@ MCP設計書群から参照される
 
 1. 起動時 retention が 1 回実行されること
 2. 稼働中 retention が定期タスクとして実行されること
-3. 監査ログ基盤無効時に retention を起動しないこと
+3. MCP有効/無効の双方で共通監査retentionを起動すること
+4. 稼働中は固定60秒の内部周期で実行し、新しい設定項目を作らないこと
+5. retentionがappend時間窓flushやactive file削除を行わないこと
 
 ### 9.3 失敗時の扱い
 
 1. 一部ファイル削除失敗時に他候補の処理を継続すること
 2. 個別削除失敗が警告ログへ記録されること
-3. 監査ログディレクトリ自体へアクセスできない場合に起動失敗として扱えること
+3. 起動時の監査dir準備失敗が起動Resultへ伝播すること
+4. 周期dir/個別削除失敗は固定診断で次周期へ継続すること
+5. record/rotationと同じsink lockで直列化し、guardをawaitへ持ち越さないこと
 
 ## 10. 役割分担の観点
 
@@ -421,3 +435,12 @@ MCP設計書群から参照される
   - 永続化名、null項目、秘匿情報非記録、summary内容
 - transport統合テスト
   - 入力元IP address、認証失敗非記録、request body非記録
+
+## REST共通監査の検証
+
+既存MCP文字列互換・append集約を維持し、Basic null、固定operation、全出口・extractor413・next Err・302/304、親404内部deny、post-commit補足、MCP無効init/定期保守/停止flushを確認する。
+
+詳細ケースと全32アクション対応の正本は[REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)。
+2026-10-13、MS4実装に合わせoperation/共通起動/停止失敗の観点を整合した。
+本書は観点書であり、個々の実行結果はMS4作業記録の証拠を参照する。
+Windows実正常停止とMS5全面受入れを実施済みとは扱わない。

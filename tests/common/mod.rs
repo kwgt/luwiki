@@ -71,7 +71,33 @@ pub fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
      * パスの組み立て
      */
     let db_path = db_dir.join("database.redb");
-    (base, db_path, assets_dir)
+    absolute_test_paths(base, db_path, assets_dir)
+}
+
+///
+/// fixtureの既存baseだけをcanonicalizeし絶対pathへ揃える
+///
+/// # 引数
+/// * base - 作成済みfixture base
+/// * db_path - 未作成でもよいDB file path
+/// * assets_dir - fixture assets path
+///
+/// # 戻り値
+/// 元のrelative suffix/layoutを維持した絶対base/DB/assets。
+///
+#[allow(dead_code)]
+pub fn absolute_test_paths(
+    base: PathBuf, db_path: PathBuf, assets_dir: PathBuf,
+) -> (PathBuf, PathBuf, PathBuf) {
+    /*
+     * DB fileはcanonicalizeせず、既存baseからのsuffixを保つ
+     */
+    let db_suffix = db_path.strip_prefix(&base)
+        .expect("DB path outside fixture base").to_path_buf();
+    let assets_suffix = assets_dir.strip_prefix(&base)
+        .expect("assets path outside fixture base").to_path_buf();
+    let base = base.canonicalize().expect("canonical fixture base failed");
+    (base.clone(), base.join(db_suffix), base.join(assets_suffix))
 }
 
 ///
@@ -427,6 +453,8 @@ impl ServerGuard {
         let child = Command::new(exe)
             .env("XDG_CONFIG_HOME", base_dir)
             .env("XDG_DATA_HOME", base_dir)
+            .arg("--config-path")
+            .arg(&config_path)
             .arg("--db-path")
             .arg(db_path)
             .arg("--assets-path")

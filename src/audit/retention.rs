@@ -143,10 +143,7 @@ pub(crate) fn build_retention_plan(
             }
             Some(_) => {}
             None => {
-                warn!(
-                    path = %path.display(),
-                    "skip audit retention for unmanaged file"
-                );
+                warn!("skip audit retention for unmanaged file");
                 plan.skipped_files.push(path);
             }
         }
@@ -179,15 +176,11 @@ pub(crate) fn execute_retention_plan(
     for path in plan.delete_candidates {
         match fs::remove_file(&path) {
             Ok(()) => {
-                debug!(path = %path.display(), "deleted audit log by retention");
+                debug!("deleted audit log by retention");
                 result.deleted_files.push(path);
             }
-            Err(err) => {
-                warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "delete audit log by retention failed"
-                );
+            Err(_) => {
+                warn!("delete audit log by retention failed");
                 result.failed_files.push(path);
             }
         }

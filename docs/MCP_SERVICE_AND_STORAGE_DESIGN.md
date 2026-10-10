@@ -358,10 +358,11 @@ FTS 側の prefix 絞り込みが厳密でない場合でも、
 - raw path は必ず `validate_and_normalize_path` を通す
 - 正規化前の生文字列で衝突判定や認可判定を行わない
 - path は絶対 path のみ許可する
-- 既存 `rest_api::pages::validate_page_path` が持つ禁止文字規則を継承する
-- trailing slash は path 同値性を曖昧にしないよう、root を除き除去した正規形へ揃える
-- `.` / `..` のような経路解釈を持ち込まない
-- 空文字、相対 path、禁止文字を含む path は `InvalidPath` とする
+- REQUIREMENTS.md 2.2の共通規則を使い、root以外の入力末尾/、連続/、空白（全角を含む）・制御文字・バックスラッシュを解決前に拒否する
+- `.`・`..`は解決し、ルートより上への遡及は拒否する。解決後も正規形を検証する
+- 空文字、相対path、不正pathは公開境界で`InvalidInput`へ変換する
+- URL/JSONの入力形式解釈とWiki解決は別で、共通処理で二重decodeしない
+- 認可とDB操作には同じ最終pathを渡す。具体接続はREST_API_AUTHORIZATION_DESIGN.mdを参照する
 
 `NormalizedPath` は比較・認可・監査ログ・DB 問い合わせで共通利用する単位とし、
 少なくとも以下を満たす値として扱う。
@@ -478,8 +479,10 @@ rename における `rename_to` の解釈は以下とする。
 
 この方針により、MCP の rename は
 「どこへ移動するか」を path 1 本で明確に表せる。
-既存 REST API / DB 層に残る末尾 `/` 解釈との差分は、
-MCP 側の path 正規化規則として明示的に吸収する。
+REST rename_to/restore_toだけの末尾/（rootを含む）ページ名再利用特例は、
+最終配置先を一度解決する専用入口で扱う。MCPへ一般化せず、MCPの最終pathを
+旧DB入口で再付加しない。共通パス・snapshot/txn認可の接続は
+[REST_API_AUTHORIZATION_DESIGN.md](REST_API_AUTHORIZATION_DESIGN.md)を参照する。
 
 #### 2.2.10 `append` の保存フロー
 
@@ -1830,8 +1833,8 @@ CLI オプション名や最終キー名の確定は 4.8.2 で行う。
 既定値は、入力文書で確定している運用前提に合わせて以下とする。
 
 - `enabled`
-  - MCP が有効な場合は既定で `true`
-  - MCP 無効時は監査ログ基盤を起動しない
+  - REST/MCP共通監査としてHTTPサーバ起動時に有効とする
+  - MCP無効でも初期化する。新しい監査enabled専用CLI設定は追加しない
 - `path`
   - 通常ログ用 `default_log_path()` とは分離し、
     データディレクトリ配下の専用サブディレクトリを既定とする

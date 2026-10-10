@@ -24,6 +24,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use ulid::{DecodeError, Ulid};
 
+use crate::wiki_path::NormalizedWikiPath;
+
 /// 短縮IDで利用する base62 文字集合
 #[allow(dead_code)]
 const BASE62_ALPHABET: &[u8; 62] =
@@ -1425,6 +1427,33 @@ impl PageIndex {
             PageIndex::PageInfo(info) => info.path_state.last_deleted(),
             PageIndex::DraftInfo(_) => None,
         }
+    }
+
+    ///
+    /// snapshotまたはtxn内で認可対象の正規化パスを取得する
+    ///
+    /// # 戻り値
+    /// draft保持/current/削除時パス、または保存状態の不整合を返す。
+    ///
+    /// # 概要
+    /// DBを再取得せず、このindexの状態から解決する。
+    /// 呼び出し側が同じsnapshotまたはwrite txnで操作することが前提。
+    ///
+    pub(crate) fn authorization_path(&self) -> Result<NormalizedWikiPath> {
+        /*
+         * 状態に応じた保存パスを選び欠損を区別する
+         */
+        let path = if self.deleted() {
+            self.last_deleted_path()
+        } else {
+            self.current_path()
+        }.ok_or_else(|| anyhow!("authorization path is missing"))?;
+
+        /*
+         * 保存値を変換せず認可対象として検証する
+         */
+        NormalizedWikiPath::from_stored(path)
+            .map_err(|err| anyhow!("authorization path is invalid: {}", err))
     }
 
     ///
@@ -3657,5 +3686,61 @@ impl Value for LockInfo {
     {
         rmp_serde::to_vec_named(value)
             .expect("failed to serialize to MessagePack bytes")
+    }
+}
+
+#[cfg(test)]
+mod authorization_path_tests {
+    use super::{PageId, PageIndex};
+
+    ///
+    /// draft/current/削除時の認可対象が状態に対応することを検証する
+    ///
+    /// # 注記
+    /// DBを開かずindexを生成し、削除前後とdraftのパスを比較する。
+    ///
+    /// # 概要
+    /// 操作ごとの許可条件と拒否条件を比較して確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn authorization_path_follows_stored_page_state() {
+        /*
+         * draftと現在パスを保持することを確認する
+         */
+        let draft = PageIndex::new_draft(PageId::new(), "/draft".to_string());
+        assert_eq!(draft.authorization_path().unwrap().as_str(), "/draft");
+        let mut page = PageIndex::new_page(PageId::new(), "/docs".to_string());
+        assert_eq!(page.authorization_path().unwrap().as_str(), "/docs");
+
+        /*
+         * 削除時パスを使い、状態復帰でも保存表記を変えない
+         */
+        page.set_deleted(true);
+        assert_eq!(page.authorization_path().unwrap().as_str(), "/docs");
+        page.set_deleted(false);
+        assert_eq!(page.authorization_path().unwrap().as_str(), "/docs");
+    }
+
+    ///
+    /// 不正な保存値を変換せず不整合として区別する
+    ///
+    /// # 注記
+    /// 空/dot/末尾/を持つindexは認可対象を取得できないことを確認。
+    ///
+    /// # 概要
+    /// 操作ごとの許可条件と拒否条件を比較して確認する。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[test]
+    fn authorization_path_rejects_inconsistent_stored_values() {
+        for path in ["", "/docs/..", "/docs/"] {
+            let page = PageIndex::new_page(PageId::new(), path.to_string());
+            assert!(page.authorization_path().is_err());
+        }
     }
 }

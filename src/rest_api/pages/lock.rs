@@ -48,9 +48,13 @@ pub async fn post(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
+    let auth = match crate::rest_api::auth::require_request_any_scope(
+        &req, &[BearerScope::Create, BearerScope::Update],
+    ) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -87,31 +91,21 @@ pub async fn post(
     };
 
     /*
-     * ページ情報取得
-     */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
      * ロック取得
      */
-    let lock_info = match state.db().acquire_page_lock(&page_id, &auth_user) {
-        Ok(lock_info) => lock_info,
+    let (lock_info, _target) = match state.db().acquire_page_lock_authorized(
+        &page_id, &auth_user, &policy,
+    ) {
+        Ok(result) => {
+            crate::rest_api::audit::remember_index(&req, &result.target);
+            (result.value, result.target)
+        },
         Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             if let Some(DbError::PageLocked) = err.downcast_ref::<DbError>() {
                 return Ok(resp_error_json(
                     StatusCode::CONFLICT,
@@ -153,9 +147,13 @@ pub async fn put(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
+    let auth = match crate::rest_api::auth::require_request_any_scope(
+        &req, &[BearerScope::Create, BearerScope::Update],
+    ) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -168,10 +166,7 @@ pub async fn put(
     /*
      * ロック解除トークン解析
      */
-    let token = match parse_lock_token(&req) {
-        Ok(token) => token,
-        Err(resp) => return Ok(resp),
-    };
+    let token = parse_lock_token(&req);
 
     /*
      * 認証ユーザ取得
@@ -200,34 +195,24 @@ pub async fn put(
     };
 
     /*
-     * ページ情報取得
-     */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
      * ロック延長
      */
-    let lock_info = match state
+    let (lock_info, _target) = match state
         .db()
-        .renew_page_lock(&page_id, &auth_user, &token)
+        .renew_page_lock_authorized(
+            &page_id, &auth_user, token.as_ref().map_err(|err| *err), &policy,
+        )
     {
-        Ok(lock_info) => lock_info,
+        Ok(result) => {
+            crate::rest_api::audit::remember_index(&req, &result.target);
+            (result.value, result.target)
+        },
         Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             if let Some(DbError::LockNotFound) =
                 err.downcast_ref::<DbError>()
             {
@@ -278,9 +263,11 @@ pub async fn get(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -304,55 +291,34 @@ pub async fn get(
     };
 
     /*
-     * ページ情報取得
-     */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
      * ロック情報取得
      */
-    let lock_info = match state.db().get_page_lock_info(&page_id) {
-        Ok(Some(lock_info)) => lock_info,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "lock not found"));
-        }
-        Err(_) => {
+    let (_, lock, user_name) = match state.db().read_authorized_page_meta(
+        &page_id, None, false, false, &policy,
+    ) {
+        Ok(result) => {
+            crate::rest_api::audit::remember_page(&req, &result.0);
+            result
+        },
+        Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lock lookup failed",
-            ));
+                StatusCode::INTERNAL_SERVER_ERROR, "lock lookup failed"));
         }
     };
-
-    let user_name = match state.db().get_user_name_by_id(&lock_info.user()) {
-        Ok(Some(name)) => name,
-        Ok(None) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "user not found",
-            ));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "user lookup failed",
-            ));
-        }
+    let lock_info = match lock {
+        Some(lock) => lock,
+        None => return Ok(resp_error_json(
+            StatusCode::NOT_FOUND, "lock not found")),
+    };
+    let user_name = match user_name {
+        Some(name) => name,
+        None => return Ok(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR, "user not found")),
     };
 
     /*
@@ -388,9 +354,11 @@ pub async fn delete(
     state: web::Data<Arc<RwLock<AppState>>>,
     path: web::Path<String>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Write) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Update) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * ページID解析
@@ -403,10 +371,7 @@ pub async fn delete(
     /*
      * ロック解除トークン解析
      */
-    let token = match parse_lock_token(&req) {
-        Ok(token) => token,
-        Err(resp) => return Ok(resp),
-    };
+    let token = parse_lock_token(&req);
 
     /*
      * 認証ユーザ取得
@@ -435,31 +400,21 @@ pub async fn delete(
     };
 
     /*
-     * ページ情報取得
-     */
-    let page_index = match state.db().get_page_index_by_id(&page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Ok(resp_error_json(StatusCode::NOT_FOUND, "page not found"));
-        }
-        Err(_) => {
-            return Ok(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if page_index.deleted() {
-        return Ok(resp_error_json(StatusCode::GONE, "page deleted"));
-    }
-
-    /*
      * ロック解除
      */
-    match state.db().release_page_lock(&page_id, &auth_user, &token) {
-        Ok(()) => {}
+    let _target = match state.db().release_page_lock_authorized(
+        &page_id, &auth_user, token.as_ref().map_err(|err| *err), &policy,
+    ) {
+        Ok(result) => {
+            crate::rest_api::audit::remember_index(&req, &result.target);
+            result.target
+        },
         Err(err) => {
+            if let Some(resp) =
+                crate::rest_api::auth::page_access_error_for_request(&req, &err)
+            {
+                return Ok(resp);
+            }
             if let Some(DbError::LockNotFound) = err.downcast_ref::<DbError>() {
                 return Ok(resp_error_json(
                     StatusCode::NOT_FOUND,
@@ -480,7 +435,7 @@ pub async fn delete(
                 "lock release failed",
             ));
         }
-    }
+    };
 
     /*
      * レスポンス生成
@@ -501,17 +456,18 @@ fn parse_page_id(raw: String) -> Result<PageId, HttpResponse> {
 ///
 /// ロック解除トークンの解析
 ///
-fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
+fn parse_lock_token(
+    req: &HttpRequest,
+) -> Result<LockToken, crate::database::LockTokenInputError> {
     /*
      * ヘッダ値の取得
      */
     let raw = match req.headers().get(LOCK_AUTH_HEADER) {
         Some(raw) => raw,
         None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token required",
-            ));
+            return Err(crate::database::LockTokenInputError {
+                reason: "lock token required",
+            });
         }
     };
 
@@ -521,10 +477,9 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let raw = match raw.to_str() {
         Ok(raw) => raw.trim(),
         Err(_) => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(crate::database::LockTokenInputError {
+                reason: "lock token invalid",
+            });
         }
     };
 
@@ -539,10 +494,9 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
     let token = match token_value {
         Some(value) => value,
         None => {
-            return Err(resp_error_json(
-                StatusCode::FORBIDDEN,
-                "lock token invalid",
-            ));
+            return Err(crate::database::LockTokenInputError {
+                reason: "lock token invalid",
+            });
         }
     };
 
@@ -551,10 +505,9 @@ fn parse_lock_token(req: &HttpRequest) -> Result<LockToken, HttpResponse> {
      */
     match LockToken::from_string(token) {
         Ok(token) => Ok(token),
-        Err(_) => Err(resp_error_json(
-            StatusCode::FORBIDDEN,
-            "lock token invalid",
-        )),
+        Err(_) => Err(crate::database::LockTokenInputError {
+                reason: "lock token invalid",
+            }),
     }
 }
 

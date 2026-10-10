@@ -87,6 +87,57 @@ fn page_add_cli_uses_default_user_from_config() {
 }
 
 ///
+/// 実CLIでprimitive競合の元診断と失敗側の無作成を確認する
+///
+/// # 概要
+/// 同じprompt名を二つのpageへ登録し、mainのouter表示を検証する。
+///
+/// # 注記
+/// rollback CLIは存在しない。同種DbErrorの実CLI公開経路を照合する。
+///
+#[test]
+fn page_add_cli_preserves_primitive_conflict_diagnostic() {
+    /*
+     * 絶対fixture pathと独自XDGで運用configへのfallbackを防ぐ
+     */
+    let (base_dir, db_path, assets_dir) = prepare_test_dirs();
+    run_add_user(&db_path, &assets_dir);
+    let source = base_dir.join("prompt.md");
+    fs::write(&source, concat!(
+        "---\nmcp:\n  primitive: prompt\n  name: cli_conflict\n",
+        "  description: fixture\n---\nfixture body\n",
+    )).unwrap();
+    run_page_add(&db_path, &assets_dir, None, Some(TEST_USERNAME),
+        &source, "/cli-owner");
+    let base = db_path.parent().unwrap();
+    let output = Command::new(test_binary_path())
+        .env("XDG_CONFIG_HOME", base).env("XDG_DATA_HOME", base)
+        .arg("--db-path").arg(&db_path)
+        .arg("--assets-path").arg(&assets_dir)
+        .arg("--fts-index").arg(fts_index_path(&db_path))
+        .arg("page").arg("add").arg("--user").arg(TEST_USERNAME)
+        .arg(&source).arg("/cli-rejected").output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(concat!(
+        "MCP primitive name already exists: ",
+        "primitive=prompt name=cli_conflict",
+    )), "CLI native primitive cause missing");
+    let listing = run_page_list(&db_path, &assets_dir);
+    assert!(listing.contains("/cli-owner"));
+    assert!(!listing.contains("/cli-rejected"));
+    let evidence = std::path::Path::new("tmp/ms5-evidence/group3");
+    fs::create_dir_all(evidence).unwrap();
+    fs::write(evidence.join("cli-diagnostic-result.json"), format!(
+        concat!("{{\"exit_code\":{},",
+            "\"native_primitive_diagnostic\":true,",
+            "\"owner_retained\":true,\"rejected_page_absent\":true}}\n"),
+        output.status.code().unwrap(),
+    )).unwrap();
+    fs::remove_dir_all(base_dir).unwrap();
+}
+
+///
 /// テスト用の作業ディレクトリを作成する。
 ///
 /// # 戻り値
@@ -103,7 +154,7 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
     fs::create_dir_all(&assets_dir).expect("create assets dir failed");
 
     let db_path = db_dir.join("database.redb");
-    (base, db_path, assets_dir)
+    common::absolute_test_paths(base, db_path, assets_dir)
 }
 
 ///

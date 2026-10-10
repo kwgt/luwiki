@@ -8,3 +8,4 @@
 /frontend/.tmp/
 /frontend/*.tgz
 /docs/fig/*.bkp
+**/index.scip

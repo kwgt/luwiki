@@ -8,7 +8,6 @@
 //! ページ検索APIの実装をまとめたモジュール
 //!
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -48,9 +47,11 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * クエリ取得と検証
@@ -109,17 +110,30 @@ pub async fn get(
     };
 
     /*
+     * 返却状態の解決まで同じDB snapshotを保持する
+     */
+    let snapshot = match state.db().authorized_search_snapshot(
+        with_deleted, &policy,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(resp_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR, "search snapshot failed")),
+    };
+    let page_ids = snapshot.page_ids();
+
+    /*
      * 検索の実行と結果の集約
      */
     let mut merged: HashMap<(PageId, u64), fts::FtsSearchResult> =
         HashMap::new();
     for target in targets {
-        let results = match fts::search_index(
+        let results = match fts::search_index_for_page_ids(
             state.fts_config(),
             target,
             expression,
             with_deleted,
             all_revision,
+            &page_ids,
         ) {
             Ok(results) => results,
             Err(err) => {
@@ -145,39 +159,36 @@ pub async fn get(
     /*
      * パス情報の取得とレスポンス生成
      */
-    let mut cache: HashMap<PageId, (String, bool)> = HashMap::new();
-    let mut items = Vec::with_capacity(merged.len());
-    for result in merged.into_values() {
+    let mut results = merged.into_values().collect::<Vec<_>>();
+    results.sort_by(|left, right| {
+        right.score().total_cmp(&left.score())
+            .then_with(|| left.page_id().cmp(&right.page_id()))
+            .then_with(|| left.revision().cmp(&right.revision()))
+    });
+    results.truncate(100);
+    let mut items = Vec::with_capacity(results.len());
+    for result in results {
         let page_id = result.page_id();
-        let (path, deleted) = match resolve_page_info(
-            state.db(),
-            &mut cache,
-            &page_id,
+        let (path, deleted) = match snapshot.resolve_result(
+            &page_id, result.revision(), all_revision,
         ) {
             Ok(info) => info,
-            Err(resp) => return Ok(resp),
+            Err(_) => return Ok(resp_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR, "page lookup failed")),
         };
-
-        items.push((
-            result.score(),
-            json!({
-                "page_id": page_id.to_string(),
-                "revision": result.revision(),
-                "score": result.score(),
-                "path": path,
-                "deleted": deleted,
-                "text": result.snippet(),
-            }),
-        ));
+        items.push(json!({
+            "page_id": page_id.to_string(),
+            "revision": result.revision(),
+            "score": result.score(),
+            "path": path,
+            "deleted": deleted,
+            "text": result.snippet(),
+        }));
     }
-
-    items.sort_by(|lhs, rhs| {
-        rhs.0.partial_cmp(&lhs.0).unwrap_or(Ordering::Equal)
+    crate::rest_api::audit::update_metadata(&req, |metadata| {
+        metadata.count = Some(items.len());
     });
-
-    let body = json!(
-        items.into_iter().map(|(_, item)| item).collect::<Vec<_>>()
-    );
+    let body = json!(items);
 
     Ok(HttpResponse::Ok()
         .content_type("application/json")
@@ -303,65 +314,4 @@ fn merge_results(
             merged.insert(key, result);
         }
     }
-}
-
-///
-/// ページパスと削除済みフラグの取得
-///
-/// # 引数
-/// * `db` - データベース
-/// * `cache` - 取得結果のキャッシュ
-/// * `page_id` - 対象ページID
-///
-/// # 戻り値
-/// (ページパス, 削除済みフラグ)
-///
-fn resolve_page_info(
-    db: &crate::database::DatabaseManager,
-    cache: &mut HashMap<PageId, (String, bool)>,
-    page_id: &PageId,
-) -> Result<(String, bool), HttpResponse> {
-    if let Some(info) = cache.get(page_id) {
-        return Ok(info.clone());
-    }
-
-    let index = match db.get_page_index_by_id(page_id) {
-        Ok(Some(index)) => index,
-        Ok(None) => {
-            return Err(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-        Err(_) => {
-            return Err(resp_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "page lookup failed",
-            ));
-        }
-    };
-
-    if index.is_draft() {
-        return Err(resp_error_json(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "page lookup failed",
-        ));
-    }
-
-    let deleted = index.deleted();
-    let path = if deleted {
-        match index.last_deleted_path() {
-            Some(path) => path.to_string(),
-            None => index.path(),
-        }
-    } else {
-        match index.current_path() {
-            Some(path) => path.to_string(),
-            None => index.path(),
-        }
-    };
-
-    let info = (path, deleted);
-    cache.insert(page_id.clone(), info.clone());
-    Ok(info)
 }

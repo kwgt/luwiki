@@ -11,7 +11,7 @@
 use std::fs;
 
 use anyhow::{Result, anyhow};
-use redb::{ReadableDatabase, ReadableTable};
+use redb::{ReadableDatabase, ReadableTable, WriteTransaction};
 
 use super::DatabaseManager;
 use crate::database::entries::{AssetListEntry, AssetMoveResult};
@@ -344,78 +344,9 @@ impl DatabaseManager {
          * 書き込みトランザクション開始
          */
         let txn = self.db.begin_write()?;
-        let insert_result = (|| -> Result<()> {
-            let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
-            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
-            let mut group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
-            let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
-
-            /*
-             * ページ存在確認
-             */
-            if index_table.get(page_id.clone())?.is_none() {
-                return Err(anyhow!(crate::database::DbError::PageNotFound));
-            }
-
-            /*
-             * ユーザIDの解決
-             */
-            let user_id = {
-                let id_table = txn.open_table(USER_ID_TABLE)?;
-                let key = user_name.to_string();
-                match id_table.get(&key)? {
-                    Some(id) => id.value(),
-                    None => {
-                        return Err(anyhow!(
-                            crate::database::DbError::UserNotFound
-                        ));
-                    }
-                }
-            };
-
-            /*
-             * 既存アセットの確認
-             */
-            let lookup_key = (page_id.clone(), file_name.clone());
-            let conflict_id = match lookup_table.get(&lookup_key)? {
-                Some(entry) => Some(entry.value().clone()),
-                None => None,
-            };
-
-            if let Some(conflict_id) = conflict_id {
-                let deleted_conflict = match info_table
-                    .get(conflict_id.clone())?
-                {
-                    Some(info) => info.value().deleted(),
-                    None => false,
-                };
-
-                if deleted_conflict {
-                    let _ = lookup_table.remove(lookup_key.clone());
-                } else {
-                    return Err(anyhow!(
-                        crate::database::DbError::AssetAlreadyExists
-                    ));
-                }
-            }
-
-            /*
-             * アセット情報の登録
-             */
-            let asset_info = AssetInfo::new(
-                asset_id.clone(),
-                page_id.clone(),
-                file_name.clone(),
-                mime,
-                size,
-                user_id,
-            );
-            info_table.insert(asset_id.clone(), asset_info)?;
-            lookup_table.insert(lookup_key, asset_id.clone())?;
-            let _ = group_table.insert(page_id.clone(), asset_id.clone())?;
-
-            Ok(())
-        })();
+        let insert_result = self.register_asset_in_txn(
+            &txn, &asset_id, page_id, &file_name, &mime, user_name, size,
+        );
 
         /*
          * 登録失敗時の巻き戻し
@@ -437,6 +368,145 @@ impl DatabaseManager {
     }
 
     ///
+    /// 検証済みfileを同write txnのmetadataへ登録する
+    ///
+    /// # 引数
+    /// * `txn` - 登録txn
+    /// * `asset_id` - 新規file ID
+    /// * `page_id` - 固定owner
+    /// * `file_name` - 既存file名入力
+    /// * `mime` - 既存MIME入力
+    /// * `user_name` - 登録ユーザ
+    /// * `size` - file bytes数
+    ///
+    /// # 戻り値
+    /// 登録metadata、または既存条件/DB失敗。
+    ///
+    /// # 概要
+    /// 旧CLIと認可入口で登録bodyを共有しnested txnを作らない。
+    ///
+    pub(super) fn register_asset_in_txn(
+        &self, txn: &WriteTransaction, asset_id: &AssetId,
+        page_id: &PageId, file_name: &str, mime: &str,
+        user_name: &str, size: u64,
+    ) -> Result<AssetInfo> {
+        let file_name = file_name.to_string();
+        let mime = mime.to_string();
+        let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
+        let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
+        let mut group_table = txn.open_multimap_table(ASSET_GROUP_TABLE)?;
+        let index_table = txn.open_table(PAGE_INDEX_TABLE)?;
+
+        /*
+         * ページ存在確認
+         */
+        if index_table.get(page_id.clone())?.is_none() {
+            return Err(anyhow!(crate::database::DbError::PageNotFound));
+        }
+
+        /*
+         * ユーザIDの解決
+         */
+        let user_id = {
+            let id_table = txn.open_table(USER_ID_TABLE)?;
+            let key = user_name.to_string();
+            match id_table.get(&key)? {
+                Some(id) => id.value(),
+                None => {
+                    return Err(anyhow!(
+                        crate::database::DbError::UserNotFound
+                    ));
+                }
+            }
+        };
+
+        /*
+         * 既存アセットの確認
+         */
+        let lookup_key = (page_id.clone(), file_name.clone());
+        let conflict_id = match lookup_table.get(&lookup_key)? {
+            Some(entry) => Some(entry.value().clone()),
+            None => None,
+        };
+
+        if let Some(conflict_id) = conflict_id {
+            let deleted_conflict = match info_table
+                .get(conflict_id.clone())?
+            {
+                Some(info) => info.value().deleted(),
+                None => false,
+            };
+
+            if deleted_conflict {
+                let _ = lookup_table.remove(lookup_key.clone());
+            } else {
+                return Err(anyhow!(
+                    crate::database::DbError::AssetAlreadyExists
+                ));
+            }
+        }
+
+        /*
+         * アセット情報の登録
+         */
+        let asset_info = AssetInfo::new(
+            asset_id.clone(),
+            page_id.clone(),
+            file_name.clone(),
+            mime,
+            size,
+            user_id,
+        );
+        info_table.insert(asset_id.clone(), asset_info.clone())?;
+        lookup_table.insert(lookup_key, asset_id.clone())?;
+        let _ = group_table.insert(page_id.clone(), asset_id.clone())?;
+
+        Ok(asset_info)
+    }
+
+    ///
+    /// FS保存前にowner/user/重複条件を同txnで確認する
+    ///
+    /// # 引数
+    /// * `txn` - 登録txn
+    /// * `page_id` - 固定owner
+    /// * `file_name` - 既存file名
+    /// * `user_name` - 登録ユーザ
+    ///
+    /// # 戻り値
+    /// 条件成立または既存エラー。DB/FSを変更しない。
+    ///
+    pub(super) fn validate_asset_create_in_txn(
+        &self, txn: &WriteTransaction, page_id: &PageId,
+        file_name: &str, user_name: &str,
+    ) -> Result<()> {
+        let indexes = txn.open_table(PAGE_INDEX_TABLE)?;
+        if indexes.get(page_id.clone())?.is_none() {
+            return Err(anyhow!(crate::database::DbError::PageNotFound));
+        }
+        let users = txn.open_table(USER_ID_TABLE)?;
+        if users.get(user_name.to_string())?.is_none() {
+            return Err(anyhow!(crate::database::DbError::UserNotFound));
+        }
+        let lookups = txn.open_table(ASSET_LOOKUP_TABLE)?;
+        let infos = txn.open_table(ASSET_INFO_TABLE)?;
+        if let Some(entry) =
+            lookups.get((page_id.clone(), file_name.to_string()))?
+        {
+            let deleted = infos
+                .get(entry.value())?
+                .map(|entry| entry.value().deleted())
+                .unwrap_or(false);
+            if !deleted {
+                return Err(anyhow!(
+                    crate::database::DbError::AssetAlreadyExists
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    ///
     /// アセットの削除
     ///
     /// # 概要
@@ -449,67 +519,72 @@ impl DatabaseManager {
     /// 削除に成功した場合は`Ok(())`を返す。
     ///
     pub(crate) fn delete_asset(&self, asset_id: &AssetId) -> Result<()> {
-        /*
-         * 書き込みトランザクション開始
-         */
         let txn = self.db.begin_write()?;
-        let delete_result = (|| -> Result<()> {
-            let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
-            let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
-            let mut asset_info = match info_table.get(asset_id.clone())? {
-                Some(info) => info.value(),
-                None => {
-                    return Err(anyhow!(
-                        crate::database::DbError::AssetNotFound
-                    ));
-                }
-            };
+        self.delete_asset_in_txn(&txn, asset_id)?;
+        txn.commit()?;
+        Ok(())
+    }
 
-            /*
-             * 削除済み判定
-             */
-            if asset_info.deleted() {
-                return Err(anyhow!(crate::database::DbError::AssetDeleted));
+    ///
+    /// 認可後に既存soft deleteを呼出し側txnで行う
+    ///
+    /// # 引数
+    /// * `txn` - 削除txn
+    /// * `asset_id` - 固定asset ID
+    ///
+    /// # 戻り値
+    /// 既存削除条件/更新の結果。
+    ///
+    /// # 概要
+    /// metadata更新とlookup解除を同txnで実行する。
+    ///
+    pub(super) fn delete_asset_in_txn(
+        &self, txn: &WriteTransaction, asset_id: &AssetId,
+    ) -> Result<()> {
+        let mut info_table = txn.open_table(ASSET_INFO_TABLE)?;
+        let mut lookup_table = txn.open_table(ASSET_LOOKUP_TABLE)?;
+        let mut asset_info = match info_table.get(asset_id.clone())? {
+            Some(info) => info.value(),
+            None => {
+                return Err(anyhow!(
+                    crate::database::DbError::AssetNotFound
+                ));
             }
+        };
 
-            /*
-             * 削除フラグ更新
-             */
-            let page_id = asset_info.page_id();
-            let file_name = asset_info.file_name();
-            asset_info.set_deleted(true);
-            info_table.insert(asset_id.clone(), asset_info)?;
-
-            /*
-             * lookup解除
-             */
-            if let Some(page_id) = page_id {
-                let lookup_key = (page_id, file_name);
-                let _ = lookup_table.remove(lookup_key);
-            } else {
-                let mut remove_keys = Vec::new();
-                for entry in lookup_table.iter()? {
-                    let (key, value) = entry?;
-                    if value.value() == asset_id.clone() {
-                        remove_keys.push(key.value());
-                    }
-                }
-                for (page_id, file_name) in remove_keys {
-                    let _ = lookup_table.remove((page_id, file_name));
-                }
-            }
-
-            Ok(())
-        })();
-
-        if let Err(err) = delete_result {
-            return Err(err);
+        /*
+         * 削除済み判定
+         */
+        if asset_info.deleted() {
+            return Err(anyhow!(crate::database::DbError::AssetDeleted));
         }
 
         /*
-         * コミット
+         * 削除フラグ更新
          */
-        txn.commit()?;
+        let page_id = asset_info.page_id();
+        let file_name = asset_info.file_name();
+        asset_info.set_deleted(true);
+        info_table.insert(asset_id.clone(), asset_info)?;
+
+        /*
+         * lookup解除
+         */
+        if let Some(page_id) = page_id {
+            let lookup_key = (page_id, file_name);
+            let _ = lookup_table.remove(lookup_key);
+        } else {
+            let mut remove_keys = Vec::new();
+            for entry in lookup_table.iter()? {
+                let (key, value) = entry?;
+                if value.value() == asset_id.clone() {
+                    remove_keys.push(key.value());
+                }
+            }
+            for (page_id, file_name) in remove_keys {
+                let _ = lookup_table.remove((page_id, file_name));
+            }
+        }
 
         Ok(())
     }

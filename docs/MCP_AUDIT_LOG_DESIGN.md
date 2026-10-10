@@ -5,7 +5,7 @@
 
 初期の設計起点は MCP 機能であるが、
 監査ログ基盤そのものは MCP 専用モジュールとして閉じず、
-将来的に他機能からも利用可能な共通基盤として扱う。
+RESTのBasic/Bearer双方からも利用する共通基盤として扱う。
 
 そのため、実装上の責務配置は `src/mcp/` 配下ではなく、
 独立した `src/audit/` モジュールを前提とする。
@@ -38,13 +38,11 @@
 
 ## 1. 対象範囲
 
-初期実装では、監査ログの主対象を
-MCP および関連する認可機能とする。
+監査対象はMCPと定義済みREST公開操作（Basic/Bearer双方）とする。REST拡張の正本は第11節。
 
 ただしモジュール設計上は、
 以下のような将来拡張を阻害しないことを前提とする。
 
-- REST API 側の一部操作記録
 - CLI 管理操作の一部記録
 - export / import や管理系機能からの監査イベント投入
 
@@ -161,7 +159,7 @@ struct AuditRecord {
 | `user_id` | `UserId` | 必須 | 許容しない |
 | `token_id` | `Option<TokenId>` | 条件付き必須 | Bearer 文脈を持たない場合、または内部例外で確定できない場合 |
 | `address` | `Option<IpAddr>` | 条件付き必須 | Actix 接続情報から取得できない場合 |
-| `target_path` | `Option<NormalizedPath>` | 条件付き必須 | 対象 path を特定できない認可失敗または異常系の場合 |
+| `target_path` | `Option<NormalizedPath>` | 条件付き必須 | 対象pathを持たない操作、解決不能、認可失敗または異常系の場合 |
 | `result` | `AuditResult` | 必須 | 許容しない |
 | `timestamp` | `DateTime<Utc>` | 必須 | 許容しない |
 | `summary` | `Option<String>` | 任意 | 補足不要時 |
@@ -176,7 +174,7 @@ struct AuditRecord {
   - 既存 DB モデルと対応する識別子型をそのまま使う
   - ユーザ名ではなく不変識別子を記録対象とする
 - `token_id`
-  - Bearer 利用経路の監査を主目的とするため `Option<TokenId>` とする
+  - Bearerではtokenを記録し、REST Basicを含むため`Option<TokenId>`とする
   - MCP では通常 Bearer 前提のため実質必須だが、モデル上は異常系を表せるよう `Option` を維持する
 - `address`
   - 監査入力元はリモート IP であり、初期案では `IpAddr` 相当で保持する
@@ -224,6 +222,7 @@ struct AuditRecord {
 - `Success`
 - `ScopeDenied`
 - `PathPrefixDenied`
+- `ReadOnlyDenied`
 - `NotFound`
 - `Conflict`
 - `InvalidInput`
@@ -236,8 +235,8 @@ JSONL 上の後方互換性を壊さないよう、初期実装では安定し�
 項目ごとの欠損条件は、操作種別ごとに以下を基本とする。
 
 - `token_id`
-  - 正常系・認可失敗系では記録する
-  - 認証失敗は監査ログ対象外であるため、通常の監査ログで `null` は例外系に限る
+  - Bearer/MCPの正常系・認可失敗系では記録する
+  - REST Basicでは通常の成功/失敗とも`null`とする。MCP/Bearerの通常認証済み操作ではtoken_idを記録する
 - `address`
   - 取得できた場合は必ず記録する
   - 接続情報欠損時のみ `null` を許容する
@@ -414,8 +413,9 @@ type PendingAppendMap = BTreeMap<AppendAuditKey, PendingAppendAudit>;
 - DB 既定パス: `data/database.redb`
 - 監査ログ既定ディレクトリ: `data/audit/`
 
-実際の設定キー名や CLI オプション名は別途定義するが、
-本書では内部的に「監査ログ出力ディレクトリ」を単一の設定値として扱う前提を置く。
+上記の`data/`は初期設計時の概念例であり、現行の既定値・設定キー・
+CLIオプションは[CLI仕様](CLI_SPECS.md)の監査ログ設定を正とする。
+本書では「監査ログ出力ディレクトリ」を単一の設定値として扱う。
 
 ファイル命名規則は、少なくとも以下の性質を満たすものとする。
 
@@ -461,7 +461,7 @@ type PendingAppendMap = BTreeMap<AppendAuditKey, PendingAppendAudit>;
 - 文字コードは UTF-8、BOM なしとする
 - 改行コードは LF とする
 - `null` 許容項目は JSON `null` で表現する
-- `operation` と `result` は安定した小文字スネークケース文字列へ写像する
+- MCPの`operation`と`result`は安定した小文字スネークケース文字列。REST operationは第11節の固定メソッド＋route template文字列とし、resultは安定した分類文字列を使う
 - `timestamp` は UTC の ISO8601 / RFC3339 形式文字列で保存する
 
 固定サイズローテーションの単位は、
@@ -998,3 +998,138 @@ timestampを既存共通項目として記録する。
 - DB内部エラー詳細
 - raw `data_base64` を含む upload 入力構造全体
 - 削除済み、ゾンビ、所属不一致として除外した asset の一覧や file_name
+
+## 11. REST監査拡張
+
+> 2026-10-13: MS4でREST監査と共通起動・保持・正常停止を実装済み。
+> MS4の実検証とCP4承認を経て、MS5グループ2で両認証のR32実記録、
+> グループ3で関係回帰・新実体の両mode正常停止を確認した。
+> 条件・再利用・制約は正式記録を参照し、最終SC評価・CP5とは区別する。
+
+実装・結果の対応は[検証観点・証拠参照](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)を参照する。
+
+### 11.1 モデル拡張と操作主体
+
+既存JSONLのトップレベル項目を維持し、新しいログfieldは追加しない。RESTは公開HTTP操作ごとに記録し、既存MCPは既存operation・result・append集約の意味を維持する。
+
+| 項目 | RESTの設計 |
+|---|---|
+| operation | 既存AuditOperationへRest(RestAuditOperation)を追加。RestAuditOperationは登録済み30組のmethod+route templateを列挙する閉じたenum。例GET /api/pages/{page_id}/source。Serialize/Deserializeを固定文字列として扱い、JSON object/tag構造にしない。既存MCP snake_case文字列の読み書きは同じまま |
+| user_id | 認証時に検証成功したUserInfo.idを認証補助情報へ保持し、要求途中の別lookupでユーザ削除/renameにより主体を失わない。AuthUser.user_id()が現行ではユーザ名であることに注意し、JSONLへユーザ名をIDとして入れない |
+| token_id | Bearerは既存token_id、Basicは明示null。token平文/token nameをsummaryへ追加しない |
+| address | 既存接続情報で得たIpAddr、欠損時null。生ヘッダをそのまま扱わない |
+| target_path | 同一txn/snapshotで認可した正規化Wiki path。hello/me・解決前の入力失敗・不在ID・zombieはnull。rename/restore成功は元path、拒否は失敗側path。親候補非認可は拒否した候補path |
+| revision | 実際に取得したsource/meta rev、source PUTやrenameのcommitted revision、restoreの保持latest、rollback/compactionの操作指定rev。一覧/検索/asset/lock/draft作成等はnull。エラーでは確定している実対象/commit済みrevだけを残し、未解決raw revを記録しない |
+| result | 最終の公開操作結果に基づく型付き分類。2xx/302/304はSuccess。scope/path/ReadOnlyは個別deny。不在はNotFound、入力400/413/415等はInvalidInput、409はConflict、5xxはInternalError。RESTの410/423/一般403を表すGone/Locked/OperationDeniedだけを追加し、既存列挙の名前は変更しない |
+| timestamp | 境界で最終応答が定まった時点のUTC |
+| summary | 下表と共通補足規則に従いサーバ生成。補足がない成功はnull。raw URL/query/body、token/lock資格情報、FS内部pathは含めない |
+
+AuthContextのscope/path/attributeの意味は変えない。内部の認証主体ID補足はBasicのUserInfo取得（src/rest_api/auth.rs:388–407）とBearer検証のUserInfo（src/auth.rs:266–292）から設定する。既存テスト用constructorやMCPのユーザ名accessorを破壊せず、実認証では安定IDを保持するconstructor/accessorを追加する。既存MCPの監査user再解決は必要な範囲で補助ID利用へ接続できるが、MCP operation/summaryを変更しない。
+
+MS4拡張前のAuditOperationはenumのsnake_case serdeを用いていたため、
+Rest variant追加をderiveへ任せるとoperation値が構造化される。
+MS4では固定文字列の専用変換を実装し、既存MCP JSONLの逆直列化と
+REST固定文字列round-tripを検証した。
+既存AuditResultのReadOnlyDeniedと、MCPのScopeDeniedへの正規化を維持する。
+
+### 11.2 全30操作/32アクションのsummary・項目表
+
+表のNo.はREST_API_AUTHORIZATION_TEST_VIEWPOINTS.mdの32行に対応する。method/route templateは固定定義であり、実URLのページID/asset ID/file名をoperationへ埋めない。rename/restoreおよびrollback/compactionは同じoperation、summary.actionだけで区別する。
+
+記号: `P`=同一txnで確定した認可対象path、`V`=実対象として確定したrevision、`n`=実際に返した候補件数（非負整数）、`b`=確定したtrue/false、`D`=最終配置先（正規化・認可で用いた値）。変数pathは空白/controlなしの正規形を用い、raw入力を転記しない。未確定値は該当補足を省略し、nullの項目に文字列nullを埋めない。
+
+共通失敗補足`E`は`failure=<固定分類>`。分類はresultに対応するscope_denied/path_prefix_denied/read_only_denied/not_found/conflict/gone/locked/operation_denied/invalid_input/internal_error。handlerが確定したactionは失敗時も付加できる。両指定/指定なし等でactionが未確定ならactionを推測せずEのみ。path拒否のrename/restoreだけ`denied_side=source|destination`を付加。親候補非認可は`denied_side=parent`。入力量超過を境界だけで検知した場合は`failure=payload_too_large`という固定補足も使用でき、resultはInvalidInput。
+
+| No. | operation・分岐 | 成功summary | target_path / revision成功 | 失敗summary・欠損条件 |
+|---|---|---|---|---|
+| 1 | GET /api/hello | null | null / null | E、常にpath/rev null |
+| 2 | GET /api/users/me | null | null / null | E、常にpath/rev null |
+| 3 | POST /api/pages | null | 作成P / null | E、入力解決後Pのみ、rev null |
+| 4 | GET /api/pages | count=n has_more=b | 要求prefix P / null | E、prefix解決前null。cursorは記録しない |
+| 5 | GET /api/pages/deleted | count=n | 指定P / null | E、path解決前null |
+| 6 | GET /api/pages/id | null | 指定/対象P / null | E、要求path解決済みならP |
+| 7 | GET /api/pages/short | null | 指定/対象P / null | E、要求path解決済みならP |
+| 8 | GET /api/pages/template | count=n | null / null | E、候補path群・ID群を記録しない |
+| 9 | GET /api/pages/search | count=n | null / null | E、query/snippet/結果path群を記録しない |
+| 10 | GET /api/pages/{page_id}/source | null（304も同じ） | P / 取得V | E、解決済みP/Vのみ。ETagは記録しない |
+| 11 | PUT /api/pages/{page_id}/source | amend=b | P / committed V | E＋確定amend。後段失敗はcommit補足。解析前amend省略 |
+| 12 | GET /api/pages/{page_id}/meta | null | P / source V、draftはrev null | E、取得対象確定後P/Vのみ。link_refsをsummaryへ複製しない |
+| 13 | GET /api/pages/{page_id}/parent | null | 指定ページP / null | E、親非認可はdenied_side=parent・target=拒否親P、HTTP404。ID不在null |
+| 14 | GET /api/pages/{page_id}/short | null | P / null | E、ID不在null |
+| 15 | GET /api/pages/{page_id}/path | null | P / null | E、ID不在null |
+| 16 | POST /api/pages/{page_id}/path action=rename | action=rename destination=D | 元P / committed V | E＋action=rename、path拒否はdenied_side。D確定かつ変更済み後段失敗のみD補足可 |
+| 17 | POST /api/pages/{page_id}/path action=restore | action=restore destination=D | 削除時P / 復元latest V | E＋action=restore、path拒否はdenied_side。後段失敗の扱いはrename同様 |
+| 18 | POST /api/pages/{page_id}/revision action=rollback | action=rollback | P / 確定rollback_to V | E＋action=rollback、指定対象未確定revはnull、後段失敗commit補足 |
+| 19 | POST /api/pages/{page_id}/revision action=compaction | action=compaction | P / 確定keep_from V | E＋action=compaction、指定対象未確定revはnull、後段失敗commit補足 |
+| 20 | GET /api/pages/{page_id}/assets | count=n | owner P / null | E、page解決前null |
+| 21 | POST /api/pages/{page_id}/assets/{file_name} | null | owner P / null | E、extractor/owner未解決はnull。file名/bytes記録なし |
+| 22 | GET /api/pages/{page_id}/assets/{file_name} | null（302も同じ） | owner P / null | E、owner未解決null。Location/asset ID記録なし |
+| 23 | POST /api/pages/{page_id}/lock | null | P / null | E、index未解決null。lock tokenは成功でも記録しない |
+| 24 | PUT /api/pages/{page_id}/lock | null | P / null | E、index未解決null。lock token非記録 |
+| 25 | GET /api/pages/{page_id}/lock | null | P / null | E、index未解決null。lock状態/資格情報非記録 |
+| 26 | DELETE /api/pages/{page_id}/lock | null | P / null | E、index未解決null。draft削除を含め公開要求一件 |
+| 27 | DELETE /api/pages/{page_id} | recursive=b | P / null | E＋確定recursive、後段失敗commit補足。未解析recursive省略 |
+| 28 | POST /api/assets | null | 指定/owner P / null | E、path/owner未解決null、file/bytes記録なし |
+| 29 | GET /api/assets | null（302も同じ） | 指定/owner P / null | E、path/owner未解決null、Location非記録 |
+| 30 | GET /api/assets/{asset_id}/data | null（304も同じ） | owner P / null | E、ID/owner未解決・zombie null。本体/ETag非記録 |
+| 31 | GET /api/assets/{asset_id}/meta | null | owner P / null | E、ID/owner未解決・zombie null |
+| 32 | DELETE /api/assets/{asset_id} | null | owner P / null | E、ID/owner未解決・zombie null。既存deletedかzombieかをraw ID等で補足しない |
+
+無操作rename204は成功として記録するが、新revisionがなければそのtxnで確定した現在latestを記録。複数ページ再帰のrevision群は追加しない。RESTはappend集約対象とせず一要求一投入。結果件数やhas_moreは返したレスポンス生成値から得て、別DB参照で再計算しない。
+
+#### 更新後の失敗補足
+
+DB commit後FTS等が失敗するとHTTP500でも変更が残り得る（静的調査で確認した現状: src/rest_api/pages/source.rs:503–589）。最終result=InternalErrorを維持し、handlerが確定した更新metadataから`phase=post_commit committed=true`をEに付加する。rename/restoreでは確定action/D、sourceではcommitted V/P、revision操作では確定指定Vを保持する。phaseはfixed enumのpost_commit、committedはbooleanだけで、例外文字列や内部FS pathは転記しない。
+
+commit前拒否/失敗でDB未変更が確定した場合のみ`phase=pre_commit committed=false`を使用可能。metadataなしのextractor失敗や不明な内部失敗でcommitted=falseを推測しない。uploadの登録/commit失敗や新規file回収失敗は業務DB/FSの失敗としてHTTP500/内部失敗を維持する。監査sink障害だけで既存業務応答を変えない原則と混同しない。新規fileのcleanup失敗などDB commitのないFS残存はInternalErrorとして固定`phase=cleanup`を補足できるが、`committed=false`はDB状態の意味とし「一切副作用なし」の証拠にしない。DB更新入口の戻り値/後処理区間でmetadataを早期に確定し、500後に現在DBを読み直して推測しない。
+
+### 11.3 認証後request境界とhandler補足
+
+認証済みの定義済み公開REST操作にだけ一記録する。登録時にfixed route descriptorをresourceへ渡し、resource middlewareでHTTP method→固定30operationを選ぶ。動的pathからoperationを組み立てない。既存`.route`登録を必要最小限の`.service(web::resource(...).wrap(...))`へまとめ、同じresourceのGET/POST等のoperation表を明示する。scopeの認証middleware外側／resource監査内側という順にし、認証失敗は監査境界へ入らない。AuthContextと認証済みactor IDはresource boundaryに到達時すでに得られる。
+
+| 境界段階 | 処理と保証 |
+|---|---|
+| resourceのhandler/extractor以前 | fixed operationを選択、actor/token/addressを複製し、空のRestAuditMetadataをrequest extensionsへ格納。query/body/ID等を監査のために先読みしない |
+| handler/共通guard | metadataへ型付きaction、result、最終target、revision、返却count、commit phase等を補足するだけ。監査sinkへ直接投入しない。borrow/lockをawaitを跨いで保持しない |
+| nextがServiceResponseを返した | final HTTP statusとtyped metadataを統合し一記録。302/304/早期400/403/404/410/409/423/500を含める |
+| nextがErrを返した | ErrorのResponseErrorが生成するstatus/responseを同じ境界で受け取り、そのstatusでfallback分類し一記録。そのresponseを返し、handler完了扱いにしない |
+| metadataなし/不足 | statusから上表の分類を使用、target/revision/action/countは不明ならnull/省略。403はOperationDeniedで、scope/path/ReadOnlyと推測しない。400/413/415はInvalidInput、5xxはInternalError。raw error本文やreq URLをsummaryへコピーしない |
+| 固定operationなし | 未登録route/未対応method/認証失敗は従来HTTPログ対象。今回の監査対象を未知HTTP操作へ勝手に拡張するoperationを作らない |
+
+resource boundaryはweb::Bytes extractorより外側なので、payload limit/取得失敗でhandlerが実行されなくても記録できる。scope guardがhandler入口で拒否する際はtyped deny resultをmetadataへ補足する。path guard/DB policyもfailed pathとsideを補足する。親候補非認可はHTTP404に対してPathPrefixDeniedを明示し、status fallbackのNotFoundで上書きしない。
+
+メタデータはrequest-local共有の最小struct（固定enum/正規化path/整数/bool/Option）とし、公開レスポンスには露出させない。HTTP statusが500なら直前成功metadataのSuccessをInternalErrorへ更新し、commit事実だけを残す。retention/writerの診断で公開操作レコードを再帰的に生成しない。POST uploadのbodyはextractor以外が重複取得せず、response bodyを監査のために読取/再解析しない。
+
+一要求一記録は、一つのresource boundaryから一度投入を試みる意味であり、best-effort writer障害時の確実な一回永続化を保証するものではない。ネットワーク送信後の切断・プロセス強制killを正常な公開操作完了として監査する新仕様は設けない。DB/response metadataを確定して同期lock/txnを閉じてからsinkへ投入し、DB lockとaudit lockの逆順deadlockを避ける。
+
+### 11.4 共通監査基盤の起動・運用・停止
+
+| 契機 | 接続と失敗方針 |
+|---|---|
+| config受渡し | RunCommandContextの既存AuditLogConfigをREST運用でも常にhttp_serverへ渡す。MCPフラグでNoneにしない（src/command/run.rs:221–225）。新しい設定項目や既定出力先を増やさない |
+| 起動 | MCP endpointの有無からsink生成を切り離す（src/http_server/mod.rs:187–195）。既存config/出力dir準備・起動retention・writer/sinkを一度組み立て、AppStateからREST/MCPで同じArcを利用。dir/config依存失敗は起動失敗として返す |
+| request投入 | existing AuditSink.recordで同期直列投入。RESTは即時書込経路、MCP appendだけ既存集約。record/lock障害は固定warningを出し業務HTTP結果を変更しない。再試行で重複投入する仕組みは追加しない |
+| rotation | 既存writerのsize判定・rotate_if_neededを再利用（src/audit/writer.rs:105–136）。REST独自fileへ分けず同じJSONL writer。MCPのbuffer/rotation責務を監査層で保持する |
+| retention | 起動時に一回、稼働中は固定の粗い周期（設計値60秒、非公開内部定数）で既存build_retention_plan/execute_retention_planを呼ぶ。アクティブfile除外、規則外file温存、個別削除失敗はwarning/継続。周期実行のdirアクセス失敗も診断して次周期へ、業務応答を変えない |
+| retention同期 | request投入/rotationと同じsinkのwrite lockでwriterのactive状態と保持掃除を直列化。sink上の小さなmaintenance入口から既存retentionへ接続。lock中にawaitしない。ファイル列挙/削除をhandlerで行わない |
+| 正常停止 | server.await終了後、retentionタスクへ停止通知して完了を待ち、稼働requestが終了した状態でAuditSink.flushを呼ぶ。bufferの保留append→writer最終flushを順序どおり必ず実行。途中でserverがErrでもflushを試み、元error/flush errorを診断して終了Resultへ保持 |
+| flush失敗 | request投入best-effortと区別。終了flushの失敗を無視して正常完了にせず、runの終了Resultへ内部失敗として伝播する。無制限retry/二重appendは追加しない。既存設計の「明示停止手順・非best-effort」を満たす（docs/MCP_AUDIT_LOG_DESIGN.md:364,394,758–768） |
+
+HTTPサーバのstateはlock cleanup taskへ移す前にcloneし、停止後sinkの参照を保持する。保守taskの停止を待つ際はAppState/sinkのguardを持たない。lock cleanupも停止終了を整理し、終了flush後に新しい公開監査が投入される順序を作らない。Unix/Windows/ShutdownSignalなど既存正常終了を同じserver.await後の終了シーケンスへ接続する。強制kill・OS障害時のflushまでは保証しない。
+
+現行writerはBufWriterなのでrecord成功とディスクdurable化を同一視しない。
+今回新しいfsync保証・キュー・監査用DB・外部workerは導入しない。
+停止flushは既存group内部へ確定snapshotを保持し、非破壊で取得する。
+write_record成功keyだけを退役し、失敗/未試行groupを保持する。
+append write失敗でもwriter最終flushを必ず試行する。
+部分writeがあり得る停止sequenceの再flushでsnapshotを自動再投入せず、
+最終writer.flush失敗でも成功groupをbufferへ戻さない。
+通常record/record_append入口を永久停止させる変更はしない。
+保持は永続復旧・一回永続化の保証ではなく、終了Resultは失敗を維持する。
+
+HTTP終了後はretention/lock cleanupを停止してjoinし、
+同期MCP業務とrecordが保持するAppState read guardをwrite barrierで待つ。
+停止gateによりqueued業務を監査追加なしで拒否した後、
+既存MCP sweep停止とsession closeをguard外で行って最終flushへ進む。
+SDKの既終了actorは停止完了として扱い、それ以外の終了失敗を保持する。
+この順序で最終flush後の公開監査投入を防ぐ。

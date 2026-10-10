@@ -181,7 +181,7 @@ fn prepare_test_dirs() -> (PathBuf, PathBuf, PathBuf) {
     fs::create_dir_all(&assets_dir).expect("create assets dir failed");
 
     let db_path = db_dir.join("database.redb");
-    (base, db_path, assets_dir)
+    common::absolute_test_paths(base, db_path, assets_dir)
 }
 
 ///

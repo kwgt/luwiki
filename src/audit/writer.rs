@@ -13,6 +13,8 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::anyhow;
 use chrono::Utc;
 use tracing::{debug, warn};
 
@@ -48,6 +50,10 @@ pub(crate) struct AuditWriter {
 
     /// 現在のアクティブファイルサイズ
     current_size: u64,
+
+    /// 製品外の停止失敗注入
+    #[cfg(test)]
+    faults: WriterTestFault,
 }
 
 impl std::fmt::Debug for AuditWriter {
@@ -68,6 +74,24 @@ impl std::fmt::Debug for AuditWriter {
     }
 }
 
+///
+/// 明示停止失敗を検証する製品外writer注入状態
+///
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct WriterTestFault {
+    /// 失敗させるwrite呼出し番号
+    write_at: Option<usize>,
+    /// 部分byte書込後に失敗させるか
+    partial: bool,
+    /// 最終flush失敗注入
+    flush: bool,
+    /// write呼出し件数
+    write_calls: usize,
+    /// flush試行件数
+    flush_calls: usize,
+}
+
 impl AuditWriter {
     ///
     /// 監査ログ writer の生成
@@ -83,7 +107,27 @@ impl AuditWriter {
             config,
             file: None,
             current_size: 0,
+            #[cfg(test)]
+            faults: WriterTestFault::default(),
         }
+    }
+
+    ///
+    /// 起動時に出力先とactive fileを準備する
+    ///
+    /// # 戻り値
+    /// 出力先作成・既存サイズ取得・open結果を返す。
+    ///
+    /// # 概要
+    /// 既存newの遅延生成契約を維持し明示準備だけを追加する。
+    ///
+    pub(crate) fn prepare(&mut self) -> Result<()> {
+        /*
+         * 起動中にfilesystem依存失敗を検出する
+         */
+        self.ensure_output_dir()?;
+        self.ensure_current_size()?;
+        self.ensure_file_opened()
     }
 
     ///
@@ -103,12 +147,17 @@ impl AuditWriter {
     /// * `record` - 書き込む監査レコード
     ///
     /// # 戻り値
-    /// 現時点では骨格のため常に成功を返す。
+    /// JSONLの書き込みに成功した場合はOk、入出力失敗時はErrを返す。
     ///
     pub(crate) fn write_record(
         &mut self,
         record: &AuditRecord,
     ) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.faults.write_calls += 1;
+        }
+
         /*
          * JSONL 1 行の生成
          */
@@ -130,6 +179,15 @@ impl AuditWriter {
             .file
             .as_mut()
             .context("audit writer is not opened")?;
+        #[cfg(test)]
+        if self.faults.write_at == Some(self.faults.write_calls) {
+            if self.faults.partial {
+                writer.write_all(&line[..line.len().min(7)])?;
+            }
+            return Err(anyhow!(std::io::Error::other(
+                "injected partial audit write failure",
+            )));
+        }
         writer
             .write_all(&line)
             .context("audit jsonl write failed")?;
@@ -142,14 +200,54 @@ impl AuditWriter {
     /// writer の flush
     ///
     /// # 戻り値
-    /// 現時点では骨格のため常に成功を返す。
+    /// 開いたwriterのflush結果。未作成の場合はOkを返す。
     ///
     pub(crate) fn flush(&mut self) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.faults.flush_calls += 1;
+            if self.faults.flush {
+                return Err(anyhow!(std::io::Error::other(
+                    "injected audit writer flush failure",
+                )));
+            }
+        }
         if let Some(writer) = self.file.as_mut() {
             writer.flush().context("audit writer flush failed")?;
         }
 
         Ok(())
+    }
+
+    ///
+    /// 停止writerの失敗位置を隔離fixtureへ設定する
+    ///
+    /// # 引数
+    /// * `write_at` - n件目write失敗
+    /// * `partial` - 部分byte書込注入
+    /// * `flush` - 最終flush失敗
+    ///
+    /// # 戻り値
+    /// なし。公開設定や製品経路を変えない。
+    ///
+    #[cfg(test)]
+    pub(crate) fn inject_shutdown_failure(
+        &mut self, write_at: Option<usize>, partial: bool, flush: bool,
+    ) {
+        self.faults.write_at = write_at;
+        self.faults.partial = partial;
+        self.faults.flush = flush;
+    }
+
+    ///
+    /// fixtureのwrite/flush試行件数を返す
+    ///
+    /// # 戻り値
+    /// 試行件数。永続化回数ではない。
+    ///
+    #[cfg(test)]
+    pub(crate) fn shutdown_attempts(&self) -> (usize, usize) {
+        (self.faults.write_calls, self.faults.flush_calls)
     }
 
     ///

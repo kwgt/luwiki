@@ -20,7 +20,7 @@ use crate::database::types::{
     PathPrefixSet,
     TokenId,
 };
-use crate::rest_api::validate_page_path;
+use crate::wiki_path::NormalizedWikiPath;
 
 /// `token create` のデフォルトスコープ文字列
 const DEFAULT_TOKEN_CREATE_SCOPE: &str = "write";
@@ -724,36 +724,31 @@ fn parse_token_ttl(raw: &str) -> Result<Duration> {
 /// # 戻り値
 /// 検証に成功した場合は `Ok(())` を返す。
 ///
+/// # 概要
+/// CLIの前後trim後の値を正規形に限定し、dot等を自動解決しない。
+///
 fn validate_path_prefix(prefix: &str) -> Result<()> {
     /*
-     * 既存 page path 規則との整合を確認する
+     * 従来の絶対パスと正規形限定のエラーを維持する
      */
-    if let Err(message) = validate_page_path(prefix) {
-        return Err(anyhow!("invalid path prefix: {}", message));
+    if !prefix.starts_with('/') {
+        return Err(anyhow!("invalid path prefix: path must be absolute"));
+    }
+    if prefix != "/" && (prefix.ends_with('/')
+        || prefix.contains("//")
+        || prefix.split('/').any(|part| part == "." || part == ".."))
+    {
+        return Err(anyhow!(
+            "invalid path prefix: path must be normalized"
+        ));
     }
 
     /*
-     * 正規化済み絶対 path 制約を検証する
+     * 保存済みprefixを変換せず禁止文字も検証する
      */
-    if prefix != "/" && prefix.ends_with('/') {
-        return Err(anyhow!(
-            "invalid path prefix: path must be normalized"
-        ));
-    }
-
-    if prefix.split('/').any(|segment| segment == "." || segment == "..") {
-        return Err(anyhow!(
-            "invalid path prefix: path must be normalized"
-        ));
-    }
-
-    if prefix.contains("//") {
-        return Err(anyhow!(
-            "invalid path prefix: path must be normalized"
-        ));
-    }
-
-    Ok(())
+    NormalizedWikiPath::from_stored(prefix)
+        .map(|_| ())
+        .map_err(|err| anyhow!("invalid path prefix: {}", err))
 }
 
 #[cfg(test)]
@@ -834,6 +829,10 @@ mod tests {
         assert!(parse_path_prefixes(&["/docs/".to_string()]).is_err());
         assert!(parse_path_prefixes(&["/docs/../secret".to_string()]).is_err());
         assert!(parse_path_prefixes(&["/docs//topic".to_string()]).is_err());
+        assert!(parse_path_prefixes(&["/docs/a b".to_string()]).is_err());
+        let trimmed = parse_path_prefixes(&[" /docs ".to_string()]).unwrap();
+        assert!(trimmed.contains("/docs"));
+
     }
 
     ///

@@ -232,3 +232,10 @@ Bearer認証は Basic認証との共通入口、Bearerトークン管理情報�
 - `token list` の状態表示欄の短縮表現は暫定事項であるため、本書では「誤認しないこと」を主眼に観点化する
 - 詳細な表示体裁そのものは、使用感評価の結果を受けて別途固定する
 - 本書で不足が見つかった場合は、`docs/BEARER_AUTH_DESIGN.md` または関連仕様への補足要否を 5.5 タスクで再判定する
+
+## RESTパス制約の横断検証
+
+認証・scope・ReadOnly・TTL通知を維持し、全ID/path経路・lock cleanup前拒否・hello readガード・Basic/Bearer監査を確認する。
+
+詳細ケースと全32アクション対応の正本は[REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)。
+2026-10-11時点で検証計画のみ反映し、テストの実行成功を示すものではない。

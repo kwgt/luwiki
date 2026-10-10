@@ -5,7 +5,15 @@ info:
   description: >
     Wiki システム用 REST API。
     ページ管理、アセット管理、ページロック（TTL/トークン）を提供する。
+    2026-10-11のMS1時点では未対応・未検証だった。MS2〜4で実装し、MS5グループ2〜4で必要検証を完了。
+    実行条件・制約は[検証観点・証拠参照](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)を参照する。
+    最終SC評価・CP5とは区別する。
+    Wikiパスはraw検証後dotを解決する。root以外の末尾/、連続/、全角を含む空白・制御文字・バックスラッシュを拒否し、root越えを拒否する。
+    rename_to/restore_toだけは末尾/（root自身を含む）で元のbasenameを一度付加し、元と最終配置先の双方を認可する。
+    認可は返却・更新・lock cleanup・redirect・304より前。成立条件間では403、410、404の順とし、親候補非認可は404例外。
+    Basic/Bearer双方の認証後公開要求は固定method/route templateで監査する。監査詳細はMCP_AUDIT_LOG_DESIGN.md第11節。
     認証方式として Basic 認証および Bearer 認証を受け付ける。
+    x-required-scopeは単独操作では許可scopeのOR（write上位互換あり）。x-required-scope-by-actionがある共有POSTではactionごとの定義を優先し、x-required-scopeは候補集合であって全分岐をOR許可する意味ではない。
     Bearer 認証成功時にスライディング期限延長が発生した場合は、
     `X-Bearer-Expire` ヘッダで更新後の有効期限を返す。
 
@@ -85,6 +93,181 @@ components:
         timestamp: { type: string }
         username: { type: string }
 
+    PageListResponse:
+      type: "object"
+      required:
+          - "items"
+          - "has_more"
+      properties:
+        items:
+          description: >-
+            ページ情報のリストが格納される。
+          type: "array"
+          items:
+            description: >-
+              一件分のページ情報が格納される
+            type: "object"
+            required:
+              - "page_id"
+              - "path"
+              - "deleted"
+              - "last_update"
+            properties:
+              page_id:
+                description: >-
+                  ページIDが格納される
+                type: "string"
+
+              path:
+                description: >-
+                  ページの絶対パスが格納される。
+                type: "string"
+
+              deleted:
+                description: >-
+                  ページが削除されているか否かを表すフラグ値が格納される (削除されてい
+                  る場合true)。
+                type: "boolean"
+
+              last_update:
+                description: >-
+                  最終更新情報をパックしたオブジェクトが格納される
+                type: "object"
+                required:
+                  - "revision"
+                  - "timestamp"
+                  - "username"
+                properties:
+                  revision:
+                    description: >-
+                      リビジョン番号が格納される
+                    type: "integer"
+
+                  timestamp:
+                    description: >-
+                      更新日時が格納される(ISO8601,タイムゾーン無し)
+                    type: "string"
+
+                  username:
+                    description: >-
+                      更新を行ったユーザの名前が格納される
+                    type: "string"
+
+        has_more:
+          description: >-
+            同じ方向で継続して一覧取得可能か否かを表すフラグ値が格納される (trueの場合、
+            継続して一覧取得が可能)。
+          type: "boolean"
+
+        anchor:
+          description: >-
+            次回の forward / rewind に指定すべきカーソル値 (has_moreがtrueの場合のみ格
+            納される)。
+          type: "string"
+
+    PageShortResponse:
+      type: "object"
+      required:
+        - short_path
+      properties:
+        short_path:
+          description: >-
+            指定された正規化済みページパスに対応する短縮用パス断片 `{short_id}` が格納される。
+            実際の短縮URLを構成する場合はクライアント側で `/w/` を前置する
+          type: "string"
+
+    DeletedPageCandidates:
+      type: "array"
+      items:
+        type: "string"
+
+    TemplateCandidates:
+      type: "array"
+      items:
+        type: "object"
+        required:
+          - "page_id"
+          - "name"
+        properties:
+          page_id:
+            description: >-
+              テンプレートページのページIDが格納される
+            type: "string"
+
+          name:
+            description: >-
+              テンプレート候補の表示名が格納される
+            type: "string"
+
+          description:
+            description: >-
+              テンプレート候補の補助説明が格納される
+            type: "string"
+
+          macro_expand:
+            description: >-
+              テンプレート適用時の展開挙動フラグが格納される
+            type: "boolean"
+
+    PageSearchResults:
+      type: "array"
+      items:
+        description: >-
+          検索にマッチしたページの情報が格納される。
+        type: "object"
+        required:
+          - "page_id"
+          - "revision"
+          - "score"
+          - "path"
+          - "deleted"
+          - "text"
+        properties:
+          page_id:
+            description: >-
+              ページIDが格納される
+            type: "string"
+
+          revision:
+            description: >-
+              リビジョン番号が格納される。
+            type: "integer"
+
+          score:
+            description: >-
+              検索スコアが格納される。
+            type: "number"
+
+          path:
+            description: >-
+              ページのパスが格納される。
+            type: "string"
+
+          deleted:
+            description: >-
+              ページが削除されているか否かを表すフラグ値が格納される(削除されている場合true)。
+            type: "boolean"
+          text:
+            description: >-
+              検索式にマッチした周辺を含んだスニペットテキストが格納される。
+            type: "string"
+      maxItems: 100
+
+    ParentPageResponse:
+      type: "object"
+      required:
+        - id
+        - path
+      properties:
+        id:
+          description: >-
+            親ページのページIDが格納される
+          type: "string"
+        path:
+          description: >-
+            親ページのパスが格納される
+          type: "string"
+
   responses:
     Unauthorized:
       description: 認証に失敗した
@@ -92,20 +275,64 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
     Forbidden:
-      description: 認証済みだが必要スコープまたは操作条件を満たさない
+      description: 認証済みだが必要スコープ、ReadOnly、操作条件またはBearer path prefix制約を満たさない（返却親の非認可404は例外）
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
 
 paths:
-  /pages:
+  "/pages":
+    get:
+      summary: ページ一覧
+      description: Bearer 認証時は `read` スコープが必要。要求prefix自体を認可。cursorは比較用で独立認可せず、結果・件数・anchorはprefix内で算出。
+      x-required-scope: [read]
+      parameters:
+        - name: prefix
+          in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
+          required: true
+          schema: { type: string }
+        - name: forward
+          in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
+          required: false
+          schema: { type: string }
+        - name: rewind
+          in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: with_deleted
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageListResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       summary: ページの作成
-      description: Bearer 認証時は `write` スコープが必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `create` スコープが必要
+      x-required-scope: [create]
       parameters:
         - name: path
           in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
           required: true
           schema: { type: string }
       responses:
@@ -132,7 +359,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /pages/{page_id}/source:
+  "/pages/{page_id}/source":
     get:
       summary: ページソース取得
       description: Bearer 認証時は `read` スコープが必要
@@ -170,16 +397,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "410":
-          description: 削除済み
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
     put:
       summary: ページソース更新
-      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `update` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [update]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: amend
@@ -222,7 +443,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /pages/{page_id}/meta:
+  "/pages/{page_id}/meta":
     get:
       summary: ページメタ情報取得
       description: Bearer 認証時は `read` スコープが必要
@@ -255,13 +476,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
-        "410":
-          description: 削除済み
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-
-  /pages/{page_id}/path:
+  "/pages/{page_id}/path":
     get:
       summary: ページパス取得
       description: Bearer 認証時は `read` スコープが必要
@@ -287,8 +502,11 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       summary: ページパス更新
-      description: rename_to または restore_to のいずれかを指定する。Bearer 認証時は `write` スコープが必要
-      x-required-scope: [write]
+      description: rename_to または restore_to のいずれかを指定する。末尾/およびroot /は元のbasenameを付加した最終配置先となり、元と先の双方を認可する。Bearer 認証時はrenameが`update`、restoreが`create`を要求する
+      x-required-scope: [update, create]
+      x-required-scope-by-action:
+        rename: [update]
+        restore: [create]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: rename_to
@@ -336,7 +554,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /pages/{page_id}/assets:
+  "/pages/{page_id}/assets":
     get:
       summary: ページ配下アセット一覧
       description: Bearer 認証時は `read` スコープが必要
@@ -363,11 +581,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /pages/{page_id}/assets/{file_name}:
+  "/pages/{page_id}/assets/{file_name}":
     post:
       summary: アセットアップロード（ページ指定）
-      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `update` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [update]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - name: file_name
@@ -450,11 +668,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /pages/{page_id}/lock:
+  "/pages/{page_id}/lock":
     post:
       summary: ページロック取得
-      description: Bearer 認証時は `write` スコープが必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `create` または `update` スコープが必要
+      x-required-scope: [create, update]
       parameters:
         - $ref: "#/components/parameters/PageId"
       responses:
@@ -484,8 +702,8 @@ paths:
 
     put:
       summary: ページロック延長
-      description: Bearer 認証時は `write` スコープが必要。`X-Lock-Authentication` が必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `create` または `update` スコープが必要。`X-Lock-Authentication` が必要
+      x-required-scope: [create, update]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - $ref: "#/components/parameters/LockAuthHeader"
@@ -543,8 +761,8 @@ paths:
 
     delete:
       summary: ページロック解除
-      description: Bearer 認証時は `write` スコープが必要。`X-Lock-Authentication` が必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `update` スコープが必要。`X-Lock-Authentication` が必要
+      x-required-scope: [update]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - $ref: "#/components/parameters/LockAuthHeader"
@@ -569,11 +787,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /pages/{page_id}:
+  "/pages/{page_id}":
     delete:
       summary: ページ削除
-      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `delete` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [delete]
       parameters:
         - $ref: "#/components/parameters/PageId"
         - $ref: "#/components/parameters/LockAuthHeader"
@@ -603,14 +821,15 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /assets:
+  "/assets":
     post:
       summary: アセットアップロード（パス指定）
-      description: Bearer 認証時は `write` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `update` スコープが必要。ロックされているページでは `X-Lock-Authentication` も必要
+      x-required-scope: [update]
       parameters:
         - name: path
           in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
           required: true
           schema: { type: string }
         - name: file
@@ -665,6 +884,7 @@ paths:
       parameters:
         - name: path
           in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
           required: true
           schema: { type: string }
         - name: file
@@ -696,7 +916,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /assets/{asset_id}/data:
+  "/assets/{asset_id}/data":
     get:
       summary: アセット本体取得
       description: Bearer 認証時は `read` スコープが必要
@@ -730,12 +950,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "410":
-          description: 削除済み
+          description: 削除済み、または所属ページのないゾンビ
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /assets/{asset_id}/meta:
+  "/assets/{asset_id}/meta":
     get:
       summary: アセットメタ取得
       description: Bearer 認証時は `read` スコープが必要
@@ -760,16 +980,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "410":
-          description: 削除済み
+          description: 削除済み、または所属ページのないゾンビ
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /assets/{asset_id}:
+  "/assets/{asset_id}":
     delete:
       summary: アセット削除
-      description: Bearer 認証時は `write` スコープが必要。ロック対象ページ配下では `X-Lock-Authentication` も必要
-      x-required-scope: [write]
+      description: Bearer 認証時は `delete` スコープが必要。ロック対象ページ配下では `X-Lock-Authentication` も必要
+      x-required-scope: [delete]
       parameters:
         - $ref: "#/components/parameters/AssetId"
       responses:
@@ -785,12 +1005,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "410":
-          description: 削除済み
+          description: 削除済み、または所属ページのないゾンビ
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
-  /users/me:
+  "/users/me":
     get:
       summary: 自分自身のユーザ情報取得
       description: Basic 認証または Bearer 認証で利用できる。Bearer 認証時は `read` スコープが必要
@@ -814,3 +1034,291 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  "/hello":
+    get:
+      summary: 認証確立および疎通確認
+      description: Bearer 認証時は `read` スコープが必要。Wikiページパスを持たずパス制約対象外。
+      x-required-scope: [read]
+      responses:
+        "200":
+          description: 成功
+          content:
+            text/plain:
+              schema: { type: string, const: hello }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/deleted":
+    get:
+      summary: 削除済みページ候補
+      description: Bearer 認証時は `read` スコープが必要。削除時pathで認可。候補なしは空配列。
+      x-required-scope: [read]
+      parameters:
+        - name: path
+          in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletedPageCandidates" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/id":
+    get:
+      summary: ページID取得
+      description: Bearer 認証時は `read` スコープが必要。
+      x-required-scope: [read]
+      parameters:
+        - name: path
+          in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: 対象不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み、または所属ページのないゾンビ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/short":
+    get:
+      summary: パスから短縮パス取得
+      description: Bearer 認証時は `read` スコープが必要。
+      x-required-scope: [read]
+      parameters:
+        - name: path
+          in: query
+          description: REQUIREMENTS.md 2.2のraw検証・dot解決・最終検証を行う絶対Wikiパス
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageShortResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: 対象不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み、または所属ページのないゾンビ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/template":
+    get:
+      summary: テンプレート一覧
+      description: Bearer 認証時は `read` スコープが必要。候補current pathで絞り、許可候補なしも200と空配列。
+      x-required-scope: [read]
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateCandidates" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  "/pages/search":
+    get:
+      summary: 全文検索
+      description: Bearer 認証時は `read` スコープが必要。許可pathの候補に対して100件上限。複数targetはpage_id/revisionでdedupし最大scoreを採用。
+      x-required-scope: [read]
+      parameters:
+        - name: expr
+          in: query
+          required: true
+          schema: { type: string }
+        - name: target
+          in: query
+          required: false
+          schema: { type: string }
+          description: headings,body,code,front_matterをカンマ区切りで指定。未指定はbody。
+        - name: with_deleted
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: all_revision
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageSearchResults" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/{page_id}/parent":
+    get:
+      summary: 親ページ取得
+      description: Bearer 認証時は `read` スコープが必要。指定ページを認可。通常探索の親候補が非認可なら親なしと同じ404/reason。
+      x-required-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: recursive
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ParentPageResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: 指定ページ不存在、親不存在または返却候補の親が非認可（親なしと同じreason）
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み、または所属ページのないゾンビ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/{page_id}/short":
+    get:
+      summary: IDから短縮パス取得
+      description: Bearer 認証時は `read` スコープが必要。
+      x-required-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageShortResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: 対象不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み、または所属ページのないゾンビ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  "/pages/{page_id}/revision":
+    post:
+      summary: 履歴ロールバックまたはコンパクション
+      description: Bearer 認証時はrollbackが`update`、compactionが`delete`を要求する。rollback_to/keep_fromはいずれか一つを指定。現在pathで認可してから変更。
+      x-required-scope: [update, delete]
+      x-required-scope-by-action:
+        rollback: [update]
+        compaction: [delete]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: rollback_to
+          in: query
+          required: false
+          schema: { type: integer }
+        - name: keep_from
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "204":
+          description: 成功
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          description: 入力形式不正
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: 対象不存在
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "410":
+          description: 削除済み、または所属ページのないゾンビ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "423":
+          description: ロック状態による拒否
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }

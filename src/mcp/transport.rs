@@ -1384,7 +1384,7 @@ mod tests {
         let upload_body = build_tool_call_body(
             "upload_page_asset",
             json!({
-                "path": "/mcp/page/",
+                "path": "/mcp/./page",
                 "file_name": "image.bin",
                 "mime_type": "application/octet-stream",
                 "data_base64": "aW1hZ2U=",
@@ -1459,7 +1459,7 @@ mod tests {
         let delete_body = build_tool_call_body(
             "delete_page_asset",
             json!({
-                "path": "/mcp/page/",
+                "path": "/mcp/./page",
                 "file_name": "image.bin",
             }),
         );
@@ -3825,6 +3825,63 @@ mod tests {
     }
 
     ///
+    /// Streamable HTTPのJSON入力で共通パス規則を確認する
+    ///
+    /// # 概要
+    /// 実sessionからdot解決、percent保持、raw禁止の公開応答を比較する。
+    ///
+    /// # 注記
+    /// get_pageを呼び、許可pathのpayloadと不正pathのtool errorを確認。
+    ///
+    /// # 戻り値
+    /// なし
+    ///
+    #[actix_web::test]
+    async fn tools_call_path_input_preserves_json_and_raw_validation() {
+        /*
+         * JSONのpercent表記が指す保存ページを準備する
+         */
+        let context = spawn_test_server().await;
+        {
+            let state = context.state.read().unwrap();
+            state.db().create_page(
+                "/mcp/%2E%2E/page", "alice", "literal".to_string(),
+            ).unwrap();
+        }
+        let session = context.initialize_session().await;
+        context.send_initialized_notification(&session).await;
+
+        /*
+         * dotだけを解決しpercent文字列をURLとして解釈しない
+         */
+        for (input, expected) in [
+            ("/mcp/./page", "/mcp/page"),
+            ("/mcp/%2E%2E/page", "/mcp/%2E%2E/page"),
+        ] {
+            let payload = call_asset_tool(
+                &context, &session, "get_page", json!({"path": input}),
+            ).await;
+            assert_eq!(payload["path"], expected);
+        }
+
+        /*
+         * raw不正がdot縮約等で受け入れられないことを確認する
+         */
+        for (input, message) in [
+            ("/mcp/page/", "path must not have a trailing slash"),
+            ("/mcp//page", "path must not contain consecutive slashes"),
+            ("/mcp/../../page", "path must not traverse above root"),
+            ("/mcp/bad name", "path contains invalid character"),
+        ] {
+            assert_asset_tool_call_error(
+                &context, &session, "get_page", json!({"path": input}),
+                "invalid_input", message,
+            ).await;
+        }
+        context.shutdown().await;
+    }
+
+    ///
     /// 参照系アセット4 tool の代表呼び出しが
     /// Streamable HTTP経由で成功することを確認する。
     ///
@@ -3864,7 +3921,7 @@ mod tests {
         let list_body = build_tool_call_body(
             "list_page_assets",
             json!({
-                "path": "/mcp/assets/",
+                "path": "/mcp/./assets",
             }),
         );
         let list_response = context
@@ -3907,7 +3964,7 @@ mod tests {
             let request_body = build_tool_call_body(
                 tool_name,
                 json!({
-                    "path": "/mcp/assets/",
+                    "path": "/mcp/./assets",
                     "file_name": "asset.bin",
                 }),
             );

@@ -51,9 +51,11 @@ pub async fn get(
     req: HttpRequest,
     state: web::Data<Arc<RwLock<AppState>>>,
 ) -> actix_web::Result<HttpResponse> {
-    if let Err(resp) = require_request_scope(&req, BearerScope::Read) {
-        return Ok(resp);
-    }
+    let auth = match require_request_scope(&req, BearerScope::Read) {
+        Ok(auth) => auth,
+        Err(resp) => return Ok(resp),
+    };
+    let policy = crate::auth::PageAccessPolicy::new(auth.path_prefixes());
 
     /*
      * 共有状態取得
@@ -68,7 +70,9 @@ pub async fn get(
         }
     };
 
-    let candidates = match state.db().list_template_candidates() {
+    let candidates = match state.db().list_authorized_template_candidates(
+        &policy,
+    ) {
         Ok(entries) => entries,
         Err(_) => {
             return Ok(resp_error_json(
@@ -93,6 +97,9 @@ pub async fn get(
      */
     entries.sort_by(|left, right| {
         left.name.cmp(&right.name).then_with(|| left.page_id.cmp(&right.page_id))
+    });
+    crate::rest_api::audit::update_metadata(&req, |metadata| {
+        metadata.count = Some(entries.len());
     });
     Ok(HttpResponse::Ok()
         .content_type("application/json")
