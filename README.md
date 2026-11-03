@@ -1,221 +1,274 @@
 # luwiki
 
-ローカル運用を目的とした、Rust製の軽量Wikiシステムです。
-
-## v0.9.25以前からの既存データ利用時の注意
-
-v0.9.25以前のバージョンで作成・運用していた既存データを利用する場合は、
-front matter対応およびfront matter由来派生データ対応後の状態に合わせるため、
-アップデート後に次の再構成コマンドを実行してください。
-
-```sh
-luwiki fts rebuild
-luwiki derived rebuild --target all
-```
-
-`fts rebuild`は、全文検索インデックスを現行スキーマで作り直します。
-特に、front matter対応前に作成された全文検索インデックスには
-`front_matter`フィールドが存在しないため、再構築しないまま検索やページ更新を行うと
-FTS関連エラーになる場合があります。
-
-`derived rebuild --target all`は、ページ正本からテンプレート、MCP prompts、
-MCP resourcesなどのfront matter由来派生データを再構成します。
-
-安全のため、これらのコマンドはサーバを停止するか、少なくともページ更新などの
-書き込み操作が行われない状態で実行してください。
+ローカル運用を目的とした、Rust製の軽量Wikiシステムです。Markdownでページを記述し、
+ブラウザから閲覧・編集できます。データはredbに保存し、フロントエンドは実行ファイルに埋め込みます。
 
 ## 主な機能
 
-- Markdownページの作成、編集、履歴管理、rename、削除・復元
-- YAML front matterの編集、検証、表示時の除外
-- 本文、見出し、コード、front matterを対象とした全文検索
-- front matterおよびlegacy設定に対応したテンプレート機能
-- マクロ、Mermaid、数式、GitHub風チェックボックス
-- アセット管理
+- Markdownページの作成・編集、リビジョン管理、差分表示、移動、削除・復元
+- YAML front matter、テンプレート、マクロ
+- Mermaid、数式、GitHub風チェックボックス
+- 本文・見出し・コード・front matterの全文検索
+- 画像や添付ファイルなどのアセット管理
 - バックアップ／マイグレート用のexport/import
-- Basic認証、Bearer認証、スコープ、path prefix制約
-- MCP toolsによるページ操作
-- MCP標準`prompts/list`・`prompts/get`
-- MCP標準`resources/list`・`resources/read`
-- front matter由来派生データの再構成
-
-要求仕様と設計の詳細は[`docs`](docs/)を参照してください。
+- Basic認証、Bearer認証、トークンスコープとpath prefixによるアクセス制限
+- MCP tools、prompts、resourcesによる外部クライアントとの連携
+- TLS、監査ログ
 
 ## ビルド方法
 
-### 前提
+### 必要な環境
 
 - Rust 2024 editionを利用できるRust toolchain
-- Node.js
-- npm
+- Node.jsとnpm（`frontend/package-lock.json`の依存パッケージを利用できる環境）
+- WindowsではMSVC toolchainとVisual Studio 2022のC/C++ビルド環境
 
-フロントエンドの生成物は`frontend/dist`へ出力され、Rust側の`rust-embed`によって
-実行ファイルへ埋め込まれます。そのため、フロントエンドを先にビルドしてください。
+WindowsのCargoコマンドは、Visual Studio 2022のDeveloper Command Promptで実行してください。
+`where cl`と`cl`で、コンパイラのパスとバージョンがVisual Studio 2022のものであることを確認します。
+Visual Studio 2026付属のコンパイラは使用しません。
+詳しい環境条件は[プロジェクト固有の制約事項](docs/PROJECT_CONSTRAINTS.md)を参照してください。
+
+以下のコマンドはリポジトリのルートで実行します。フロントエンドの成果物を
+`frontend/dist`から実行ファイルへ埋め込むため、npmによるビルドを先に行ってください。
 
 ### リリースビルド
 
 ```sh
 npm --prefix frontend ci
 npm --prefix frontend run build
-cargo build --release
+cargo build --release --locked
 ```
 
-生成される実行ファイル:
-
-```text
-target/release/luwiki
-```
+実行ファイルは`target/release/luwiki`に生成されます（Windowsでは`target/release/luwiki.exe`）。
 
 ### デバッグビルド
 
 ```sh
 npm --prefix frontend ci
 npm --prefix frontend run build:debug
-cargo build
+cargo build --locked
 ```
 
-生成される実行ファイル:
-
-```text
-target/debug/luwiki
-```
-
-`frontend`の依存パッケージが導入済みで、`package-lock.json`に変更がない場合は、
+実行ファイルは`target/debug/luwiki`に生成されます（Windowsでは`target/debug/luwiki.exe`）。
+依存パッケージが導入済みで`frontend/package-lock.json`に変更がない場合は、
 2回目以降の`npm ci`を省略できます。
 
-## 使用方法
+## 初回起動
+
+以下では実行ファイルを`luwiki`として記述します。ビルド直後は、使用するシェルに応じて
+`./target/release/luwiki`や`.\target\release\luwiki.exe`に読み替えてください。
+
+1. ブラウザで利用するユーザを登録します。
+
+   ```sh
+   luwiki user add --display-name "My Name" myuser
+   ```
+
+   プロンプトに従ってパスワードを登録します。ユーザ未登録ではサーバを起動できません。
+
+2. ローカルマシンから接続できるアドレスでサーバを起動します。
+
+   ```sh
+   luwiki run 127.0.0.1:8080
+   ```
+
+3. ブラウザで<http://127.0.0.1:8080/wiki>を開き、登録したユーザ名とパスワードでBasic認証を行います。
+
+初回起動時には埋め込みの雛形からルートページが作成されます。
+以降はブラウザからページを作成・編集できます。
+
+設定ファイルは省略できます。デフォルトではOSごとのユーザ用ディレクトリにデータを保存します。
+保存先を変更する場合は、ユーザ登録時とサーバ起動時に同じ設定ファイルまたは保存先オプションを指定してください。
+
+## CLIの概要
 
 ```text
 luwiki [OPTIONS] [COMMAND]
+luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 ```
 
-主なコマンド:
+共通オプションはサブコマンドの前に、サブコマンド固有のオプションはその後に指定します。
+
+### 共通オプション
+
+| オプション | 内容 |
+|:--|:--|
+| `-c, --config-path FILE` | 使用するTOML設定ファイル |
+| `-d, --db-path FILE` | redbデータベースの保存先 |
+| `-I, --fts-index DIR` | 全文検索インデックスの保存先 |
+| `-a, --assets-path DIR` | アセットの保存先 |
+| `-l, --log-level LEVEL` | ログレベル（`none`、`error`、`warn`、`info`、`debug`、`trace`。既定は`info`） |
+| `-L, --log-output PATH` | ログの出力先ファイルまたはディレクトリ |
+| `--log-tee` | ログを標準出力にも出力 |
+| `-T, --wiki-title TITLE` | Wikiの表示名（既定は`LUWIKI`） |
+| `-S, --asset-limit-size SIZE` | アップロード上限（既定は`10M`、最大`100M`。`K`、`M`はKiB、MiB） |
+| `-t, --template-root PATH` | テンプレート再構成時に取り込むlegacy候補のWikiパス |
+| `--audit-log-dir DIR` | 監査ログの出力先 |
+| `--audit-log-retention DURATION` | 監査ログの保持期間（既定は`90d`。`d`、`h`、`m`を使用可能） |
+| `--audit-log-rotate-size SIZE` | 監査ログのローテーション閾値（既定は`2M`） |
+| `--show-options` | 解決済みの設定を表示して終了 |
+| `--save-config` | 設定を保存して終了 |
+| `--help` / `--version` | ヘルプ／バージョンの表示 |
+
+### サーバ起動オプション
+
+| 引数・オプション | 内容 |
+|:--|:--|
+| `BIND-ADDR[:PORT]` | 待ち受け先。設定未指定時は`0.0.0.0:8080` |
+| `-b, --open-browser` | 起動時にブラウザを開く |
+| `--mcp` | MCPサーバ機能を有効化 |
+| `-T, --tls` | HTTPSを有効化 |
+| `-C, --cert FILE` | PEM形式のサーバ証明書 |
+| `-K, --key FILE` | PEM形式の秘密鍵（証明書の指定も必要） |
+| `--win-service` | Windowsサービスとして起動（Windowsのみ） |
+
+```sh
+luwiki run --open-browser 127.0.0.1:8080
+luwiki run --tls --cert server.pem --key server-key.pem 127.0.0.1:8443
+```
+
+`--key`を省略する場合は、証明書のPEMに秘密鍵も含めてください。
+`--tls`指定時に証明書パスを明示しなければ、デフォルトの`server.pem`を使用し、
+存在しない場合は自己署名証明書を自動生成します。明示した証明書ファイルが存在しない場合はエラーです。
+
+### 管理コマンドとヘルプ
 
 | コマンド | 用途 |
 |:--|:--|
-| `run` | サーバの起動 |
-| `derived` | front matter由来派生データの管理 |
-| `user` | ユーザ管理 |
-| `page` | ページ管理 |
-| `lock` | ロック管理 |
-| `asset` | アセット管理 |
-| `fts` | 全文検索の管理 |
-| `token` | Bearerトークン管理 |
-| `export` | バックアップ／マイグレート用データのexport |
-| `import` | エクスポートデータのimport |
+| `user` | ユーザの登録・一覧・変更・削除 |
+| `page` | ページの追加・一覧・移動・削除・復元 |
+| `lock` | 編集ロックの一覧・解除 |
+| `asset` | アセットの追加・一覧・移動・削除・復元 |
+| `fts` | 全文検索、インデックスの再構築・マージ |
+| `derived` | front matter由来の派生データの再構成 |
+| `token` | Bearerトークンの発行・確認・無効化、path prefixの管理 |
+| `export` / `import` | バックアップ／マイグレート用データの出力・取り込み |
 | `commands` | サブコマンド一覧の表示 |
 | `help-all` | 全サブコマンドのヘルプ表示 |
 
-front matter由来の派生データは、次のコマンドで再構成できます。
-
-```sh
-luwiki derived rebuild --target templates
-luwiki derived rebuild --target prompts
-luwiki derived rebuild --target resources
-luwiki derived rebuild --target all
-```
-
-`--template-root`は、通常運用のテンプレート判定条件ではなく、
-テンプレート再構成時にlegacy候補を取り込むための入力元です。
-`prompts` / `resources` targetでは使用せず、`all` targetではtemplates側だけに適用します。
-
-利用可能なオプションと各サブコマンドの詳細は、次を参照してください。
-
 ```sh
 luwiki --help
-luwiki <COMMAND> --help
+luwiki run --help
+luwiki user add --help
+luwiki help-all
 ```
 
-CLI仕様は[`docs/CLI_SPECS.md`](docs/CLI_SPECS.md)に記載しています。
+各コマンドの引数や動作の詳細は[CLI仕様](docs/CLI_SPECS.md)を参照してください。
 
-## ブートストラップ
+## 設定ファイル
 
-リリースビルドした実行ファイルを使う場合:
+設定ファイルはTOML形式です。CLIで明示した値が設定ファイルより優先され、
+未指定の項目には組み込みのデフォルト値を使用します。
+デフォルト位置に設定ファイルがなくても起動できますが、`--config-path`で明示する場合は
+そのファイルをあらかじめ作成してください。
 
-1. ユーザを追加します。
+### デフォルトの保存先
 
-   ```sh
-   target/release/luwiki user add <USER-NAME>
-   ```
+| 対象 | Linux | Windows |
+|:--|:--|:--|
+| 設定ファイル | `$XDG_CONFIG_HOME/luwiki/config.toml`（未設定時は`~/.config/luwiki/config.toml`） | `%LOCALAPPDATA%\luwiki\config.toml` |
+| データディレクトリ | `$XDG_DATA_HOME/luwiki`（未設定時は`~/.local/share/luwiki`） | `%LOCALAPPDATA%\luwiki` |
 
-2. サーバを起動します。
+データディレクトリ配下には、`database.redb`、`index/`、`assets/`、`log/`、`audit/`、
+TLS用の`server.pem`を配置します。実際の設定・保存先は次のコマンドで確認できます。
 
-   ```sh
-   target/release/luwiki run
-   ```
+```sh
+luwiki --show-options
+luwiki --show-options run
+```
 
-3. ブラウザで<http://127.0.0.1:8080/wiki>を開きます。
+### 設定例
+
+以下を`config.toml`として作成すると、設定ファイルと同じディレクトリの`storage/`配下にデータを保存し、
+`127.0.0.1:8080`で待ち受けます。
+
+```toml
+[global]
+wiki_title = "My Wiki"
+db_path = "storage/database.redb"
+fts_index = "storage/index"
+assets_path = "storage/assets"
+log_level = "INFO"
+log_output = "storage/log"
+asset_limit_size = "10M"
+audit_path = "storage/audit"
+audit_retention = "90d"
+audit_rotate_size = "2M"
+
+[run]
+bind = "127.0.0.1"
+port = 8080
+use_tls = false
+use_mcp = false
+mcp_authority = "local.luwiki"
+```
+
+設定ファイル内の相対ファイルパスは、設定ファイルのあるディレクトリを基準に解決します。
+設定を使用してユーザ登録・起動する例は次のとおりです。
+
+```sh
+luwiki --config-path ./config.toml user add myuser
+luwiki --config-path ./config.toml run
+```
+
+主な設定テーブルは`[global]`（共通設定）と`[run]`（サーバ起動設定）です。
+`[user.list]`、`[page.list]`、`[asset.list]`、`[fts.search]`などでは、
+管理コマンドのソート順や検索対象のデフォルト値を設定できます。
+Wikiアイコンは`[global]`の`wiki_icon`に画像ファイルのパスを指定します。
+HTTPSの証明書・秘密鍵を設定ファイルに保存する場合は、`[run]`の`server_cert`・`server_key`を使用してください。
+
+現在の設定をデフォルト位置の設定ファイルへ保存することもできます。
+次の例は設定の保存だけを行い、サーバは起動しません。
+
+```sh
+luwiki --wiki-title "My Wiki" --save-config run 127.0.0.1:8080
+```
 
 ## MCPサーバ機能
 
-MCPサーバ機能を有効にする場合は、`run`へ`--mcp`を指定します。
+MCPを利用する場合は、通常のHTTP/HTTPSサーバ起動に`--mcp`を追加します。
+設定ファイルの`[run]`で`use_mcp = true`を指定することもできます。
 
 ```sh
-luwiki run --mcp
+luwiki run --mcp 127.0.0.1:8080
 ```
 
-MCP endpointはBearer認証を必要とし、ページ操作用tools、
-MCP標準`prompts/list`・`prompts/get`、
-MCP標準`resources/list`・`resources/read`を提供します。
+MCPエンドポイントは`/mcp`です。接続にはBearerトークンを使用します。
+エージェント用ユーザとトークンの作成、クライアント側の設定例は
+[MCPセットアップ](MCP_SETUP.md)を参照してください。
+MCP toolsに加え、標準の`prompts/list`・`prompts/get`、`resources/list`・`resources/read`を提供します。
 
-セットアップ例は[`MCP_SETUP.md`](MCP_SETUP.md)を参照してください。
-promptsの外部仕様は
-[`docs/MCP_PROMPT_SPECS.md`](docs/MCP_PROMPT_SPECS.md)に記載しています。
-resourcesの外部仕様は
-[`docs/MCP_RESOURCE_SPECS.md`](docs/MCP_RESOURCE_SPECS.md)に記載しています。
+## 既存データの更新時の注意
 
-## Todo
-  - [x] TLS対応
-  - [x] 全文検索の実装
-  - [x] 新規ページ作成インタフェースの追加(URL直打ち or リンク埋め込みでの新規ページ作成は可能)
-  - [x] ページ移動(リネーム)実装
-  - [x] ページ削除の実装
-  - [x] amend更新の対応
-  - [x] ゾンビページ(削除済みページ)の管理画面
-  - [x] リビジョン管理画面
-  - [x] エディタ導入(CodeMirror)
-  - config.toml
-      - [X] Wiki名の表示名設定
-      - [X] アセットアップロードの上限サイズ指定
-      - [ ] アイコン設定
-  - [x] バックアップ(インポート／エクスポート)機能の実装
-  - Markdown追加機能
-      - [x] Github風チェックボックス
-      - [x] Mermaid対応 (Mermaid.js組み込み)
-      - [x] 数式対応 (@mdit/plugin-katexを使用)
-  - [x] テンプレート機能
-  - マクロ機能
-      - [x] コメント記述マクロ
-      - [x] 子ページリスト生成マクロ
-      - [x] 単純リンク生成
-      - [x] アセットのコードブロック展開マクロ
-      - [x] ページ名展開
-  - [x] Bearer認証のサポート
-  - [x] YAML front matter対応
-  - [x] front matter由来派生データの再構成
-  - MCPサーバ機能
-      - tools
-          - ページ本文の操作
-              - [x] get_page
-              - [x] get_page_toc
-              - [x] list_pages
-              - [x] search_pages
-              - [x] create_page
-              - [x] update_page
-              - [x] append_page
-              - [x] rename_page
-              - [x] get_page_section
-              - [x] edit_page
-          - [ ] アセットの操作
-      - resources (未テスト)
-          - [x] 固定組み込みresource
-              - [x] front matter詳細仕様
-          - [x] ページ由来resource
-              - [x] resources/list
-              - [x] resources/read
-      - prompts (未テスト)
-          - [x] prompts/list
-          - [x] prompts/get
+v0.9.25以前のバージョンで作成・運用していたデータを利用する場合は、
+アップデート後に次のコマンドを実行してください。保存先を変更している場合は、
+通常の起動時と同じ`--config-path`などの共通オプションを付けます。
+
+```sh
+luwiki fts rebuild
+luwiki derived rebuild --target all
+```
+
+`fts rebuild`は全文検索インデックスを現行スキーマで作り直します。
+front matter対応前のインデックスには`front_matter`フィールドがないため、
+再構築せずに検索やページ更新を行うとFTS関連エラーになる場合があります。
+
+`derived rebuild --target all`はページ正本からテンプレート、MCP prompts、MCP resourcesの
+派生データを再構成します。`--target templates`、`--target prompts`、`--target resources`で個別に再構成できます。
+`--template-root`はlegacyテンプレート候補の取り込み元で、通常運用のテンプレート判定には使用しません。
+`all`ではテンプレートの再構成にだけ適用します。
+
+安全のため、再構成コマンドはサーバを停止するか、少なくともページ更新などの
+書き込み操作が行われない状態で実行してください。
+
+## 関連ドキュメント
+
+- [要求仕様](docs/REQUIREMENTS.md)
+- [CLI・設定ファイル仕様](docs/CLI_SPECS.md)
+- [REST API仕様](docs/REST_API_SPECS.md)
+- [MCP tools仕様](docs/MCP_TOOL_SPECS.md)、[prompts仕様](docs/MCP_PROMPT_SPECS.md)、[resources仕様](docs/MCP_RESOURCE_SPECS.md)
+- [エクスポートデータ仕様](docs/EXPORT_DATA_SPEC.md)
 
 ## ライセンス
-このソフトウェアは[MITライセンス](https://opensource.org/licenses/MIT)の条件下でオープンソースとして利用可能です。
+
+このソフトウェアは[MITライセンス](LICENSE)の条件下で利用できます。

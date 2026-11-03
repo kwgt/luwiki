@@ -9,3 +9,7 @@
 /frontend/*.tgz
 /docs/fig/*.bkp
 **/index.scip
+/dist/
+/.release-skill-backups/
+/.agents/
+/.release.toml
