@@ -35,6 +35,7 @@ use crate::database::types::{AssetId, LockInfo, LockToken, PageId, PageIndex};
 pub(crate) struct AuthorizedLockResult<T> {
     /// 既存lock操作の返却値
     pub(crate) value: T,
+
     /// 操作txnで認可した対象index。MS4の成功対象情報に利用する。
     pub(crate) target: PageIndex,
 }
@@ -194,6 +195,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 取得したロック情報を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn acquire_page_lock(
         &self,
         page_id: &PageId,
@@ -363,6 +365,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 更新したロック情報を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn renew_page_lock(
         &self,
         page_id: &PageId,
@@ -593,6 +596,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 解除に成功した場合は`Ok(())`を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn release_page_lock(
         &self,
         page_id: &PageId,

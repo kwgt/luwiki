@@ -182,6 +182,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 削除済みページおよび draft を除外した候補一覧を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn list_template_candidates(
         &self,
     ) -> Result<Vec<TemplateCandidateListEntry>> {
@@ -261,6 +262,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 再構成後に投入された候補件数を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn rebuild_template_candidates(&self) -> Result<usize> {
         self.rebuild_template_candidates_with_legacy(None)
     }

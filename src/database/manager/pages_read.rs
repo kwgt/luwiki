@@ -936,6 +936,7 @@ impl DatabaseManager {
     /// 対象ページが存在する場合は現在状態を返す。
     /// 存在しない場合は `None` を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn get_append_conflict_state_by_id(
         &self,
         page_id: &PageId,

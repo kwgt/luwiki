@@ -56,6 +56,7 @@ pub(crate) struct TemplateCandidateListEntry {
     page_id: PageId,
 
     /// current path
+    #[allow(unused)]
     current_path: String,
 
     /// テンプレート表示名
@@ -744,6 +745,7 @@ impl TemplateCandidateListEntry {
     /// # 戻り値
     /// current path を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn current_path(&self) -> &str {
         &self.current_path
     }
@@ -818,6 +820,7 @@ impl PromptCandidateListEntry {
     /// # 戻り値
     /// ページIDを返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn page_id(&self) -> PageId {
         self.page_id.clone()
     }
@@ -828,6 +831,7 @@ impl PromptCandidateListEntry {
     /// # 戻り値
     /// current pathを返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn current_path(&self) -> &str {
         &self.current_path
     }
@@ -858,6 +862,7 @@ impl PromptCandidateListEntry {
     /// # 戻り値
     /// system情報が存在する場合はその値を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn system(&self) -> Option<&str> {
         self.system.as_deref()
     }
@@ -1104,6 +1109,7 @@ impl ResourceListEntry {
     /// # 戻り値
     /// resourceの由来を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn source(&self) -> ResourceListSource {
         self.source
     }
@@ -1114,6 +1120,7 @@ impl ResourceListEntry {
     /// # 戻り値
     /// ページIDが存在する場合はその値を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn page_id(&self) -> Option<PageId> {
         self.page_id.clone()
     }
@@ -1124,6 +1131,7 @@ impl ResourceListEntry {
     /// # 戻り値
     /// current pathが存在する場合はその値を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn current_path(&self) -> Option<&str> {
         self.current_path.as_deref()
     }

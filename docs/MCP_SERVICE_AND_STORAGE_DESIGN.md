@@ -39,6 +39,14 @@ path ベースサービス層、永続化モデル拡張、DB API、更新系操
 - 追加が必要な DB API
 - 更新系操作の共通化単位
 
+実装入口は`src/mcp/service.rs`の`McpService`を維持する。
+共通認可・path / revision解決・保存・ロック・append再試行・エラー写像は親に置き、
+操作は`service/pages.rs` / `assets.rs` / `prompts.rs` / `resources.rs`、
+TOC・部分編集helperは`service/sections.rs`へ配置する。
+ページ・アセット操作のサービス型と対応implは`service/types.rs`に同居させ、
+親で明示再exportして従来の型参照経路を維持する。
+prompts / resourcesの内部結果型は既存の`src/mcp/model.rs`に置く。
+
 ## 2. path ベースサービス層の橋渡し設計
 
 本章では、path ベース操作を内部処理へ橋渡しするサービス層の設計として、
@@ -826,8 +834,8 @@ MCP の create はドラフト前提ではなく通常ページ作成として�
 
 #### 2.3.8 アセット共通 helper
 
-`src/mcp/service.rs` は、アセット操作向けに
-以下のhelperを提供する。
+`McpService`のアセット操作向けhelperは`src/mcp/service/assets.rs`に配置する。
+以下のうち`map_*_error()`は親の`src/mcp/service.rs`に保持して共用する。
 
 - `resolve_page_asset_by_file()`
   - `ResolvedPage` と `file_name` から、対象ページ内の通常アセットを解決する

@@ -315,6 +315,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 作成したページIDとロック情報を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn create_draft_page<P, U>(
         &self, path: P, user_name: U,
     ) -> Result<(PageId, LockInfo)>
@@ -668,6 +669,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 成功時は確定 revision と amend 実行有無を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn append_page_by_id(
         &self, request: &AppendPageRequest,
     ) -> Result<AppendPageResult> {
@@ -1026,6 +1028,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 成功時は`Ok(())`を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn rollback_page_source_only(
         &self,
         page_id: &PageId,
@@ -1166,6 +1169,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 成功時は`Ok(())`を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn compact_page_source(
         &self,
         page_id: &PageId,
@@ -1298,6 +1302,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 成功、または既存の衝突・状態・ロック等のエラーを返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn rename_pages_recursive_to_path_by_id(
         &self,
         page_id: &PageId,
@@ -1588,6 +1593,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 成功時は`Ok(())`を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn delete_page_by_id_with_lock_token(
         &self,
         page_id: &PageId,
@@ -1805,6 +1811,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 既存復元処理の結果を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn undelete_page_by_id_to_path(
         &self,
         page_id: &PageId,
@@ -1998,6 +2005,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 既存復元処理の結果を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn undelete_pages_recursive_by_id_to_path(
         &self,
         page_id: &PageId,
@@ -2356,6 +2364,7 @@ impl DatabaseManager {
     /// # 戻り値
     /// 既存リネーム処理の結果。
     ///
+    #[allow(dead_code)]
     pub(crate) fn rename_page_to_path(
         &self,
         path: &str,

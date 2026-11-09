@@ -183,6 +183,7 @@ impl<'a> ExtractedFrontMatter<'a> {
     /// # 戻り値
     /// 先頭区切り行と終端区切り行を含む文字列を返す。
     ///
+    #[allow(dead_code)]
     pub fn raw_block(&self) -> &'a str {
         self.raw_block
     }
@@ -220,6 +221,7 @@ pub struct FrontMatter {
     mcp: Option<McpFrontMatter>,
 
     /// ユーザ定義名前空間
+    #[allow(dead_code)]
     custom_meta: Option<BTreeMap<String, Value>>,
 }
 
@@ -454,6 +456,7 @@ impl ResourcePageFrontMatter {
 /// ページが持つ用途の front matter 分類結果
 ///
 #[non_exhaustive]
+#[allow(unused)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PageFrontMatterKind {
     /// テンプレートページ
@@ -473,6 +476,7 @@ impl PageFrontMatterKind {
     /// # 戻り値
     /// テンプレートページの場合は `true` を返す。
     ///
+    #[allow(dead_code)]
     pub fn is_template_page(&self) -> bool {
         matches!(self, Self::Template(_))
     }
@@ -483,6 +487,7 @@ impl PageFrontMatterKind {
     /// # 戻り値
     /// MCP prompt ページの場合は `true` を返す。
     ///
+    #[allow(dead_code)]
     pub fn is_mcp_prompt_page(&self) -> bool {
         matches!(self, Self::McpPrompt(_))
     }
@@ -493,6 +498,7 @@ impl PageFrontMatterKind {
     /// # 戻り値
     /// MCP resource ページの場合は `true` を返す。
     ///
+    #[allow(dead_code)]
     pub fn is_mcp_resource_page(&self) -> bool {
         matches!(self, Self::McpResource(_))
     }
@@ -503,6 +509,7 @@ impl PageFrontMatterKind {
     /// # 戻り値
     /// テンプレートページの場合はその情報を返す。
     ///
+    #[allow(dead_code)]
     pub fn template_page(&self) -> Option<&TemplatePageFrontMatter> {
         match self {
             Self::Template(template) => Some(template),
@@ -516,6 +523,7 @@ impl PageFrontMatterKind {
     /// # 戻り値
     /// MCP prompt ページの場合はその情報を返す。
     ///
+    #[allow(dead_code)]
     pub fn prompt_page(&self) -> Option<&PromptPageFrontMatter> {
         match self {
             Self::McpPrompt(prompt) => Some(prompt),
@@ -529,6 +537,7 @@ impl PageFrontMatterKind {
     /// # 戻り値
     /// MCP resource ページの場合はその情報を返す。
     ///
+    #[allow(dead_code)]
     pub fn resource_page(&self) -> Option<&ResourcePageFrontMatter> {
         match self {
             Self::McpResource(resource) => Some(resource),
@@ -554,6 +563,7 @@ impl FrontMatter {
     /// # 戻り値
     /// `wiki` が存在する場合はその参照を返す。
     ///
+    #[allow(dead_code)]
     pub fn wiki(&self) -> Option<&WikiFrontMatter> {
         self.wiki.as_ref()
     }
@@ -564,6 +574,7 @@ impl FrontMatter {
     /// # 戻り値
     /// `mcp` が存在する場合はその参照を返す。
     ///
+    #[allow(dead_code)]
     pub fn mcp(&self) -> Option<&McpFrontMatter> {
         self.mcp.as_ref()
     }
@@ -574,6 +585,7 @@ impl FrontMatter {
     /// # 戻り値
     /// `custom_meta` が存在する場合はその参照を返す。
     ///
+    #[allow(dead_code)]
     pub fn custom_meta(&self) -> Option<&BTreeMap<String, Value>> {
         self.custom_meta.as_ref()
     }
@@ -604,6 +616,7 @@ impl FrontMatter {
     /// # 戻り値
     /// `wiki.template` を持つ場合は `true` を返す。
     ///
+    #[allow(dead_code)]
     pub fn is_template_page(&self) -> bool {
         self.wiki_template().is_some()
     }
@@ -638,6 +651,7 @@ impl FrontMatter {
     /// # 戻り値
     /// `mcp.primitive = prompt` の場合は `true` を返す。
     ///
+    #[allow(dead_code)]
     pub fn is_prompt_page(&self) -> bool {
         self.mcp
             .as_ref()
@@ -650,6 +664,7 @@ impl FrontMatter {
     /// # 戻り値
     /// `mcp.primitive = resource` の場合は `true` を返す。
     ///
+    #[allow(dead_code)]
     pub fn is_mcp_resource_page(&self) -> bool {
         self.mcp
             .as_ref()
@@ -662,6 +677,7 @@ impl FrontMatter {
     /// # 戻り値
     /// 名前空間順にページ用途を返す。用途指定がない場合は空の配列を返す。
     ///
+    #[allow(dead_code)]
     pub fn page_kinds(&self) -> Vec<PageFrontMatterKind> {
         let mut kinds = Vec::new();
 
@@ -725,6 +741,7 @@ impl WikiFrontMatter {
     /// # 戻り値
     /// `wiki.tags` が存在する場合はその参照を返す。
     ///
+    #[allow(dead_code)]
     pub fn tags(&self) -> Option<&[String]> {
         self.tags.as_deref()
     }
@@ -792,6 +809,7 @@ impl WikiTemplateFrontMatter {
     /// # 戻り値
     /// `wiki.template.name` の値を返す。
     ///
+    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -802,6 +820,7 @@ impl WikiTemplateFrontMatter {
     /// # 戻り値
     /// `wiki.template.description` が存在する場合はその値を返す。
     ///
+    #[allow(dead_code)]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
@@ -812,6 +831,7 @@ impl WikiTemplateFrontMatter {
     /// # 戻り値
     /// `wiki.template.macro_expand` が存在する場合はその値を返す。
     ///
+    #[allow(dead_code)]
     pub fn macro_expand(&self) -> Option<bool> {
         self.macro_expand
     }
@@ -2052,6 +2072,7 @@ pub fn extract_resource_page_front_matter(
 /// # 戻り値
 /// 名前空間順にページ用途を返す。用途指定がない場合は空の配列を返す。
 ///
+#[allow(dead_code)]
 pub fn classify_page_front_matter(
     source: &str,
 ) -> Result<Vec<PageFrontMatterKind>, FrontMatterError> {
@@ -2070,6 +2091,7 @@ pub fn classify_page_front_matter(
 /// # 戻り値
 /// `wiki.template.name` を持つ場合はその値を返す。
 ///
+#[allow(dead_code)]
 pub fn extract_template_page_name(
     source: &str,
 ) -> Result<Option<String>, FrontMatterError> {
@@ -2086,6 +2108,7 @@ pub fn extract_template_page_name(
 /// # 戻り値
 /// `wiki.template.description` を持つ場合はその値を返す。
 ///
+#[allow(dead_code)]
 pub fn extract_template_page_description(
     source: &str,
 ) -> Result<Option<String>, FrontMatterError> {
@@ -2102,6 +2125,7 @@ pub fn extract_template_page_description(
 /// # 戻り値
 /// `wiki.template.macro_expand` を持つ場合はその値を返す。
 ///
+#[allow(dead_code)]
 pub fn extract_template_page_macro_expand(
     source: &str,
 ) -> Result<Option<bool>, FrontMatterError> {

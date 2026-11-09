@@ -1367,6 +1367,7 @@ pub(crate) fn reindex_page(
 /// # 戻り値
 /// 処理に成功した場合は`Ok(())`
 ///
+#[allow(dead_code)]
 pub(crate) fn delete_page_index(
     config: &FtsIndexConfig,
     page_id: &PageId,

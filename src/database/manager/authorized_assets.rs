@@ -1019,14 +1019,21 @@ impl DatabaseManager {
 #[derive(Clone, Debug)]
 pub(crate) struct AssetAccessTarget {
     /// 実owner ID
+    #[allow(unused)]
     pub(crate) page_id: PageId,
+
     /// snapshotで認可したowner path
     pub(crate) path: String,
+
     /// 単独asset時のID。一覧はNone
     pub(crate) asset_id: Option<AssetId>,
+
     /// ownerのsnapshot revision
+    #[allow(unused)]
     pub(crate) revision: Option<u64>,
+
     /// assetのキャッシュ識別子
+    #[allow(unused)]
     pub(crate) instance_id: Option<String>,
 }
 

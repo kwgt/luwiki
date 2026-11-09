@@ -847,7 +847,7 @@ struct AuditAuthorizationFailure {
 
 ## 8. モジュール構成案
 
-`src/mcp/` の初期構成案、`src/http_server/` / `src/database/` /
+`src/mcp/` の現行構成・子module・テスト配置、`src/http_server/` / `src/database/` /
 `src/cmd_args/` への反映箇所、監査ログ基盤の配置方針は、
 [MCP_ARCHITECTURE_DESIGN.md](MCP_ARCHITECTURE_DESIGN.md)
 を参照する。
@@ -1036,14 +1036,16 @@ MCP アセット Toolsは次の責務境界で実装する。
    - 未知フィールドは初期版では既存MCP toolと同様にserde既定挙動で無視する
 2. `src/mcp/server.rs` とtool別module
    - `#[tool]`付きasync functionを公開し、tool別`execute()`へ委譲する
-3. `src/mcp/handler.rs`
-   - tool別`handle_*`でserviceを呼び出し、
-     成功・失敗監査を処理する
-   - `primary_target_path()`と`audit_operation()`を
+3. `src/mcp/handler.rs` と `src/mcp/handler/assets.rs` / `audit.rs`
+   - 親は`McpHandler`と監査投入を保持し、`assets.rs`のtool別`handle_*`で
+     serviceを呼び出して成功・失敗監査を処理する
+   - `audit.rs`の`primary_target_path()`と`audit_operation()`を
      監査用helperとして使用する
    - uploadのrequest全体をdebug表示やsummary化しない
-4. `src/mcp/service.rs`
-   - `McpOperation`、required scope、ReadOnly拒否、path prefix判定、page_id解決、asset解決helper、size検証を処理する
+4. `src/mcp/service.rs` と `src/mcp/service/types.rs` / `assets.rs`
+   - `types.rs`に`McpOperation`とrequired scope、サービス型・対応implを置く
+   - 親はReadOnly拒否・path prefix判定・page_id解決等の共通処理を保持する
+   - `assets.rs`にアセット操作・解決helper・size検証を置く
 5. `src/mcp/model.rs`
    - `McpToolRequest` / `McpToolResponse` とasset metadata応答モデルを定義する
    - `instance_id`は`Option<String>`とし、欠損時はJSON項目を省略する

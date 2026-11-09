@@ -31,7 +31,7 @@
 
 - 責務配置に関する設計判断
 - `src/` 配下のモジュール構成案
-- `src/mcp/` 配下の初期構成案
+- `src/mcp/` 配下の現行構成
 - 既存モジュールへの変更点
 - 既存 REST API 層との共通化方針
 
@@ -44,11 +44,10 @@
 - サーバ統合、公開面、共通サービス、DBアクセスの 4 層で責務を分割する
 - 監査ログは独立サブシステムとして扱うのではなく、公開面および共通サービスに横断接続する
 
-## 3. モジュール構成案
+## 3. モジュール構成
 
-MCP モジュール構成の初期案として、
-既存の `rest_api` / `http_server` / `database` の分割方針に合わせ、
-MCP 専用のトップレベルモジュール `src/mcp/` を新設する方針を採る。
+MCP は既存の `rest_api` / `http_server` / `database` の責務分割に合わせ、
+専用のトップレベルモジュール `src/mcp/` に配置する。
 
 ### 3.1 トップレベル配置
 
@@ -74,9 +73,9 @@ MCP は REST API の下位モジュールに入れず、
 これにより、REST API 内部 HTTP 呼び出しではなく、
 同一の低水準基盤を共有する別公開面として位置付ける。
 
-### 3.2 `src/mcp/` 配下の初期構成案
+### 3.2 `src/mcp/` 配下の現行構成
 
-`src/mcp/` 配下は、少なくとも以下のモジュール分割を想定する。
+`src/mcp/` 配下の実装配置と責務は以下のとおり。
 
 - `src/mcp/mod.rs`
   - MCP モジュールの公開入口
@@ -84,17 +83,25 @@ MCP は REST API の下位モジュールに入れず、
 - `src/mcp/transport.rs`
   - MCP transport / endpoint の Actix 接続
   - リクエスト受理から公開層への橋渡し
+- `src/mcp/server.rs`
+  - `LuwikiMcpServer`、共有状態・認証文脈・capabilityとの接続
+  - `tool_router` / `tool_handler` 付きimplと標準handlerを保持する
+  - `server/prompts.rs` / `server/resources.rs` に通常の公開型変換とprotocol error写像を置く
 - `src/mcp/tools/mod.rs` と `src/mcp/tools/` 配下のtool別module
   - 公開するツール一覧とツール定義
   - ツール名、入力スキーマ、出力スキーマの定義
   - tool別実行入口の定義
 - `src/mcp/handler.rs`
-  - ツール呼び出しおよび標準primitive操作単位の入口
-  - 入力検証、サービス呼び出し、応答整形、監査ログ記録
+  - `McpHandler`、生成・認証接続・監査ログ投入の入口
+  - `handler/pages.rs` / `assets.rs` / `prompts.rs` / `resources.rs` に操作別implを置く
+  - `handler/audit.rs` に監査レコード生成・分類・summaryのhelperを置く
 - `src/mcp/service.rs`
-  - path ベース共通サービス層の公開入口
-  - read / list / search / create / update / append / rename の業務呼び出し
-  - prompts / resources の一覧、取得、URI解決、公開状態判定
+  - `McpService`、共通認可・path / revision解決・保存・ロック・append再試行・エラー写像
+  - `service/types.rs` にページ・アセット操作のサービス型と対応impl・独自Debugを同居させる
+  - 型は親で明示再exportし、既存の `mcp::service::型名` の参照経路を維持する
+  - `service/pages.rs` / `assets.rs` にページ操作・アセット操作を置く
+  - `service/sections.rs` にTOC・部分編集helperを置く
+  - `service/prompts.rs` / `resources.rs` に標準primitiveの業務処理を置く
 - `src/mcp/auth.rs`
   - Bearer 認証文脈との接続
   - MCP 向け認可補助
@@ -105,6 +112,13 @@ MCP は REST API の下位モジュールに入れず、
 - `src/mcp/errors.rs`
   - MCP 固有エラー分類
   - 内部エラーから公開エラーへの写像
+
+子moduleはprivateに宣言し、親・兄弟moduleや既存テストから必要なhelperだけを
+親scopeへ限定して公開する。型フィールドのprivateと既存のcrate内入口は維持する。
+
+テストは `src/mcp/{handler,server,service,transport}/tests.rs` に配置し、
+各親の `#[cfg(test)] mod tests;` から同じ `mcp::<親名>::tests` として収集する。
+共有fixture・テスト名・属性は維持し、transport本体はActix adapterのまま追加分割しない。
 
 ### 3.3 `src/mcp/` 直下へ置かない責務
 
@@ -222,7 +236,7 @@ MCP とは共通化しない。
 
 共通化は以下の順で進める。
 
-1. MCP 実装に必要な共通処理を `src/mcp/service.rs` 側へ定義する
+1. MCP 実装に必要な共通処理を `src/mcp/service.rs` とその子moduleへ定義する
 2. その中で既存 `DatabaseManager` や `fts` を直接利用する
 3. 既存 REST API から流用価値の高い純粋ロジックのみを切り出す
 4. HTTP 依存処理は `rest_api` 側へ残す

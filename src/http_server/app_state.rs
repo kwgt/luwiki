@@ -30,6 +30,7 @@ pub(crate) struct AppState {
     fts_config: FtsIndexConfig,
 
     /// テンプレートルート
+    #[allow(unused)]
     template_root: Option<String>,
 
     /// Wikiタイトル
@@ -141,6 +142,7 @@ impl AppState {
     /// # 戻り値
     /// テンプレートルートが設定されている場合は参照を返す。
     ///
+    #[allow(dead_code)]
     pub(crate) fn template_root<'a>(&'a self) -> Option<&'a str> {
         self.template_root.as_deref()
     }

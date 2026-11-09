@@ -73,24 +73,35 @@ pub(crate) struct MutationAccess<'a> {
 pub(crate) struct MutationOutcome {
     /// asset書込時の確定ID（page操作はNone）
     pub(crate) asset_id: Option<AssetId>,
+
     /// 固定の起点ID
+    #[allow(unused)]
     pub(crate) page_id: PageId,
+
     /// 認可時の元path
     pub(crate) source_path: String,
+
     /// 更新後の最終path（削除時は削除元）
     pub(crate) path: String,
+
     /// 確定revision。draftのみの場合はNone
     pub(crate) revision: Option<u64>,
+
     /// 確定sourceのinstance ID
     pub(crate) instance_id: Option<String>,
+
     /// 更新した対象ID（no-opは起点のみ）
     pub(crate) affected_page_ids: Vec<PageId>,
+
     /// commit成功を確認したか（falseは副作用不在を断言しない）
     pub(crate) committed: bool,
+
     /// commit後の派生同期/FS失敗か（cleanup後業務404と区別する）
     pub(crate) post_processing_failure: bool,
+
     /// 要求した移動が同値で変更不要だったか
     pub(crate) no_op: bool,
+
     /// 要求変更なしで期限切れlock/draft整理だけをcommitしたか
     pub(crate) cleanup_only: bool,
 }
