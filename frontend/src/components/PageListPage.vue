@@ -72,6 +72,17 @@ function buildWikiUrl(path: string): string {
   return normalized === '/' ? '/wiki/' : `/wiki${normalized}`;
 }
 
+/**
+ * focusがパンくずを離れた時だけ、通常の省略表示へ戻す。
+ * @param event 子リンクからのfocusout
+ */
+function resetBreadcrumbScroll(event: FocusEvent): void {
+  const nav = event.currentTarget;
+  if (!(nav instanceof HTMLElement)) return;
+  if (event.relatedTarget instanceof Node && nav.contains(event.relatedTarget)) return;
+  nav.scrollLeft = 0;
+}
+
 function formatListTimestamp(raw: string): string {
   if (!raw) {
     return '';
@@ -132,12 +143,14 @@ watch(pageTitle, (value) => {
             </div>
           </div>
           <nav
-            class="mx-4 flex flex-nowrap items-center gap-1 text-sm text-info"
+            class="mx-4 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-info focus-within:text-clip"
+            :title="pageTitle"
             aria-label="breadcrumb"
+            @focusout="resetBreadcrumbScroll"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="item.href">
-              <a class="link link-hover inline-flex items-center" :href="item.href">
-                <span class="inline-block max-w-full truncate">{{ item.label }}</span>
+              <a class="link link-hover inline" :href="item.href">
+                <span>{{ item.label }}</span>
               </a>
               <span
                 v-if="index < breadcrumbItems.length - 1"
@@ -180,8 +193,8 @@ watch(pageTitle, (value) => {
         </label>
       </div>
 
-      <main class="grid min-h-[calc(100vh-10.6em)] lg:min-h-[calc(100vh-12.3em)] gap-1">
-        <section class="border border-base-300 bg-base-100 p-3 shadow-sm">
+      <main class="grid min-w-0 grid-cols-1 min-h-[calc(100vh-10.6em)] lg:min-h-[calc(100vh-12.3em)] gap-1">
+        <section class="min-w-0 border border-base-300 bg-base-100 p-3 shadow-sm">
           <div v-if="isLoading" class="text-sm text-base-content/60">読み込み中...</div>
           <div v-else-if="errorMessage" class="text-sm text-error">{{ errorMessage }}</div>
           <div v-else-if="items.length === 0" class="text-sm text-base-content/60">
@@ -191,12 +204,12 @@ watch(pageTitle, (value) => {
             <div
               v-for="item in items"
               :key="item.page_id"
-              class="flex items-center px-2 hover:bg-base-200/70 transition-colors"
+              class="flex min-w-0 flex-col items-stretch gap-y-0.5 px-2 hover:bg-base-200/70 transition-colors sm:flex-row sm:items-center sm:gap-y-0"
             >
-              <div class="flex min-w-0 items-center gap-2">
+              <div class="flex min-w-0 w-full items-center gap-2 sm:w-auto sm:flex-1">
                 <template v-if="item.deleted">
                   <button
-                    class="link link-hover text-error truncate"
+                    class="link link-hover min-w-0 flex-1 text-left text-error truncate"
                     type="button"
                     :title="item.path"
                     :disabled="isWriteActionDisabled(isReadOnlyUser)"
@@ -204,11 +217,11 @@ watch(pageTitle, (value) => {
                   >
                     {{ item.path }}
                   </button>
-                  <span class="badge badge-error font-bold text-white badge-xs mt-1">Deleted</span>
+                  <span class="badge shrink-0 badge-error font-bold text-white badge-xs mt-1">Deleted</span>
                 </template>
                 <template v-else>
                   <a
-                    class="link link-hover text-info truncate"
+                    class="link link-hover min-w-0 flex-1 text-info truncate"
                     :href="buildWikiUrl(item.path)"
                     :title="item.path"
                   >
@@ -216,11 +229,11 @@ watch(pageTitle, (value) => {
                   </a>
                 </template>
               </div>
-              <div class="ml-auto flex items-center gap-4 text-sm text-base-content/60">
+              <div class="ml-auto flex min-w-0 max-w-full shrink-0 self-end items-center gap-4 text-sm text-base-content/60 sm:self-auto">
                 <span class="w-[19ch] shrink-0 text-right ml-1 font-mono">
                   {{ formatListTimestamp(item.last_update.timestamp) }}
                 </span>
-                <span class="lg:w-[12ch] md:w-[6ch] sm:w-[4ch] shrink-0 text-right ml-1 truncate">
+                <span class="w-[8ch] min-w-0 lg:w-[12ch] md:w-[6ch] sm:w-[4ch] text-right ml-1 truncate">
                   {{ item.last_update.username }}
                 </span>
               </div>

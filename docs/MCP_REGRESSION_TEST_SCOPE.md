@@ -460,3 +460,26 @@ Bearer 認証基盤、トークン管理情報、ユーザ属性、CLI 出力、
 5. `get_page_asset_data` の10MiB超過と `upload_page_asset` の
    decode前13,981,016 bytes超過が別入口で確認できること
 6. アセット6 toolの監査ログと秘匿情報非記録を確認すること
+
+## 状態取得・変更待ち追加時の回帰範囲
+
+- get_page_state／wait_page_changeのschema・annotationsと既存tool一覧・応答形式の維持。
+- 通常更新・amend・削除・rename・同一path再作成、初回取得／再呼出し間の状態差、正常timeout。
+- 待機中の別要求による閲覧・保存、現在権限の再確認、旧sourceの非移行fallback。
+- cancel・HTTP切断・session close／LRU・正常停止と監査flush順序。MCP無効起動への非影響。
+- SKILL_SETUP.mdから抽出するCodex／Claude用SKILL.mdの設定・tool名と実schemaの整合。
+- Codexの完成版による人間の保存認識を試作結果と区別する。Claude完成版検証・両者比較は
+  合意した後工程で回収し、静的設定例の整合を実接続成功とは記録しない。
+
+## ブラウザ変更通知追加時の回帰範囲
+
+- 固定/wsとtype／payloadのみのpacket、初期state・自発changed・明示checkedの区別。
+- 通常保存・amend・append・draft保存・rename・削除・復元・再帰・履歴操作・import・
+  migrate削除・関連cleanupのDB確定後起床。失敗／rollbackとcommit後同期失敗の区別。
+- sourceの既存200／304・ETag・履歴取得と比較ヘッダ。OP1のtoken入力・公開schema・認可境界。
+- Basic／Bearer／Origin、ReadOnly・MCP無効、資格／主体変更、接続制限・切断・監査・正常停止。
+- 自動／半自動／無視、別tab設定反映、通知既読と未反映状態、古い接続・応答の棄却。
+- 通常reload、内容／見出し／量fallback、hash・画像／Mermaid・利用者操作・別IDの分離。
+  reload直前とHTML取得後の削除、退避不能・別主体・破損退避、通常の未存在URLの編集導線。
+- 同一候補の1280／360／320px画面での通知・設定・長path・keyboard操作、既存の編集保存・
+  移動／削除・マクロ／asset・コードコピー・履歴表示。ソースの静的確認と実画面成立を区別する。

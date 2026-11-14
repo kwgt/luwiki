@@ -970,7 +970,7 @@ pathベースtoolとして監査する。
 - `ReadOnly` ユーザによる upload / delete: `scope_denied`
 - page / asset 不存在、削除済み asset、外部到達不能 asset: `not_found`
 - 同名アセット重複、ロック中ページ: `conflict`
-- path / file_name / mime_type / data_base64 不正、upload size 制約超過: `invalid_input`
+- path/file_name/MIME/text・Base64入力不正、upload size 制約超過: `invalid_input`
 - 初期版対象外操作: `unsupported`
 - DB / FS などの想定外失敗: `internal_error`
 
@@ -989,14 +989,14 @@ timestampを既存共通項目として記録する。
 
 次の情報は監査ログ、tracing、error summaryへ記録しない。
 
-- `data_base64`
+- `text`と`data_base64`
 - アセット本体 bytes
 - serialize済みrequest body
 - Bearer token平文、Authorization header
 - lock token
 - 内部保存パス
 - DB内部エラー詳細
-- raw `data_base64` を含む upload 入力構造全体
+- raw `text`/`data_base64`を含むupload入力構造全体。監査Requestは本文を所有しない
 - 削除済み、ゾンビ、所属不一致として除外した asset の一覧や file_name
 
 ## 11. REST監査拡張
@@ -1133,3 +1133,34 @@ HTTP終了後はretention/lock cleanupを停止してjoinし、
 既存MCP sweep停止とsession closeをguard外で行って最終flushへ進む。
 SDKの既終了actorは停止完了として扱い、それ以外の終了失敗を保持する。
 この順序で最終flush後の公開監査投入を防ぐ。
+
+## ページ状態toolの監査
+
+- 新operationはget_page_state／wait_page_change。既存operation名と過去JSONLの読込を維持する。
+- 公開要求ごと1件とし、500msごとの内部snapshotをget監査へ増幅しない。
+- changedとtimeoutはsuccess、summary.reasonはupdated／replaced／unavailable／timeout等。
+  getはstate、入力・認可失敗は既存分類へ対応し、認証利用不能はoperation_deniedとする。
+- cancel／future dropはoperation_denied、reason=cancelled。停止gateで実行中要求が終わる場合は
+  operation_denied、reason=shutdown。受付gate通過前のqueued要求拒否は監査を追加しない。
+- user_idは入口で確定した不変actor_id、token_idは既存管理ID、target_pathは正規化済みpath。
+  revisionは実際に通常状態を返す場合だけ記録し、summaryへ固定理由・経過msを格納する。
+- 本文・state_token・Authorization・資格情報・内部page_idをsummaryやtracingへ記録しない。
+  監査sinkの失敗は既存best-effort方針を維持する。
+- handlerのguardが一度だけ記録を投入し、その後に要求leaseを解放する。停止処理はsessionを
+  閉じた後、非同期状態要求数0を待ってから最終flushする。
+
+## ブラウザWebSocketの監査
+
+- 固定operationはGET /ws（接続ライフサイクル）とws.page.check（明示確認要求）。
+  自発state通知・Ping・内部snapshotごとに公開要求監査を増やさない。
+- actorはhandshakeで確定した不変ID。Basicの資格識別値・本文・state_token・生payloadは
+  JSONLや診断へ記録しない。正規化target_pathと固定終了理由・経過msを記録する。
+- 現在scope／prefix・入力不正・未対応・内部失敗は既存の固定result分類へ対応させる。
+  認証が現在利用不能ならoperation_denied。認証失敗はHTTPログ、認証後のOrigin拒否は監査する。
+- guardが一度だけ記録し、その後にlease／接続permitを解放する。OS／外部停止で先にgateを
+  閉じ、close／取消、監査、要求数0を経て最終flushする。MCP無効でも共通sinkを利用する。
+- sink失敗は既存のbest-effort方針。WS共通／ページ機能の責務はWEBSOCKET_DESIGN.mdを参照。
+
+## 運用指示の代替取得
+
+`get_agent_instructions` の取得結果と scope 拒否は、同名の MCP 操作として記録する。対象ページ、revision、本文、資格情報および内部パスは監査に含めない。

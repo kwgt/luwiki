@@ -1,3 +1,4 @@
+import { expandAuthorityMacro } from './authorityMacro';
 import { fetchPageList } from '../api/pages';
 import { fetchPageAssets } from '../api/assets';
 import {
@@ -8,6 +9,7 @@ import {
 } from './pageCommon';
 
 export interface MacroContext {
+  mcpAuthority?: string;
   pagePath: string;
   pageId?: string;
   userId?: string;
@@ -77,7 +79,9 @@ export function resolveTemplateImmediateMacros(
 
   const normalized = masked.text.replace(
     TEMPLATE_INLINE_MACRO_RE,
-    '{{$1}}',
+    (raw, expression: string) => {
+      return parseMacro(expression)?.name === 'mcp' ? raw : '{{' + expression + '}}';
+    },
   );
 
   const changes = collectImmediateMacroChanges(normalized, context);
@@ -92,7 +96,8 @@ export async function expandRenderMacros(
   source: string,
   context: MacroContext,
 ): Promise<string> {
-  const maskedSpecial = maskCodeRegions(source);
+  const expandedAuthority = expandAuthorityMacro(source, context.mcpAuthority);
+  const maskedSpecial = maskCodeRegions(expandedAuthority);
   const withSpecial = maskedSpecial.restore(expandSpecialMacros(maskedSpecial.text));
   const maskedInline = maskCodeRegions(withSpecial);
 

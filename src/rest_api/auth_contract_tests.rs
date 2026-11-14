@@ -98,6 +98,7 @@ fn state(dir: &TempDir, db: DatabaseManager) -> (SharedState, SharedSink) {
         db, FrontendConfig::default(),
         FtsIndexConfig::new(dir.path().join("fts")), None,
         "fixture".into(), None, 1024, Some(sink.clone()),
+        "local.luwiki".to_string(),
     );
     (web::Data::new(Arc::new(RwLock::new(state))), sink)
 }

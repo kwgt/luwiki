@@ -15,7 +15,7 @@ mod authorized_search_tests;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
@@ -132,6 +132,8 @@ impl TokenizerKind {
 pub(crate) struct FtsIndexConfig {
     index_path: PathBuf,
     tokenizer_kind: TokenizerKind,
+    /// 同じサーバ設定のclone間で正本文書の構築/索引commitを直列化する。
+    update_lock: Arc<Mutex<()>>,
 }
 
 impl FtsIndexConfig {
@@ -148,7 +150,20 @@ impl FtsIndexConfig {
         Self {
             index_path,
             tokenizer_kind: TokenizerKind::LinderaIpadic,
+            update_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    ///
+    /// 正本からの文書構築と索引commitをまとめて排他する。
+    ///
+    /// # 戻り値
+    /// 更新区間のguard。poison時は固定エラー。
+    ///
+    fn lock_updates(&self) -> Result<MutexGuard<'_, ()>> {
+        self.update_lock.lock().map_err(|_| anyhow!(
+            "FTS index update lock failed"
+        ))
     }
 
     ///
@@ -1266,6 +1281,7 @@ pub(crate) fn rebuild_index(
     config: &FtsIndexConfig,
     docs: &[FtsDocument],
 ) -> Result<()> {
+    let _update = config.lock_updates()?;
     let manager = FtsIndexManager::create(config)?;
     manager.rebuild(docs)
 }
@@ -1341,6 +1357,7 @@ pub(crate) fn reindex_page(
     page_id: &PageId,
     deleted: bool,
 ) -> Result<()> {
+    let _update = config.lock_updates()?;
     /*
      * 登録文書の構築
      */
@@ -1372,6 +1389,7 @@ pub(crate) fn delete_page_index(
     config: &FtsIndexConfig,
     page_id: &PageId,
 ) -> Result<()> {
+    let _update = config.lock_updates()?;
     let index_manager = FtsIndexManager::open(config)?;
     index_manager.delete_page_docs(page_id)
 }
@@ -1397,6 +1415,7 @@ pub(crate) fn update_pages_index(
     if page_ids.is_empty() {
         return Ok(());
     }
+    let _update = config.lock_updates()?;
 
     /*
      * 登録文書の構築
@@ -1431,6 +1450,7 @@ pub(crate) fn delete_pages_index(
     if page_ids.is_empty() {
         return Ok(());
     }
+    let _update = config.lock_updates()?;
 
     /*
      * インデックス削除の実行
@@ -1495,6 +1515,7 @@ pub(crate) fn collect_page_ids_by_path_prefix(
 /// 処理に成功した場合は`Ok(())`
 ///
 pub(crate) fn merge_index(config: &FtsIndexConfig) -> Result<()> {
+    let _update = config.lock_updates()?;
     let manager = FtsIndexManager::open(config)?;
     manager.merge()
 }

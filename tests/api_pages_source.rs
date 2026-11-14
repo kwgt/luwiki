@@ -61,7 +61,20 @@ fn get_page_source_returns_latest_markdown() {
         .expect("etag to_str failed")
         .to_string();
     assert!(etag.starts_with('"') && etag.ends_with('"'));
+    let state_token = response.headers()
+        .get("X-LuWiki-Page-State").expect("missing state token")
+        .to_str().unwrap().to_string();
+    assert_eq!(state_token.len(), 132);
+    assert!(state_token.starts_with("v1:"));
     assert_eq!(response.text().expect("read body failed"), "source body");
+
+    /* 304でもブラウザが表示本文と同じ比較基準を得られる。 */
+    let cached = client.get(&url)
+        .basic_auth(TEST_USERNAME, Some(TEST_PASSWORD))
+        .header("If-None-Match", etag).send().unwrap();
+    assert_eq!(cached.status().as_u16(), 304);
+    assert_eq!(cached.headers().get("X-LuWiki-Page-State")
+        .unwrap().to_str().unwrap(), state_token);
 
     fs::remove_dir_all(base_dir).expect("cleanup failed");
 }

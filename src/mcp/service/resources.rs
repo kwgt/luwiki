@@ -8,6 +8,10 @@
 //! MCPサービスのresources処理を定義するモジュール
 //!
 
+use crate::database::resource_list::{
+    BUILTIN_AGENT_SKILL_ID, BuiltinResourceContents,
+};
+
 use super::{
     AuthContext,
     DEFAULT_RESOURCE_LIST_LIMIT,
@@ -38,6 +42,26 @@ use super::{
 
 // 可読性確保のため、業務別のimplを子モジュールへ分離する。
 impl McpService {
+    ///
+    /// 代替ツール用の固定運用指示を取得する。
+    ///
+    /// # 引数
+    /// * `auth` - Bearer認証文脈
+    ///
+    /// # 戻り値
+    /// 標準resourceと同じ埋め込み本文。read認可がなければ拒否する。
+    ///
+    pub(crate) fn get_agent_instructions(
+        &self,
+        auth: &AuthContext,
+    ) -> Result<BuiltinResourceContents, McpError> {
+        self.ensure_operation_scope(auth, McpOperation::GetAgentInstructions)?;
+        builtin_resource_contents(
+            self.resource_authority(),
+            BUILTIN_AGENT_SKILL_ID,
+        ).ok_or_else(resource_internal_error)
+    }
+
     ///
     /// `resources/list`を実行する
     ///
@@ -249,7 +273,9 @@ impl McpService {
                         &resource_path,
                     ),
                     mime_type,
-                    extracted.body().to_string(),
+                    crate::mcp::authority_macro::expand_authority_macro(
+                        extracted.body(), self.resource_authority(),
+                    ).into_owned(),
                     Some(entry.revision()),
                 ))
             }

@@ -21,6 +21,9 @@ use crate::database::entries::{
 /// resource MIME type の既定値
 pub(crate) const DEFAULT_RESOURCE_MIME_TYPE: &str = "text/markdown";
 
+/// エージェント用運用指示の固定リソースID。
+pub(crate) const BUILTIN_AGENT_SKILL_ID: &str = "agent-skill";
+
 const BUILTIN_FRONT_MATTER_SPEC_ID: &str = "front-matter-spec";
 const BUILTIN_MCP_PROMPT_SPEC_ID: &str = "mcp-prompt-spec";
 
@@ -138,6 +141,15 @@ pub(crate) fn builtin_resource_list_entries(
 ) -> Vec<ResourceListEntry> {
     vec![
         ResourceListEntry::new(
+            builtin_resource_uri(authority, BUILTIN_AGENT_SKILL_ID),
+            "LuWiki Agent Instructions".to_string(),
+            "Operational instructions for LuWiki MCP agents".to_string(),
+            DEFAULT_RESOURCE_MIME_TYPE.to_string(),
+            ResourceListSource::Builtin,
+            None,
+            None,
+        ),
+        ResourceListEntry::new(
             builtin_resource_uri(authority, BUILTIN_FRONT_MATTER_SPEC_ID),
             "Front Matter Specification".to_string(),
             "LuWiki front matter specification".to_string(),
@@ -173,15 +185,20 @@ pub(crate) fn builtin_resource_contents(
     builtin_id: &str,
 ) -> Option<BuiltinResourceContents> {
     match builtin_id {
+        BUILTIN_AGENT_SKILL_ID => Some(BuiltinResourceContents::new(
+            builtin_resource_uri(authority, BUILTIN_AGENT_SKILL_ID),
+            DEFAULT_RESOURCE_MIME_TYPE.to_string(),
+            include_str!("../../assets/mcp/agent-skill.md").to_string(),
+        )),
         BUILTIN_FRONT_MATTER_SPEC_ID => Some(BuiltinResourceContents::new(
             builtin_resource_uri(authority, BUILTIN_FRONT_MATTER_SPEC_ID),
             DEFAULT_RESOURCE_MIME_TYPE.to_string(),
-            include_str!("../../docs/FRONT_MATTER_SPECS.md").to_string(),
+            include_str!("../../assets/mcp/front-matter-spec.md").to_string(),
         )),
         BUILTIN_MCP_PROMPT_SPEC_ID => Some(BuiltinResourceContents::new(
             builtin_resource_uri(authority, BUILTIN_MCP_PROMPT_SPEC_ID),
             DEFAULT_RESOURCE_MIME_TYPE.to_string(),
-            include_str!("../../docs/MCP_PROMPT_SPECS.md").to_string(),
+            include_str!("../../assets/mcp/mcp-prompt-spec.md").to_string(),
         )),
         _ => None,
     }

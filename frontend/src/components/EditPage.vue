@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { createCodeCopyHandler, renderMarkdownWithCodeCopy } from '../lib/codeCopy';
+import { getMcpAuthority } from '../lib/pageMeta';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { ensureHelloAuth } from '../api/hello';
 import { usePageEdit } from '../composables/usePageEdit';
 import { useCurrentUser } from '../composables/useCurrentUser';
@@ -108,6 +110,8 @@ const autoLoadSource = true;
 const editorPaneRef = ref<{ focusToStart: () => void } | null>(null);
 
 const renderedHtml = ref('');
+const codeBlocks = shallowRef<ReadonlyMap<string, string>>(new Map());
+const handleCodeCopyClick = createCodeCopyHandler(() => codeBlocks.value);
 const markdownRenderer = ref<ReturnType<typeof createMarkdownRenderer> | null>(null);
 const markdownRendererPath = ref('');
 const macroUserId = ref('');
@@ -367,13 +371,17 @@ async function updateDerivedFromText(text: string): Promise<void> {
   const renderer = ensureMarkdownRenderer();
   const seq = ++derivedRenderSeq;
   const expanded = await expandRenderMacros(sourceBody, {
+    mcpAuthority: getMcpAuthority() ?? undefined,
     pagePath: path,
     pageId: pageId.value,
   });
   if (seq !== derivedRenderSeq) {
     return;
   }
-  renderedHtml.value = renderer.render(stripLeadingTitleHeading(expanded));
+  const rendered = renderMarkdownWithCodeCopy(renderer,
+    stripLeadingTitleHeading(expanded), 'preview-' + seq);
+  codeBlocks.value = rendered.codeBlocks;
+  renderedHtml.value = rendered.html;
 }
 
 function scheduleDerivedUpdate(text: string): void {
@@ -810,6 +818,7 @@ function buildAssetDownloadUrl(fileName: string): string {
               class="markdown-body flex-1 min-h-0 w-full overflow-auto p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"
+              @click="handleCodeCopyClick"
               v-html="renderedHtml"
             />
           </section>

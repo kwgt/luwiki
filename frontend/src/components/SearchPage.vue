@@ -16,6 +16,8 @@ const {
   withDeleted,
   latestOnly,
   results,
+  pathFilter,
+  filteredResults,
   isLoading,
   errorMessage,
 } = usePageSearch();
@@ -27,7 +29,7 @@ const searchInputRef = ref<HTMLInputElement | null>(null);
 const wikiTitle = getWikiTitle();
 
 const sortedResults = computed(() => {
-  const items = [...results.value];
+  const items = [...filteredResults.value];
   switch (sortOrder.value) {
     case 'page_id':
       return items.sort((a, b) => a.page_id.localeCompare(b.page_id));
@@ -152,7 +154,23 @@ onMounted(async () => {
           </label>
         </div>
 
-        <div class="mt-0">
+        <div class="mt-3 space-y-1">
+          <label class="form-control">
+            <span class="text-sm font-semibold">パスに含む文字列</span>
+            <div class="mt-1 flex gap-2">
+              <input v-model="pathFilter" class="input input-bordered input-sm min-w-0 flex-1"
+                type="text" placeholder="例: /projects/" />
+              <button class="btn btn-sm" type="button" :disabled="!pathFilter"
+                @click="pathFilter = ''">解除</button>
+            </div>
+          </label>
+          <p class="text-xs text-base-content/70">取得済みの最大100件を絞り込みます</p>
+          <p v-if="query.trim() && !isLoading && !errorMessage" class="text-sm" role="status">
+            表示 {{ filteredResults.length }} 件 / 取得 {{ results.length }} 件
+          </p>
+        </div>
+
+        <div class="mt-2">
           <div v-if="isLoading" class="text-sm text-base-content/70">
             検索中...
           </div>
@@ -162,13 +180,16 @@ onMounted(async () => {
           <div v-else-if="!query.trim()" class="text-sm text-base-content/60">
             検索式を入力してください。
           </div>
-          <div v-else-if="sortedResults.length === 0" class="text-sm text-base-content/60">
+          <div v-else-if="results.length === 0" class="text-sm text-base-content/60">
             検索結果がありません。
+          </div>
+          <div v-else-if="sortedResults.length === 0" class="text-sm text-base-content/60">
+            パス条件に一致する結果がありません。
           </div>
           <div v-else class="text-sm empty:min-h-[1.25rem] text-base-content/60">
           </div>
 
-          <div class="flex flex-col gap-4">
+          <div v-if="query.trim() && !isLoading && !errorMessage" class="flex flex-col gap-4">
             <div v-for="item in sortedResults" :key="`${item.page_id}-${item.revision}`">
               <div
                 class="grid gap-2 border border-base-300 bg-base-100 p-3 text-xs sm:grid-cols-[19em_60px_60px_minmax(0,1fr)]"

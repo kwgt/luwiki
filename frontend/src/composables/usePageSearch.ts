@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref, watch } from 'vue';
 import { searchPages, type SearchResult } from '../api/pages';
 import { toErrorMessage } from '../lib/pageCommon';
 
@@ -15,6 +15,12 @@ export function usePageSearch() {
   const withDeleted = ref(false);
   const latestOnly = ref(true);
   const results = ref<SearchResult[]>([]);
+  const pathFilter = ref('');
+  const filteredResults = computed(() => {
+    const fragment = pathFilter.value.trim();
+    return fragment ? results.value.filter((item) => item.path.includes(fragment))
+      : results.value;
+  });
   const isLoading = ref(false);
   const errorMessage = ref('');
 
@@ -42,25 +48,27 @@ export function usePageSearch() {
     if (debounceTimer !== null) {
       window.clearTimeout(debounceTimer);
     }
-    debounceTimer = window.setTimeout(() => {
-      void runSearch();
-    }, SEARCH_DEBOUNCE_MS);
-  }
-
-  async function runSearch(): Promise<void> {
-    const expr = query.value.trim();
-    if (!expr) {
-      requestId += 1;
+    const current = ++requestId;
+    if (!query.value.trim()) {
       results.value = [];
       errorMessage.value = '';
       isLoading.value = false;
       return;
     }
 
-    const current = requestId + 1;
-    requestId = current;
     isLoading.value = true;
     errorMessage.value = '';
+    debounceTimer = window.setTimeout(() => {
+      debounceTimer = null;
+      void runSearch(current);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  async function runSearch(current: number): Promise<void> {
+    if (requestId !== current) {
+      return;
+    }
+    const expr = query.value.trim();
 
     try {
       const data = await searchPages({
@@ -86,11 +94,12 @@ export function usePageSearch() {
     }
   }
 
+  // checkboxの解除描画後に戻し、既定値と実DOMのcheckedを揃える。
   watch([targetHeadings, targetBody, targetCode, targetFrontMatter], () => {
     if (targets.value.length === 0) {
       targetBody.value = true;
     }
-  });
+  }, { flush: 'post' });
 
   watch(
     [
@@ -107,6 +116,13 @@ export function usePageSearch() {
     },
   );
 
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      requestId += 1;
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+    });
+  }
+
   return {
     query,
     targetHeadings,
@@ -116,6 +132,8 @@ export function usePageSearch() {
     withDeleted,
     latestOnly,
     results,
+    pathFilter,
+    filteredResults,
     isLoading,
     errorMessage,
   };

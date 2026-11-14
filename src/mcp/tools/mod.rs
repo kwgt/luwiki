@@ -8,11 +8,15 @@
 //! MCPで公開するツール定義の骨格をまとめるモジュール
 //!
 
+mod asset_input;
+
 pub(crate) mod append_page;
 pub(crate) mod create_page;
 pub(crate) mod delete_page_asset;
 pub(crate) mod edit_page;
+pub(crate) mod get_agent_instructions;
 pub(crate) mod get_page;
+pub(crate) mod page_state;
 pub(crate) mod get_page_asset_data;
 pub(crate) mod get_page_asset_metadata;
 pub(crate) mod get_page_section;
@@ -181,6 +185,7 @@ pub(crate) struct PageAssetByFileToolArgs {
 /// `upload_page_asset` 用の tool 引数
 ///
 #[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(transform = asset_input::exclusive_schema)]
 pub(crate) struct UploadPageAssetToolArgs {
     /// 対象ページの絶対 path
     pub(crate) path: String,
@@ -191,8 +196,15 @@ pub(crate) struct UploadPageAssetToolArgs {
     /// アップロードするアセットの MIME 種別
     pub(crate) mime_type: String,
 
-    /// base64 エンコード済みアセット本体
-    pub(crate) data_base64: String,
+    /// UTF-8で保存するtext/*の本体。空文字も許可する。
+    #[serde(default, deserialize_with = "asset_input::string_input")]
+    #[schemars(schema_with = "asset_input::string_schema")]
+    pub(crate) text: Option<String>,
+
+    /// base64 エンコード済みアセット本体。textと排他。
+    #[serde(default, deserialize_with = "asset_input::string_input")]
+    #[schemars(schema_with = "asset_input::string_schema")]
+    pub(crate) data_base64: Option<String>,
 }
 
 impl fmt::Debug for UploadPageAssetToolArgs {
@@ -211,6 +223,7 @@ impl fmt::Debug for UploadPageAssetToolArgs {
             .field("path", &self.path)
             .field("file_name", &self.file_name)
             .field("mime_type", &self.mime_type)
+            .field("text", &"[REDACTED]")
             .field("data_base64", &"[REDACTED]")
             .finish()
     }
@@ -422,8 +435,31 @@ pub(crate) struct EditPageToolArgs {
     /// ページ内容の一意性を表すインスタンスID
     pub(crate) instance_id: String,
 
-    /// 単一の編集操作
-    pub(crate) operation: EditPageToolOperation,
+    /// 初期本文の対象へ配列順に適用する非空操作列
+    #[serde(deserialize_with = "deserialize_edit_operations")]
+    #[schemars(length(min = 1))]
+    pub(crate) operation: Vec<EditPageToolOperation>,
+}
+
+///
+/// 非空の編集操作配列を復号する。
+///
+/// # 引数
+/// * `deserializer` - JSON引数の復号器
+///
+/// # 戻り値
+/// 操作列、または型不正・空配列の復号エラー。
+///
+fn deserialize_edit_operations<'de, D>(deserializer: D)
+    -> Result<Vec<EditPageToolOperation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let operations = Vec::<EditPageToolOperation>::deserialize(deserializer)?;
+    if operations.is_empty() {
+        return Err(serde::de::Error::custom("operation must not be empty"));
+    }
+    Ok(operations)
 }
 
 ///
@@ -477,6 +513,51 @@ mod tests {
     }
 
     ///
+    /// T01: 公開復号とschemaで非空配列だけを受理する。
+    ///
+    /// # 戻り値
+    /// テスト結果。
+    ///
+    /// # 注記
+    /// object・空・null・入れ子・不正要素と1/2要素配列を比較する。
+    ///
+    #[test]
+    fn edit_page_requires_nonempty_operation_array() {
+        /*
+         * 不正形式と有効な配列を比較する
+         */
+        let operation = json!({
+            "type": "replace_text", "old_text": "a", "new_text": "b",
+        });
+        for value in [
+            operation.clone(), json!([]), json!(null),
+            json!([[operation.clone()]]), json!([{"type": "unknown"}]),
+            json!([{"type": "replace_text", "old_text": 3}]),
+        ] {
+            assert!(deserialize_edit_page_args(json!({
+                "path": "/page", "revision": 1, "instance_id": "id",
+                "operation": value,
+            })).is_err());
+        }
+        for value in [json!([operation.clone()]),
+            json!([operation.clone(), operation])]
+        {
+            assert!(deserialize_edit_page_args(json!({
+                "path": "/page", "revision": 1, "instance_id": "id",
+                "operation": value,
+            })).is_ok());
+        }
+        /*
+         * 公開schemaの配列型とminItemsを照合する
+         */
+        let schema = serde_json::to_value(
+            rmcp::schemars::schema_for!(EditPageToolArgs),
+        ).unwrap();
+        assert_eq!(schema["properties"]["operation"]["type"], "array");
+        assert_eq!(schema["properties"]["operation"]["minItems"], 1);
+    }
+
+    ///
     /// upload tool引数のDebug表現がアセット本体を秘匿することを確認する。
     ///
     /// # 注記
@@ -491,11 +572,13 @@ mod tests {
             path: "/docs/page".to_string(),
             file_name: "image.png".to_string(),
             mime_type: "image/png".to_string(),
-            data_base64: SECRET_SENTINEL.to_string(),
+            text: Some("secret-text-input".to_string()),
+            data_base64: Some(SECRET_SENTINEL.to_string()),
         };
         let debug = format!("{args:?}");
 
         assert!(!debug.contains(SECRET_SENTINEL));
+        assert!(!debug.contains("secret-text-input"));
         assert!(debug.contains("[REDACTED]"));
     }
 
@@ -505,11 +588,11 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_lines",
                 "old_text": "before",
                 "new_text": "after"
-            }
+            }]
         }))
         .expect_err("unknown operation type must fail");
 
@@ -527,10 +610,10 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": "Overview"
-            }
+            }]
         }))
         .expect_err("missing required field must fail");
 
@@ -553,12 +636,12 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_text",
                 "old_text": "before",
                 "new_text": "after",
                 "occurrence": 1
-            }
+            }]
         }))
         .expect_err("invalid field type must fail");
 
@@ -576,17 +659,17 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": "Overview",
                 "title": "Updated overview",
                 "content": "updated",
                 "include_subsection": true
-            }
+            }]
         }))
         .expect("replace_section extension fields must deserialize");
 
-        match args.operation {
+        match args.operation.into_iter().next().unwrap() {
             EditPageToolOperation::ReplaceSection {
                 section,
                 title,
@@ -615,12 +698,12 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": "Overview",
                 "content": "updated",
                 "include_subsection": "true"
-            }
+            }]
         }))
         .expect_err("invalid include_subsection type must fail");
 
@@ -656,43 +739,43 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": "Overview",
                 "content": "updated"
-            }
+            }]
         }))
         .expect("text selector must deserialize");
         let by_id_args = deserialize_edit_page_args(json!({
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": {
                     "by": "id",
                     "value": "s-001"
                 },
                 "content": "updated"
-            }
+            }]
         }))
         .expect("id selector must deserialize");
         let by_title_args = deserialize_edit_page_args(json!({
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": {
                     "by": "title",
                     "value": "Overview"
                 },
                 "content": "updated"
-            }
+            }]
         }))
         .expect("title selector must deserialize");
 
-        match text_args.operation {
+        match text_args.operation.into_iter().next().unwrap() {
             EditPageToolOperation::ReplaceSection { section, .. } => {
                 match section {
                     EditPageSectionSelector::Text(value) => {
@@ -705,7 +788,7 @@ mod tests {
             }
             _ => panic!("unexpected operation"),
         }
-        match by_id_args.operation {
+        match by_id_args.operation.into_iter().next().unwrap() {
             EditPageToolOperation::ReplaceSection { section, .. } => {
                 match section {
                     EditPageSectionSelector::Structured(selector) => {
@@ -724,7 +807,7 @@ mod tests {
             }
             _ => panic!("unexpected operation"),
         }
-        match by_title_args.operation {
+        match by_title_args.operation.into_iter().next().unwrap() {
             EditPageToolOperation::ReplaceSection { section, .. } => {
                 match section {
                     EditPageSectionSelector::Structured(selector) => {
@@ -751,14 +834,14 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": {
                     "by": "slug",
                     "value": "overview"
                 },
                 "content": "updated"
-            }
+            }]
         }))
         .expect_err("unknown selector type must fail");
         assert_eq!(unknown_by.code(), McpErrorCode::InvalidInput);
@@ -774,13 +857,13 @@ mod tests {
             "path": "/docs/page",
             "revision": 3,
             "instance_id": "instance-1",
-            "operation": {
+            "operation": [{
                 "type": "replace_section",
                 "section": {
                     "by": "title"
                 },
                 "content": "updated"
-            }
+            }]
         }))
         .expect_err("missing selector value must fail");
         assert_eq!(missing_value.code(), McpErrorCode::InvalidInput);

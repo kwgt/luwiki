@@ -29,8 +29,20 @@ pub(crate) enum AuditOperation {
     /// 固定REST操作
     Rest(RestAuditOperation),
 
+    /// 共通WebSocket接続
+    WebSocket,
+
+    /// ページ状態の明示確認
+    PageCheck,
+
     /// ページ取得
     Get,
+
+    /// 最新ページ状態取得
+    GetPageState,
+
+    /// ページ状態変更待ち
+    WaitPageChange,
 
     /// セクション取得
     GetSection,
@@ -49,6 +61,9 @@ pub(crate) enum AuditOperation {
 
     /// resource取得
     ReadResource,
+
+    /// エージェント用運用指示の取得
+    GetAgentInstructions,
 
     /// ページ検索
     Search,
@@ -94,13 +109,18 @@ impl AuditOperation {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Rest(operation) => operation.as_str(),
+            Self::WebSocket => "GET /ws",
+            Self::PageCheck => "ws.page.check",
             Self::Get => "get",
+            Self::GetPageState => "get_page_state",
+            Self::WaitPageChange => "wait_page_change",
             Self::GetSection => "get_section",
             Self::List => "list",
             Self::ListPrompts => "list_prompts",
             Self::GetPrompt => "get_prompt",
             Self::ListResources => "list_resources",
             Self::ReadResource => "read_resource",
+            Self::GetAgentInstructions => "get_agent_instructions",
             Self::Search => "search",
             Self::Create => "create",
             Self::Update => "update",
@@ -328,13 +348,18 @@ impl<'de> Deserialize<'de> for AuditOperation {
          */
         let value = String::deserialize(deserializer)?;
         let operation = match value.as_str() {
+            "GET /ws" => Some(Self::WebSocket),
+            "ws.page.check" => Some(Self::PageCheck),
             "get" => Some(Self::Get),
+            "get_page_state" => Some(Self::GetPageState),
+            "wait_page_change" => Some(Self::WaitPageChange),
             "get_section" => Some(Self::GetSection),
             "list" => Some(Self::List),
             "list_prompts" => Some(Self::ListPrompts),
             "get_prompt" => Some(Self::GetPrompt),
             "list_resources" => Some(Self::ListResources),
             "read_resource" => Some(Self::ReadResource),
+            "get_agent_instructions" => Some(Self::GetAgentInstructions),
             "search" => Some(Self::Search),
             "create" => Some(Self::Create),
             "update" => Some(Self::Update),

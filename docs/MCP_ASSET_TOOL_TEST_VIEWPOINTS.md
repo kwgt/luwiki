@@ -68,7 +68,7 @@ pathベースtoolである。初期版では、`path + file_name` を入力識�
    `upload_page_asset` の入力に限定されること
 2. `list_page_assets`、`resolve_page_asset`、`get_page_asset_metadata`、
    `delete_page_asset` が `data_base64` を返さないこと
-3. `data_base64` とアセット本体bytesが監査ログ、tracing、
+3. `text`、`data_base64`とアセット本体bytesが監査ログ、製品loggerのtracing bridge、
    error summaryへ流れないこと
 
 ## 4. 参照系toolの観点
@@ -109,7 +109,7 @@ pathベースtoolである。初期版では、`path + file_name` を入力識�
 
 ### 5.1 `upload_page_asset`
 
-1. `path`、`file_name`、`mime_type`、`data_base64` を入力として新規uploadすること
+1. `path`、`file_name`、`mime_type`と排他的な`text`/`data_base64`で新規uploadすること
 2. ローカルファイルパス入力を受け付けないこと
 3. 既存アセットの上書きuploadを受け付けないこと
 4. `mime_type` の空文字を拒否すること
@@ -121,6 +121,13 @@ pathベースtoolである。初期版では、`path + file_name` を入力識�
 10. 削除済み同名アセットが存在する場合はDB APIの既存挙動に従うこと
 11. ロック中ページではlock token入力を受け付けず `conflict` とすること
 12. 成功時にmetadataとsummaryを返し、アセット本体を返さないこと
+
+13. textの空文字、UTF-8 bytes保持、MIME表記保持を確認すること
+14. 本文欠落/両方はtool invalid_input、null/型不正は固定エラーのinvalid paramsになること
+15. textのMIME/charset・wildcard・重複charset、Unicode byte長の境界を確認すること
+16. /mcpのHTTP body64MiB境界/413、raw10MiBの全量escapeとBase64上限の到達を確認すること
+17. 製品logger全出力先とteeで依存本文がtrace設定でも出力されず、他targetが維持されること
+18. SKILL_SETUP掲載JSONを通常tools/callで検証すること
 
 ### 5.2 `delete_page_asset`
 

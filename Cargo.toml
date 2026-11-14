@@ -1,6 +1,6 @@
 [package]
 name = "luwiki"
-version = "0.9.33"
+version = "0.10.0"
 edition = "2024"
 
 [dependencies]
@@ -8,6 +8,7 @@ anyhow = "1.0.100"
 actix-multipart = "0.7.2"
 actix-web = { version = "4.6.0", features = ["rustls-0_23"] }
 actix-web-httpauth = "0.8.2"
+actix-ws = "=0.3.0"
 argon2 = "0.5.3"
 base64 = "0.22.1"
 clap = { version = "4.5.53", features = ["derive"] }
@@ -37,11 +38,11 @@ similar = "2.6.0"
 tantivy = "0.25.0"
 time = "0.3.36"
 toml = "0.9.10"
-tokio = {version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"]}
+tokio = {version = "1.48.0", features = ["rt-multi-thread", "macros", "signal", "time", "sync"]}
 tracing = "0.1.41"
 ulid = "1.2.1"
 webbrowser = "1.0.4"
-rust-embed = "8.5.0"
+rust-embed = { version = "8.5.0", features = ["debug-embed"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 x509-parser = "0.16.0"
 zip = "8.2.0"

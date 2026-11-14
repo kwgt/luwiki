@@ -1,4 +1,7 @@
-import { computed, ref, watch } from 'vue';
+import { createCodeCopyHandler, renderMarkdownWithCodeCopy } from '../lib/codeCopy';
+import { getMcpAuthority } from '../lib/pageMeta';
+import { readPageReloadBackup, clearPageReloadBackup, type PageReloadBackup } from '../lib/pageReloadBackup';
+import { computed, ref, shallowRef, watch } from 'vue';
 import {
   acquirePageLock,
   deletePage,
@@ -6,7 +9,7 @@ import {
   fetchParentPage,
   fetchPageMeta,
   fetchPageShortPath,
-  fetchPageSource,
+  fetchPageSourceSnapshot,
   renamePagePath,
   unlockPageLock,
   type PageMetaResponse,
@@ -68,6 +71,9 @@ export function usePageView() {
   const revision = ref<number | null>(null);
   const pagePath = ref('');
   const source = ref('');
+  const sourceStateToken = ref('');
+  const recovery = ref<PageReloadBackup | null>(null);
+  const recovered = ref(false);
   const assets = ref<PageAsset[]>([]);
   const isLoading = ref(false);
   const isUploading = ref(false);
@@ -247,11 +253,15 @@ export function usePageView() {
   });
 
   const renderedHtml = ref('');
+  const codeBlocks = shallowRef<ReadonlyMap<string, string>>(new Map());
+  const handleCodeCopyClick = createCodeCopyHandler(() => codeBlocks.value);
   let renderMacroSeq = 0;
 
   async function rebuildRenderedHtml(): Promise<void> {
+    if (recovered.value) return;
     if (!pagePath.value) {
       renderedHtml.value = '';
+      codeBlocks.value = new Map();
       return;
     }
 
@@ -259,13 +269,17 @@ export function usePageView() {
     const md = createMarkdownRenderer(pagePath.value, '/wiki');
     const sourceBody = stripFrontMatter(source.value);
     const expanded = await expandRenderMacros(sourceBody, {
+      mcpAuthority: getMcpAuthority() ?? undefined,
       pagePath: pagePath.value,
       pageId: pageId.value,
     });
     if (seq !== renderMacroSeq) {
       return;
     }
-    renderedHtml.value = md.render(stripLeadingTitleHeading(expanded));
+    const rendered = renderMarkdownWithCodeCopy(md,
+      stripLeadingTitleHeading(expanded), 'view-' + seq);
+    codeBlocks.value = rendered.codeBlocks;
+    renderedHtml.value = rendered.html;
   }
 
   const assetItems = computed(() =>
@@ -324,12 +338,26 @@ export function usePageView() {
     assetReplaceTarget.value = null;
   }
 
+  /** HTML取得後にsource等が失われた場合も退避から認可確認へ進む。 */
+  function prepareBackupRecovery(): boolean {
+    const backup = readPageReloadBackup();
+    if (!backup) return false;
+    recovery.value = backup;
+    pageId.value = backup.id;
+    revision.value = backup.revision;
+    sourceStateToken.value = backup.stateToken;
+    errorMessage.value = '';
+    return true;
+  }
+
   async function loadPage(): Promise<void> {
     const rawPageId = getMetaContent('wiki-page-id');
     const rawRevision = getMetaContent('wiki-page-revision');
     const rawAssetMaxBytes = getMetaContent('asset-max-bytes');
 
     if (!rawPageId) {
+      if (prepareBackupRecovery()) return;
+      clearPageReloadBackup();
       errorMessage.value = 'page id not found';
       return;
     }
@@ -349,19 +377,41 @@ export function usePageView() {
     try {
       const [meta, markdown, pageAssets] = await Promise.all([
         fetchPageMeta(pageId.value, revision.value ?? undefined, noCache),
-        fetchPageSource(pageId.value, revision.value ?? undefined, noCache),
+        fetchPageSourceSnapshot(pageId.value, revision.value ?? undefined, noCache),
         fetchPageAssets(pageId.value, Date.now()),
       ]);
 
       pageMeta.value = meta;
       pagePath.value = normalizeWikiPath(meta.page_info.path.value);
-      source.value = markdown;
+      source.value = markdown.source;
+      sourceStateToken.value = markdown.stateToken;
       assets.value = pageAssets;
+      clearPageReloadBackup();
     } catch (err: unknown) {
-      errorMessage.value = toErrorMessage(err);
+      if (!prepareBackupRecovery()) errorMessage.value = toErrorMessage(err);
     } finally {
       isLoading.value = false;
     }
+  }
+
+  /** 初期購読で同じ認証主体を確認できた退避だけを表示する。 */
+  function restoreBackup(viewer: string): void {
+    const backup = recovery.value;
+    if (!backup) return;
+    recovery.value = null;
+    if (backup.viewer !== viewer) {
+      clearPageReloadBackup();
+      errorMessage.value = '前の表示は復元できません';
+      return;
+    }
+    recovered.value = true;
+    pageMeta.value = backup.meta;
+    pagePath.value = backup.meta.page_info.path.value;
+    source.value = backup.source;
+    assets.value = backup.assets;
+    codeBlocks.value = new Map(backup.codes);
+    renderedHtml.value = backup.html;
+    clearPageReloadBackup();
   }
 
   async function uploadAssets(files: File[]): Promise<void> {
@@ -803,11 +853,19 @@ export function usePageView() {
 
   return {
     pageId,
+    revision,
+    source,
+    sourceStateToken,
+    assets,
+    codeBlocks,
+    recovery,
+    restoreBackup,
     pageTitle,
     pagePath,
     wikiUrl,
     tocEntries,
     renderedHtml,
+    handleCodeCopyClick,
     assetItems,
     isLoading,
     isUploading,

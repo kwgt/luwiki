@@ -8,6 +8,10 @@
 //! MCPサービスのsections処理を定義するモジュール
 //!
 
+mod batch;
+
+use batch::TextEdit;
+
 use super::{
     EditPageInsertSectionPlacement,
     EditPageOperation,
@@ -294,6 +298,7 @@ impl McpService {
     /// # 戻り値
     /// 対象見出し行を保持し、本文部分だけを差し替えた Markdown 本文を返す。
     ///
+    #[cfg(test)]
     pub(super) fn replace_section_content(
         &self,
         source: &str,
@@ -303,6 +308,42 @@ impl McpService {
         new_content: &str,
         include_subsection: bool,
     ) -> Result<String, McpError> {
+        let edits = self.replace_section_edits(
+            source, sections, section, new_title, new_content,
+            include_subsection,
+        )?;
+        batch::apply_untracked(source, edits)
+    }
+
+    ///
+    /// 見出しと本文の置換差分を後方から生成する。
+    ///
+    /// # 引数
+    /// * `source` - 現在本文
+    /// * `sections` - 現在見出し
+    /// * `section` - 対象
+    /// * `new_title` - 任意の見出し変更
+    /// * `new_content` - 新本文
+    /// * `include_subsection` - 子節も置換するか
+    ///
+    /// # 戻り値
+    /// 本文、見出しの順の差分。
+    ///
+    /// # 概要
+    /// 既存の空行保持と見出し検証を位置追跡でも共有する。
+    ///
+    fn replace_section_edits(
+        &self,
+        source: &str,
+        sections: &[ParsedHeading],
+        section: &ParsedHeading,
+        new_title: Option<&str>,
+        new_content: &str,
+        include_subsection: bool,
+    ) -> Result<Vec<TextEdit>, McpError> {
+        /*
+         * 既存の見出し・本文制約を検証する
+         */
         let effective_title = match new_title {
             Some(title) => self.validate_replace_section_title(title)?,
             None => section.title.clone(),
@@ -324,10 +365,11 @@ impl McpService {
             .map(|offset| section.heading_start + offset)
             .unwrap_or(section.content_start);
         let heading_line_break = &source[heading_line_end..section.content_start];
-        let before_heading = &source[..section.heading_start];
         let target_body = &source[section.content_start..body_end];
-        let after = &source[body_end..];
 
+        /*
+         * 従来の前後空行を保持して本文差分を組み立てる
+         */
         let leading_end = target_body
             .char_indices()
             .find(|(_, ch)| !matches!(*ch, '\r' | '\n'))
@@ -348,23 +390,19 @@ impl McpService {
         let heading_line =
             format!("{} {}", "#".repeat(section.level as usize), effective_title);
 
-        let mut replaced = String::with_capacity(
-            before_heading.len()
-                + heading_line.len()
-                + heading_line_break.len()
-                + leading_breaks.len()
-                + new_content.len()
-                + trailing_breaks.len()
-                + after.len(),
-        );
-        replaced.push_str(before_heading);
-        replaced.push_str(&heading_line);
-        replaced.push_str(heading_line_break);
-        replaced.push_str(leading_breaks);
-        replaced.push_str(new_content);
-        replaced.push_str(trailing_breaks);
-        replaced.push_str(after);
-        Ok(replaced)
+        /*
+         * 後方の本文を先に変更して見出し差分の座標を保つ
+         */
+        Ok(vec![
+            TextEdit::new(
+                section.content_start..body_end,
+                format!("{leading_breaks}{new_content}{trailing_breaks}"),
+            ),
+            TextEdit::new(
+                section.heading_start..section.content_start,
+                format!("{heading_line}{heading_line_break}"),
+            ),
+        ])
     }
 
     ///
@@ -379,6 +417,7 @@ impl McpService {
     /// # 戻り値
     /// 指定位置へ section を挿入した Markdown 本文を返す。
     ///
+    #[cfg(test)]
     pub(super) fn insert_section_content(
         &self,
         source: &str,
@@ -386,23 +425,37 @@ impl McpService {
         placement: EditPageInsertSectionPlacement,
         new_section: &str,
     ) -> String {
-        let insert_at = match placement {
+        let edit = self.insert_section_edit(source, anchor, placement,
+            new_section);
+        format!("{}{}{}", &source[..edit.range.start], edit.replacement,
+            &source[edit.range.end..])
+    }
+
+    ///
+    /// 挿入位置と既存の改行補完を差分として返す。
+    ///
+    /// # 引数
+    /// * `source` - 現在本文
+    /// * `anchor` - 基準見出し
+    /// * `placement` - 前後指定
+    /// * `new_section` - 挿入本文
+    ///
+    /// # 戻り値
+    /// ゼロ幅の挿入差分。
+    ///
+    fn insert_section_edit(
+        &self, source: &str, anchor: &ParsedHeading,
+        placement: EditPageInsertSectionPlacement, new_section: &str,
+    ) -> TextEdit {
+        let at = match placement {
             EditPageInsertSectionPlacement::Before => anchor.heading_start,
             EditPageInsertSectionPlacement::After => anchor.content_end,
         };
-        let before = &source[..insert_at];
-        let after = &source[insert_at..];
-
-        let mut inserted = String::with_capacity(
-            before.len() + new_section.len() + after.len() + 2,
-        );
-        inserted.push_str(before);
-        inserted.push_str(new_section);
-        if !new_section.ends_with('\n') && !after.starts_with('\n') {
-            inserted.push('\n');
+        let mut replacement = new_section.to_string();
+        if !new_section.ends_with('\n') && !source[at..].starts_with('\n') {
+            replacement.push('\n');
         }
-        inserted.push_str(after);
-        inserted
+        TextEdit::new(at..at, replacement)
     }
 
     ///
@@ -418,17 +471,16 @@ impl McpService {
     /// # 注記
     /// 削除範囲は見出し行を含む section 全体とし、子見出し配下もまとめて削除する。
     ///
+    #[cfg(test)]
     pub(super) fn delete_section_content(
         &self,
         source: &str,
         section: &ParsedHeading,
     ) -> String {
-        let before = &source[..section.heading_start];
-        let after = &source[section.content_end..];
-        let mut deleted = String::with_capacity(before.len() + after.len());
-        deleted.push_str(before);
-        deleted.push_str(after);
-        deleted
+        let edit = TextEdit::new(
+            section.heading_start..section.content_end, String::new(),
+        );
+        format!("{}{}", &source[..edit.range.start], &source[edit.range.end..])
     }
 
     ///
@@ -446,6 +498,7 @@ impl McpService {
     /// # 注記
     /// `occurrence = None` は `First` と同じ意味で扱う。
     ///
+    #[cfg(test)]
     pub(super) fn replace_text_content(
         &self,
         source: &str,
@@ -453,14 +506,50 @@ impl McpService {
         new_text: &str,
         occurrence: Option<EditPageReplaceTextOccurrence>,
     ) -> String {
-        match occurrence.unwrap_or(EditPageReplaceTextOccurrence::First) {
-            EditPageReplaceTextOccurrence::First => {
-                source.replacen(old_text, new_text, 1)
-            }
-            EditPageReplaceTextOccurrence::All => {
-                source.replace(old_text, new_text)
-            }
+        let mut result = source.to_string();
+        for edit in self.replace_text_edits(source, old_text, new_text,
+            occurrence)
+        {
+            result.replace_range(edit.range, &edit.replacement);
         }
+        result
+    }
+
+    ///
+    /// 操作開始時の文字列一致を後方順の差分へ変換する。
+    ///
+    /// # 引数
+    /// * `source` - 現在本文
+    /// * `old_text` - 検索文字列
+    /// * `new_text` - 置換文字列
+    /// * `occurrence` - firstまたはall
+    ///
+    /// # 戻り値
+    /// 座標を変えずに適用できる後方順差分。
+    ///
+    /// # 概要
+    /// 置換開始時の一致だけを列挙し、挿入した文字列を再探索しない。
+    ///
+    fn replace_text_edits(
+        &self, source: &str, old_text: &str, new_text: &str,
+        occurrence: Option<EditPageReplaceTextOccurrence>,
+    ) -> Vec<TextEdit> {
+        /*
+         * first/allの一致を列挙して座標が壊れない後方順にする
+         */
+        let count = match occurrence.unwrap_or(
+            EditPageReplaceTextOccurrence::First,
+        ) {
+            EditPageReplaceTextOccurrence::First => 1,
+            EditPageReplaceTextOccurrence::All => usize::MAX,
+        };
+        let mut edits = source.match_indices(old_text).take(count)
+            .map(|(start, value)| TextEdit::new(
+                start..start + value.len(), new_text.to_string(),
+            ))
+            .collect::<Vec<_>>();
+        edits.reverse();
+        edits
     }
 
     ///
@@ -479,78 +568,13 @@ impl McpService {
     /// - `replace_text.old_text` が空文字なら `invalid_input`
     /// - `replace_text` で一致箇所が 0 件なら `not_found`
     ///
+    #[cfg(test)]
     pub(super) fn apply_edit_page_operation(
         &self,
         source: &str,
         operation: &EditPageOperation,
     ) -> Result<String, McpError> {
-        match operation {
-            EditPageOperation::ReplaceSection {
-                section,
-                title,
-                content,
-                include_subsection,
-            } => {
-                let sections = self.parse_markdown_toc_sections(source)?;
-                let target =
-                    self.resolve_section_selector(&sections, section.clone().into())?;
-                self.replace_section_content(
-                    source,
-                    &sections,
-                    &target,
-                    title.as_deref(),
-                    content,
-                    include_subsection.unwrap_or(false),
-                )
-            }
-            EditPageOperation::InsertSection {
-                anchor,
-                placement,
-                content,
-            } => {
-                let sections = self.parse_markdown_toc_sections(source)?;
-                let target =
-                    self.resolve_section_selector(&sections, anchor.clone().into())?;
-                Ok(self.insert_section_content(
-                    source,
-                    &target,
-                    *placement,
-                    content,
-                ))
-            }
-            EditPageOperation::DeleteSection { section } => {
-                let sections = self.parse_markdown_toc_sections(source)?;
-                let target =
-                    self.resolve_section_selector(&sections, section.clone().into())?;
-                Ok(self.delete_section_content(source, &target))
-            }
-            EditPageOperation::ReplaceText {
-                old_text,
-                new_text,
-                occurrence,
-            } => {
-                if old_text.is_empty() {
-                    return Err(McpError::new(
-                        McpErrorCode::InvalidInput,
-                        "old_text must not be empty",
-                    ));
-                }
-
-                if !source.contains(old_text) {
-                    return Err(McpError::new(
-                        McpErrorCode::NotFound,
-                        format!("text not found: {}", old_text),
-                    ));
-                }
-
-                Ok(self.replace_text_content(
-                    source,
-                    old_text,
-                    new_text,
-                    *occurrence,
-                ))
-            }
-        }
+        self.apply_edit_page_operations(source, std::slice::from_ref(operation))
     }
 
     ///

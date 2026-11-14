@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { usePageEvents } from '../composables/usePageEvents';
+import {
+  captureViewPosition, currentViewPath, readHistoryViewPosition, readViewPosition,
+  restoreViewPosition, storeViewPosition, type ViewPosition,
+} from '../lib/pageViewPosition';
+import { reloadWithBackup } from '../lib/pageReloadBackup';
+import { getTabId } from '../lib/lockToken';
 import { ensureHelloAuth } from '../api/hello';
 import type { RevisionRenameInfo } from '../api/pages';
 import { usePageView } from '../composables/usePageView';
@@ -18,10 +25,18 @@ import {
 
 const {
   pageId,
+  revision,
+  source,
+  sourceStateToken,
+  assets,
+  codeBlocks,
+  recovery,
+  restoreBackup,
   pageTitle,
   pagePath,
   tocEntries,
   renderedHtml,
+  handleCodeCopyClick,
   assetItems,
   isLoading,
   isUploading,
@@ -95,6 +110,8 @@ const {
 const { isReadOnlyUser, loadCurrentUser } = useCurrentUser();
 
 const {
+  selectedPageUpdateMode,
+  pageUpdateSaveError,
   themeOptions,
   fontOptions,
   editorKeymapOptions,
@@ -124,6 +141,80 @@ const globalDragDepth = ref(0);
 const pageMoveInputRef = ref<HTMLInputElement | null>(null);
 const pageCreateInputRef = ref<HTMLInputElement | null>(null);
 const renderedArticleRef = ref<HTMLElement | null>(null);
+const previousScrollRestoration = history.scrollRestoration;
+history.scrollRestoration = 'manual';
+let restoringPosition = false;
+let initialPositionHandled = false;
+let stopPositionRestore: (() => void) | undefined;
+let positionTimer: ReturnType<typeof setTimeout> | undefined;
+let historyTimer: ReturnType<typeof setTimeout> | undefined;
+let activeHash = location.hash;
+/** 現在表示している同じページの読書位置を保存する。 */
+function saveReadingPosition(): void {
+  if (!initialPositionHandled || restoringPosition || !pageId.value || !renderedArticleRef.value || !renderedHtml.value) return;
+  try { storeViewPosition(captureViewPosition(renderedArticleRef.value, pageId.value)); }
+  catch { /* 通常の読書は保存失敗でも維持する。 */ }
+}
+/** scrollの連続記録をまとめる。 */
+function queueReadingPosition(): void {
+  clearTimeout(positionTimer); positionTimer = setTimeout(saveReadingPosition, 150);
+}
+/** 描画済みの本文へ保存した位置を適用する。 */
+function applyReadingPosition(position: ViewPosition): void {
+  const article = renderedArticleRef.value;
+  if (!article) return;
+  stopPositionRestore?.();
+  restoringPosition = true;
+  stopPositionRestore = restoreViewPosition(article, position, () => {
+    stopPositionRestore = undefined;
+    restoringPosition = false;
+    saveReadingPosition();
+  });
+}
+
+/** 離脱前に現エントリの位置を確定する。 */
+function savePositionOnPageHide(): void {
+  clearTimeout(positionTimer);
+  clearTimeout(historyTimer);
+  saveReadingPosition();
+}
+
+/** 文書を維持したままハッシュ履歴を移動した場合に対応する。 */
+function restoreHashHistoryPosition(): void {
+  if (activeHash === location.hash) return;
+  activeHash = location.hash;
+  clearTimeout(positionTimer);
+  clearTimeout(historyTimer);
+  if (!initialPositionHandled || !pageId.value) return;
+  const position = readHistoryViewPosition(pageId.value);
+  if (!position) return;
+  const hash = location.hash;
+  historyTimer = setTimeout(() => {
+    if (location.hash === hash) applyReadingPosition(position);
+  }, 0);
+}
+
+const pageEvents = usePageEvents({
+  ready: () => Boolean(sourceStateToken.value && (renderedHtml.value || recovery.value)),
+  mode: () => selectedPageUpdateMode.value,
+  path: currentViewPath,
+  pageId: () => pageId.value,
+  stateToken: () => sourceStateToken.value,
+  observed: value => restoreBackup(value.viewer_key),
+  reload: viewer => {
+    const article = renderedArticleRef.value;
+    const tab = getTabId();
+    if (!article || !pageMeta.value || !tab) throw new Error('page not ready');
+    stopPositionRestore?.();
+    storeViewPosition(captureViewPosition(article, pageId.value));
+    reloadWithBackup({ id: pageId.value, revision: revision.value, path: currentViewPath(),
+      viewer, tab, source: source.value, meta: pageMeta.value, assets: assets.value,
+      html: renderedHtml.value, codes: [...codeBlocks.value], stateToken: sourceStateToken.value });
+  },
+});
+const { notice: pageChangeNotice, actionLabel: pageChangeActionLabel, busy: pageChangeBusy,
+  act: actPageChange, dismiss: dismissPageChange } = pageEvents;
+
 let mermaidRenderSeq = 0;
 const breadcrumbItems = computed(() => {
   const currentPath = pagePath.value || '/';
@@ -467,8 +558,11 @@ onMounted(async () => {
   }
 
   void loadCurrentUser();
-  void initTabId();
+  await initTabId();
   void loadPage();
+  document.addEventListener('scroll', queueReadingPosition, true);
+  window.addEventListener('pagehide', savePositionOnPageHide);
+  window.addEventListener('popstate', restoreHashHistoryPosition);
 
   window.addEventListener('dragover', handleWindowDragOver);
   window.addEventListener('drop', handleWindowDrop);
@@ -508,6 +602,13 @@ watch(pageCreateOpen, async (open) => {
 });
 
 onBeforeUnmount(() => {
+  stopPositionRestore?.();
+  clearTimeout(positionTimer);
+  clearTimeout(historyTimer);
+  document.removeEventListener('scroll', queueReadingPosition, true);
+  window.removeEventListener('pagehide', savePositionOnPageHide);
+  window.removeEventListener('popstate', restoreHashHistoryPosition);
+  history.scrollRestoration = previousScrollRestoration;
   window.removeEventListener('dragover', handleWindowDragOver);
   window.removeEventListener('drop', handleWindowDrop);
   window.removeEventListener('dragenter', handleWindowDragEnter);
@@ -537,7 +638,15 @@ watch(renderedHtml, async (value) => {
   if (seq !== mermaidRenderSeq) {
     return;
   }
-  scrollToHashIfPresent();
+  if (initialPositionHandled) return;
+  initialPositionHandled = true;
+  const position = readViewPosition(pageId.value);
+  if (position) {
+    applyReadingPosition(position);
+  } else {
+    scrollToHashIfPresent();
+    saveReadingPosition();
+  }
 });
 
 watch(pageTitle, (value) => {
@@ -585,12 +694,12 @@ watch(pageTitle, (value) => {
             </div>
           </div>
           <nav
-            class="mx-4 flex flex-nowrap items-center gap-1 text-sm text-info"
+            class="mx-4 flex min-w-0 flex-wrap items-center gap-1 text-sm text-info"
             aria-label="breadcrumb"
           >
             <template v-for="(item, index) in breadcrumbItems" :key="item.href">
-              <a class="link link-hover inline-flex items-center" :href="item.href">
-                <span class="inline-block max-w-full truncate">{{ item.label }}</span>
+              <a class="link link-hover inline-flex min-w-0 max-w-full items-center" :href="item.href">
+                <span class="inline-block min-w-0 max-w-full break-all">{{ item.label }}</span>
               </a>
               <span
                 v-if="index < breadcrumbItems.length - 1"
@@ -726,8 +835,10 @@ watch(pageTitle, (value) => {
               class="markdown-body h-full flex-1 min-h-0 min-w-0 w-full overflow-auto p-4"
               :class="[markdownThemeClass, prismThemeClass]"
               :style="markdownStyle"
-              v-html="renderedHtml"
-            />
+              @click="handleCodeCopyClick"
+            >
+              <div v-html="renderedHtml" />
+            </article>
           </section>
         </div>
       </main>
@@ -834,9 +945,26 @@ watch(pageTitle, (value) => {
       </footer>
     </div>
 
+    <div v-if="pageChangeNotice" class="toast toast-end z-50 max-w-full" role="status">
+      <div class="alert flex max-w-[calc(100vw-2rem)] flex-wrap whitespace-normal break-words">
+        <span class="min-w-0 break-all">{{ pageChangeNotice }}</span>
+        <button class="btn btn-sm" :disabled="pageChangeBusy" @click="actPageChange">{{ pageChangeActionLabel }}</button>
+        <button class="btn btn-sm btn-ghost" aria-label="変更通知を閉じる" @click="dismissPageChange">閉じる</button>
+      </div>
+    </div>
     <div v-if="settingsOpen" class="modal modal-open">
       <div class="modal-box space-y-4 transform-none">
         <h3 class="text-lg font-bold">表示設定</h3>
+        <label class="form-control w-full">
+          <span class="label-text">ページ変更時の動作</span>
+          <select v-model="selectedPageUpdateMode" class="select select-bordered" aria-label="ページ変更時の動作">
+            <option value="auto">自動：更新を反映</option>
+            <option value="manual">半自動：通知から更新</option>
+            <option value="ignore">無視：監視しない</option>
+          </select>
+        </label>
+        <p v-if="pageUpdateSaveError" role="status">{{ pageUpdateSaveError }}</p>
+        <button v-if="selectedPageUpdateMode !== 'ignore' && pageEvents.current.value && ['updated', 'replaced'].includes(pageEvents.current.value.kind)" class="btn btn-sm" :disabled="pageChangeBusy" @click="actPageChange">未反映の変更を更新</button>
         <div class="space-y-3">
           <label class="form-control w-full">
             <div class="label">

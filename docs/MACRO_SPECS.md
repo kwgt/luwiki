@@ -7,6 +7,8 @@
   - レンダリング時に展開されるレンダリング時変換型
   - 特例マクロ
 
+authority専用マクロはレンダリング時変換型の例外としてMCP取得時も処理する。
+
 ## マクロ一覧
 
   | マクロ名 | 種別 | 機能
@@ -15,6 +17,7 @@
   | `today[:utc][:iso8601]` | 即時変換型 | [現在の日付を展開](#macro-today)
   | `page[:id][:basename]` | 即時変換型 | [ページ情報を展開](#macro-page)
   | `user[:display]` | 即時変換型 | [ユーザ情報を展開](#macro-user)
+  | `mcp:authority` | レンダリング時変換型（MCP取得時も対象） | [authorityを展開](#macro-mcp-authority) |
   | `children[:depth={number}][:recursive]` | レンダリング時変換型 | [子ページのリストへ展開](#macro-children)
   | `toc[:depth={number}]` | レンダリング時変換型 | [ページ内のTOCへ展開](#macro-toc)
   | `include_code:src={asset_path}[:lang={string}]` | レンダリング時変換型 | [アセットのコードブロック展開](#macro-include_code)
@@ -63,6 +66,12 @@ MCP `prompts/get`時に処理する専用placeholderを使用する。
 - inline codeおよびfenced code内では展開しない
 - MCP prompt引数placeholderとは別の記法として扱う
 - `prompts/get`では`{{!macro}}`を展開しない
+
+テンプレート適用では、front matterを除去して上記の既存マクロ処理を行った後、
+本文先頭の空行を全て除去してエディタへ設定する。半角スペース・タブだけの行を
+含め、空白だけの本文は空文字とする。最初の非空行の字下げ、本文内部・末尾・
+コード内の空白と改行は保持する。この調整はテンプレート適用に限定し、
+通常のマクロ展開やMCP prompt取得の本文処理へ適用しない。
 
 ## MCP prompt専用placeholder
 
@@ -272,3 +281,29 @@ Obsidian 系由来
 
 ### 注記
 - `![[asset:/path/to/page:image.png]]`は`[image.png](!asset:/path/to/page:image.png)`と等価に展開される。
+
+<a id="macro-mcp-authority"></a>
+## authority専用マクロ
+
+正式記法は`{{mcp:authority}}`。大小文字・空白・引数を厳密一致で判定し、
+run.mcp_authorityで解決・検証済みの文字列だけを挿入する。
+未指定時はlocal.luwiki。schemeやresource pathを自動追加しない。
+
+- 元sourceの正式記法を一回置換し、生成結果は再走査しない。
+- inline/fenced code内も展開する。他のマクロのcode除外は維持する。
+- 直前の連続バックスラッシュが奇数個なら抑止、偶数個なら展開する。
+  元のバックスラッシュは保持する。Markdown描画時のescape解釈とは区別する。
+- 未知記法・閉じ忘れは保持。入れ子構文を解釈せず一致部分だけを置換する。
+- ブラウザ通常/履歴表示と編集previewで展開し、入力sourceは変えない。
+- ページ由来resources/readはfront matter除去・認可後のbodyだけを置換する。
+  固定組み込み本文・metadata・list・URI索引は対象外。
+- prompts/getは元system/本文にauthorityを適用してから既存引数/escapeを展開する。
+  挿入された要求引数値は再展開しない。
+- 保存・履歴source・REST/MCPページsource取得・export/importはrawを保持する。
+- template通常形はsourceへ保持し、後の表示/取得で展開する。
+  専用`{{!mcp:authority}}`は非対応として保持する。
+- 設定変更は再起動後のHTML再取得/MCP再接続で反映する。hot reloadはしない。
+  meta欠落/不正時はmarkerを保持し、Host等からauthorityを推測しない。
+
+例: `luwiki://{{mcp:authority}}/pages/manual`は対象出力で
+`luwiki://local.luwiki/pages/manual`となり、raw get_pageではmarkerを保持する。

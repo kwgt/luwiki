@@ -10,6 +10,7 @@
 
 mod assets;
 mod pages;
+pub(crate) mod page_state;
 mod prompts;
 mod resources;
 mod sections;
@@ -194,6 +195,9 @@ struct ParsedHeading {
 pub(crate) struct McpService {
     /// resource URI authority
     resource_authority: String,
+
+    /// 公開MCPの保存後に同期する全文索引。DB単体利用では未設定。
+    fts_config: Option<FtsIndexConfig>,
 }
 
 impl McpService {
@@ -221,7 +225,43 @@ impl McpService {
     ) -> Self {
         Self {
             resource_authority,
+            fts_config: None,
         }
+    }
+
+    ///
+    /// 保存後に同期する全文索引設定を接続する。
+    ///
+    /// # 引数
+    /// * `config` - サーバと共通の索引設定
+    ///
+    /// # 戻り値
+    /// 索引同期を有効にしたサービス。
+    ///
+    pub(crate) fn with_fts_config(mut self, config: FtsIndexConfig) -> Self {
+        self.fts_config = Some(config);
+        self
+    }
+
+    ///
+    /// commit済みの影響ページを既存FTS経路で同期する。
+    ///
+    /// # 引数
+    /// * `db` - 正本DB
+    /// * `page_ids` - 保存処理が確定した影響ページ
+    ///
+    /// # 戻り値
+    /// 同期結果。失敗時もDBの保存は巻き戻さない。
+    ///
+    fn sync_saved_pages(
+        &self, db: &DatabaseManager, page_ids: &[PageId],
+    ) -> Result<(), McpError> {
+        if let Some(config) = &self.fts_config {
+            fts::update_pages_index(config, db, page_ids, false)
+                .map_err(|_| McpError::new(McpErrorCode::InternalError,
+                    "page was saved but full-text index update failed"))?;
+        }
+        Ok(())
     }
 
     ///
@@ -868,6 +908,7 @@ impl McpService {
                 &access,
             )
             .map_err(map_update_db_error)?;
+        self.sync_saved_pages(db, &result.outcome.affected_page_ids)?;
         let revision = result.outcome.revision.ok_or_else(|| {
             McpError::new(
                 McpErrorCode::InternalError,

@@ -221,10 +221,10 @@ cursorには`mcp.name`と同じ値制約を適用する。
 ### 8.2 本文
 
 - front matter終端直後からページソース末尾までを本文とする
-- raw Markdownを保持する
+- authority専用置換とprompt引数展開以外はraw Markdownを保持する
 - 見出し、コード、wiki link、通常マクロ、空白、改行を保持する
 - trimおよび改行正規化を行わない
-- 通常マクロ、wiki link、`{{!macro}}`を展開しない
+- authority専用マクロ以外の通常マクロ、wiki link、`{{!macro}}`を展開しない
 
 ---
 
@@ -420,3 +420,14 @@ protocol errorへ以下を含めない。
   - prompts監査設計
 - `MACRO_SPECS.md`
   - prompt専用placeholderと既存マクロの境界
+
+## authority専用マクロとの順序
+
+引数検証後、保存された元system/本文の`{{mcp:authority}}`をrunの解決値で
+一回展開し、その後に既存prompt引数/escapeを展開して連結する。
+authority専用マクロはcode内も対象。正式記法・escapeはMACRO_SPECS.mdを正とする。
+要求引数値はauthorityを含め再処理しない。metadataや保存sourceは変更しない。
+
+例: 元本文が`{{mcp:authority}} / {{@value}}`、valueが
+`{{mcp:authority}}`なら、出力は`local.luwiki / {{mcp:authority}}`となる。
+固定組み込みとして公開する本仕様書自体に新しいauthority置換は適用しない。

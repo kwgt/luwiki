@@ -241,6 +241,7 @@ impl McpHandler {
     /// * `path` - 対象ページ path
     /// * `file_name` - アップロードするアセットファイル名
     /// * `mime_type` - アップロードするアセットの MIME 種別
+    /// * `text` - UTF-8の直接入力本文
     /// * `data_base64` - base64 エンコード済みアセット本体
     ///
     /// # 戻り値
@@ -254,7 +255,8 @@ impl McpHandler {
         path: &str,
         file_name: &str,
         mime_type: &str,
-        data_base64: &str,
+        text: Option<&str>,
+        data_base64: Option<&str>,
     ) -> Result<UploadPageAssetResponse, McpError> {
         let request = McpRequestEnvelope::new(
             crate::mcp::tools::McpToolName::UploadPageAsset,
@@ -262,7 +264,6 @@ impl McpHandler {
                 path.to_string(),
                 file_name.to_string(),
                 mime_type.to_string(),
-                data_base64.to_string(),
             )),
         );
 
@@ -272,6 +273,7 @@ impl McpHandler {
             path,
             file_name,
             mime_type,
+            text,
             data_base64,
         ) {
             Ok(result) => self.audit_success(

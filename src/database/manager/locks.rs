@@ -115,7 +115,7 @@ impl DatabaseManager {
             ) {
                 return Err(anyhow!("injected meta commit checkpoint failure"));
             }
-            txn.commit()?;
+            self.commit_page_change(txn)?;
             for asset_id in asset_ids {
                 let _ = fs::remove_file(self.asset_file_path(&asset_id));
             }
@@ -155,7 +155,7 @@ impl DatabaseManager {
             let expired: LockInfo = serde_json::from_value(value)?;
             locks.insert(lock.token(), expired)?;
         }
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(())
     }
 
@@ -178,7 +178,7 @@ impl DatabaseManager {
          */
         let txn = self.db.begin_write()?;
         let (result, asset_ids) = cleanup_page_lock_in_txn(&txn, page_id)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         for asset_id in asset_ids {
             let _ = fs::remove_file(self.asset_file_path(&asset_id));
         }
@@ -344,7 +344,7 @@ impl DatabaseManager {
             /*
              * コミット
              */
-            txn.commit()?;
+            self.commit_page_change(txn)?;
 
             Ok((lock_info, target))
         })();
@@ -575,7 +575,7 @@ impl DatabaseManager {
             /*
              * コミット
              */
-            txn.commit()?;
+            self.commit_page_change(txn)?;
 
             Ok((lock_info, target))
         })();
@@ -775,7 +775,7 @@ impl DatabaseManager {
             }
 
             if needs_commit {
-                txn.commit()?;
+                self.commit_page_change(txn)?;
             }
 
             for asset_id in asset_ids {
@@ -865,7 +865,7 @@ impl DatabaseManager {
         }
 
         if needs_commit {
-            txn.commit()?;
+            self.commit_page_change(txn)?;
         }
 
         for asset_id in asset_ids {
@@ -1041,7 +1041,7 @@ impl DatabaseManager {
          * コミット
          */
         if removed {
-            txn.commit()?;
+            self.commit_page_change(txn)?;
         }
 
         for asset_id in asset_ids {
@@ -1111,7 +1111,7 @@ impl DatabaseManager {
         }
 
         if removed {
-            txn.commit()?;
+            self.commit_page_change(txn)?;
         }
 
         for asset_id in asset_ids {

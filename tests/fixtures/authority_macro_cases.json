@@ -1,0 +1,98 @@
+[
+  {
+    "name": "plain",
+    "source": "{{mcp:authority}}",
+    "authority": "local.luwiki",
+    "expected": "local.luwiki"
+  },
+  {
+    "name": "uri",
+    "source": "luwiki://{{mcp:authority}}/pages/案内",
+    "authority": "docs.example.test",
+    "expected": "luwiki://docs.example.test/pages/案内"
+  },
+  {
+    "name": "multiple",
+    "source": "{{mcp:authority}} / {{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "a.test / a.test"
+  },
+  {
+    "name": "unchanged",
+    "source": "no marker",
+    "authority": "a.test",
+    "expected": "no marker"
+  },
+  {
+    "name": "invalid",
+    "source": "{{MCP:authority}} {{mcp: authority}} {{mcp}} {{mcp:authority:}} {{mcp:authority",
+    "authority": "a.test",
+    "expected": "{{MCP:authority}} {{mcp: authority}} {{mcp}} {{mcp:authority:}} {{mcp:authority"
+  },
+  {
+    "name": "code",
+    "source": "`{{mcp:authority}}`\n```md\n{{mcp:authority}}\n{{page}}\n```",
+    "authority": "a.test",
+    "expected": "`a.test`\n```md\na.test\n{{page}}\n```"
+  },
+  {
+    "name": "unicode",
+    "source": "﻿ 日本語 😀\r\n{{mcp:authority}}\r\n \u0000",
+    "authority": "a.test",
+    "expected": "﻿ 日本語 😀\r\na.test\r\n \u0000"
+  },
+  {
+    "name": "nested",
+    "source": "{{outer:{{mcp:authority}}}}",
+    "authority": "a.test",
+    "expected": "{{outer:a.test}}"
+  },
+  {
+    "name": "template",
+    "source": "{{!mcp:authority}} {{@value}} {{@@value}}",
+    "authority": "a.test",
+    "expected": "{{!mcp:authority}} {{@value}} {{@@value}}"
+  },
+  {
+    "name": "missing",
+    "source": "{{mcp:authority}}",
+    "authority": null,
+    "expected": "{{mcp:authority}}"
+  },
+  {
+    "name": "escape-0",
+    "source": "{{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "a.test"
+  },
+  {
+    "name": "escape-1",
+    "source": "\\{{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "\\{{mcp:authority}}"
+  },
+  {
+    "name": "escape-2",
+    "source": "\\\\{{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "\\\\a.test"
+  },
+  {
+    "name": "escape-3",
+    "source": "\\\\\\{{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "\\\\\\{{mcp:authority}}"
+  },
+  {
+    "name": "escape-4",
+    "source": "\\\\\\\\{{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "\\\\\\\\a.test"
+  },
+  {
+    "name": "mixed",
+    "source": "\\{{mcp:authority}} {{mcp:authority}}",
+    "authority": "a.test",
+    "expected": "\\{{mcp:authority}} a.test"
+  }
+]

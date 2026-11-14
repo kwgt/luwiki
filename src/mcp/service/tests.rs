@@ -8,6 +8,11 @@
 //! MCP service tests
 //!
 
+    mod authority_macro;
+    mod batch;
+    mod fts_sync;
+    mod text_asset;
+
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -843,11 +848,11 @@
                 .instance_id()
                 .expect("instance_id missing")
                 .to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "body".to_string(),
                 new_text: "updated".to_string(),
                 occurrence: None,
-            },
+            }],
         );
 
         let error = service
@@ -894,11 +899,11 @@
                 .instance_id()
                 .expect("instance_id missing")
                 .to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "before".to_string(),
                 new_text: "after".to_string(),
                 occurrence: None,
-            },
+            }],
         );
 
         let result = service
@@ -911,7 +916,7 @@
 
         assert_eq!(result.path(), "/mcp/edit-success");
         assert_eq!(result.revision(), 2);
-        assert_eq!(result.summary(), "page edited");
+        assert_eq!(result.summary(), "page edited (1 operations)");
         assert_eq!(
             result.instance_id(),
             saved_source
@@ -958,11 +963,11 @@
                 .instance_id()
                 .expect("instance_id missing")
                 .to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "body".to_string(),
                 new_text: "updated".to_string(),
                 occurrence: None,
-            },
+            }],
         );
 
         let error = service
@@ -999,11 +1004,11 @@
             "/mcp/edit-instance".to_string(),
             1,
             "instance-mismatch".to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "body".to_string(),
                 new_text: "updated".to_string(),
                 occurrence: None,
-            },
+            }],
         );
 
         let error = service
@@ -1050,11 +1055,11 @@
                 .instance_id()
                 .expect("instance_id missing")
                 .to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "before".to_string(),
                 new_text: "after".to_string(),
                 occurrence: None,
-            },
+            }],
         );
 
         let result = service
@@ -1067,7 +1072,7 @@
 
         assert_eq!(result.path(), "/mcp/edit-flow");
         assert_eq!(result.revision(), 2);
-        assert_eq!(result.summary(), "page edited");
+        assert_eq!(result.summary(), "page edited (1 operations)");
         assert_eq!(saved_source.source(), "# Title\n\nafter body\n");
 
         fs::remove_dir_all(base_dir).expect("cleanup failed");
@@ -1107,11 +1112,11 @@
                 .instance_id()
                 .expect("instance_id missing")
                 .to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "body".to_string(),
                 new_text: "updated".to_string(),
                 occurrence: None,
-            },
+            }],
         );
 
         let error = service
@@ -1161,9 +1166,9 @@
                     "/mcp/edit-failure".to_string(),
                     1,
                     instance_id.clone(),
-                    EditPageOperation::DeleteSection {
+                    vec![EditPageOperation::DeleteSection {
                         section: SectionSelector::ById("s-999".to_string()),
-                    },
+                    }],
                 ),
             )
             .expect_err("missing section must fail");
@@ -1177,12 +1182,12 @@
                     "/mcp/edit-failure".to_string(),
                     1,
                     instance_id.clone(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ByTitle("Child".to_string()),
                         title: None,
                         content: "updated".to_string(),
                         include_subsection: None,
-                    },
+                    }],
                 ),
             )
             .expect_err("ambiguous title must fail");
@@ -1196,11 +1201,11 @@
                     "/mcp/edit-failure".to_string(),
                     1,
                     instance_id.clone(),
-                    EditPageOperation::ReplaceText {
+                    vec![EditPageOperation::ReplaceText {
                         old_text: "missing".to_string(),
                         new_text: "updated".to_string(),
                         occurrence: None,
-                    },
+                    }],
                 ),
             )
             .expect_err("missing text must fail");
@@ -1214,11 +1219,11 @@
                     "/mcp/edit-failure".to_string(),
                     1,
                     instance_id,
-                    EditPageOperation::ReplaceText {
+                    vec![EditPageOperation::ReplaceText {
                         old_text: "".to_string(),
                         new_text: "updated".to_string(),
                         occurrence: None,
-                    },
+                    }],
                 ),
             )
             .expect_err("empty old_text must fail");
@@ -1258,11 +1263,11 @@
                 .instance_id()
                 .expect("instance_id missing")
                 .to_string(),
-            EditPageOperation::ReplaceText {
+            vec![EditPageOperation::ReplaceText {
                 old_text: "alpha".to_string(),
                 new_text: "gamma".to_string(),
                 occurrence: Some(EditPageReplaceTextOccurrence::All),
-            },
+            }],
         );
 
         let result = service
@@ -1326,12 +1331,12 @@
                         .instance_id()
                         .expect("instance_id missing")
                         .to_string(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ById("s-001".to_string()),
                         title: Some("Renamed root".to_string()),
                         content: "updated root body".to_string(),
                         include_subsection: Some(false),
-                    },
+                    }],
                 ),
             )
             .expect("edit page should succeed");
@@ -1367,12 +1372,12 @@
                         .instance_id()
                         .expect("instance_id missing")
                         .to_string(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ById("s-001".to_string()),
                         title: None,
                         content: "updated root body".to_string(),
                         include_subsection: Some(false),
-                    },
+                    }],
                 ),
             )
             .expect("edit page should succeed");
@@ -1408,12 +1413,12 @@
                         .instance_id()
                         .expect("instance_id missing")
                         .to_string(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ById("s-001".to_string()),
                         title: None,
                         content: "updated root body".to_string(),
                         include_subsection: Some(true),
-                    },
+                    }],
                 ),
             )
             .expect("edit page should succeed");
@@ -1472,12 +1477,12 @@
                         .instance_id()
                         .expect("stale instance_id missing")
                         .to_string(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ById("s-001".to_string()),
                         title: None,
                         content: "# Root\n\ninvalid".to_string(),
                         include_subsection: Some(true),
-                    },
+                    }],
                 ),
             )
             .expect_err("stale revision should fail before content validation");
@@ -1491,12 +1496,12 @@
                     "/mcp/edit-replace-priority".to_string(),
                     2,
                     "instance-mismatch".to_string(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ById("s-001".to_string()),
                         title: None,
                         content: "# Root\n\ninvalid".to_string(),
                         include_subsection: Some(true),
-                    },
+                    }],
                 ),
             )
             .expect_err("instance_id mismatch should fail before content validation");
@@ -1549,12 +1554,12 @@
                     "/mcp/edit-replace-selector-priority".to_string(),
                     1,
                     instance_id.clone(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ById("s-999".to_string()),
                         title: None,
                         content: "# Missing\n\ninvalid".to_string(),
                         include_subsection: Some(true),
-                    },
+                    }],
                 ),
             )
             .expect_err("missing section should fail before content validation");
@@ -1568,12 +1573,12 @@
                     "/mcp/edit-replace-selector-priority".to_string(),
                     1,
                     instance_id.clone(),
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ByTitle("   ".to_string()),
                         title: None,
                         content: "# Empty\n\ninvalid".to_string(),
                         include_subsection: Some(true),
-                    },
+                    }],
                 ),
             )
             .expect_err("empty title selector should fail before content validation");
@@ -1587,12 +1592,12 @@
                     "/mcp/edit-replace-selector-priority".to_string(),
                     1,
                     instance_id,
-                    EditPageOperation::ReplaceSection {
+                    vec![EditPageOperation::ReplaceSection {
                         section: SectionSelector::ByTitle("Child".to_string()),
                         title: None,
                         content: "## Child\n\ninvalid".to_string(),
                         include_subsection: Some(true),
-                    },
+                    }],
                 ),
             )
             .expect_err("ambiguous title should fail before content validation");
@@ -1749,7 +1754,8 @@
                 "/allowed/assets",
                 "private-name.bin",
                 "application/octet-stream",
-                "cHJpdmF0ZQ==",
+                None,
+                Some("cHJpdmF0ZQ=="),
             )
             .expect("non-path asset fields must not deny upload");
         let asset_id = AssetId::from_string(upload.asset().asset_id())
@@ -1834,7 +1840,8 @@
                 "/allowed/assets",
                 "missing.bin",
                 "application/octet-stream",
-                "private:not-base64",
+                None,
+                Some("private:not-base64"),
             )
             .expect_err("scope must be checked before upload work");
         let delete_scope_error = service
@@ -1874,7 +1881,8 @@
                 "/outside/assets",
                 "missing.bin",
                 "application/octet-stream",
-                "private:not-base64",
+                None,
+                Some("private:not-base64"),
             )
             .expect_err("prefix must be checked before upload work");
         let delete_prefix_error = service
@@ -1910,7 +1918,8 @@
                 "/missing/assets",
                 "missing.bin",
                 "application/octet-stream",
-                "private:not-base64",
+                None,
+                Some("private:not-base64"),
             )
             .expect_err("page must resolve before upload payload");
         let delete_page_error = service
@@ -1986,7 +1995,8 @@
                 "/mcp/assets",
                 "new.bin",
                 "application/octet-stream",
-                "bmV3",
+                None,
+                Some("bmV3"),
             )
             .expect_err("locked page upload must fail");
         let delete_error = service
@@ -2083,7 +2093,8 @@
                 "/mcp/assets",
                 "scope.bin",
                 "application/octet-stream",
-                "c2NvcGU=",
+                None,
+                Some("c2NvcGU="),
             )
             .expect_err("scope denied upload must fail");
         let delete_scope_error = service
@@ -2122,7 +2133,8 @@
                 "/mcp/assets",
                 "prefix.bin",
                 "application/octet-stream",
-                "cHJlZml4",
+                None,
+                Some("cHJlZml4"),
             )
             .expect_err("prefix denied upload must fail");
         let delete_prefix_error = service
@@ -2599,7 +2611,8 @@
                 "/mcp/./assets",
                 "image.png",
                 "image/png",
-                "aW1hZ2U=",
+                None,
+                Some("aW1hZ2U="),
             )
             .expect("upload page asset failed");
         let asset_id = AssetId::from_string(result.asset().asset_id())
@@ -2778,7 +2791,8 @@
                 "/mcp/assets",
                 "image.png",
                 "image/png",
-                "bmV3",
+                None,
+                Some("bmV3"),
             )
             .expect_err("active same-name asset must conflict");
 
@@ -2798,7 +2812,8 @@
                 "/mcp/assets",
                 "image.png",
                 "image/png",
-                "bmV3",
+                None,
+                Some("bmV3"),
             )
             .expect("recreate same-name asset failed");
         let new_asset_id = AssetId::from_string(result.asset().asset_id())

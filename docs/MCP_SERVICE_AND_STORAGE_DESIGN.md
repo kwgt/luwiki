@@ -53,6 +53,24 @@ prompts / resourcesの内部結果型は既存の`src/mcp/model.rs`に置く。
 外部から見える path ベース要求を、既存の `DatabaseManager` が持つ
 page_id ベース操作や prefix ベース操作へ安全に変換する流れを定義する。
 
+### 保存後の全文索引同期
+
+公開MCPサーバはAppStateと同じFtsIndexConfigをMcpServiceへ渡す。
+create_page/update_page/edit_page/append_page/rename_pageのDB保存が成功した後、
+MutationOutcomeのaffected_page_idsに対してfts::update_pages_indexを実行する。
+部分編集は全操作後の一保存だけを同期し、appendのamendは同じrevisionを置換する。
+再帰renameは親子の影響IDすべてを同期し、current path/latest revisionを揃える。
+
+AppStateのread lockを維持し、FTS設定のclone間で共有する更新lockによって
+正本の文書構築から索引commitまでを直列化する。追記のロック待機中はFTS lockを保持せず、
+既存のロック解除や競合待機を妨げない。REST/CLIの既存FTS更新も同じ設定の排他を使用する。
+認可拒否・CAS競合・空追記などの保存前失敗はFTSへ到達せず、変更なしrenameも同期しない。
+索引失敗は保存後のinternal_errorとして固定文
+`page was saved but full-text index update failed`を返し、正本を巻き戻さない。
+本文・生例外・内部索引pathを応答/ログへ含めず、既存のエラー監査経路で記録する。
+DB単体のサービス利用で索引設定が未接続の場合はFTSを更新しない。
+既存DBの未索引ページを無条件に走査・再構築する処理は加えない。
+
 ### 2.1 基本方針
 
 サービス層は、MCP 公開層から受け取った path ベース入力に対し、
@@ -94,7 +112,7 @@ DB 層は従来どおり page_id や prefix を受け取る低水準 API とし�
 path prefix 制約は正規化済み入力 `path` に対して判定する。
 `resolve_page_by_path` で page_id を解決し、応答と監査ログへ渡す path は
 解決後の正規化済み page path とする。
-page_id 解決後、upload / delete では `ensure_page_not_locked()` を呼ぶ。
+uploadでは本文検証後のcreate_asset_authorizedのwrite txn内で最新認可・状態・lockを確認する。deleteも既存の認可付き保存入口を利用する。
 参照系 4 tool はページロックの影響を受けないため、lock 判定を行わない。
 
 `resolve_page_by_path` は、
@@ -916,19 +934,22 @@ protocol `internal_error` とする。
 
 処理順序は以下とする。
 
-1. path 検証・正規化
-2. update scope、path prefix 制約、ReadOnly 拒否を判定
-3. page_id を解決
-4. `ensure_page_not_locked()` でロック状態を確認する
-5. `file_name` と `mime_type` を検証する
-6. `data_base64` の decode 前 byte 長、decode 成否、decode 後 raw bytes 10MiB 上限を検証する
-7. `db.create_asset(page_id, file_name, mime_type, auth.user_id(), data)` 相当を呼び出す
-8. 作成後に `db.get_asset_info_by_id(asset_id)` で metadata を取得する
-9. metadata と summary を応答へ変換する
+1. 公開Parametersが本文の存在時Stringを復号する。null/型不正は固定エラーのinvalid params。handlerの監査Requestはpath/file_name/mime_typeだけを保持し本文を複製しない
+2. path正規化、update scope/ReadOnly、prefix、ページ解決（不存在/削除/draft）
+3. file_name、MIME空、text/data_base64のちょうど一方指定を順に検証
+4. textはMIME詳細検証後、UTF-8 byte長10MiB以内を確認しtext.as_bytes()を借用する。空textを許可し、変換しない
+5. Base64は既存の空/encoded長13,981,016/decode/raw10MiBの順に検証し、所有Vecを得る
+6. create_asset_authorizedへbytesを渡す。write txn内で最新ownerのprefix、ページ状態、lock、user、同名を再確認する
+7. 排他的新file作成・書込・DB登録・commitを行い、txnが返すAssetRecordから公開metadataを生成する。別txnで再取得しない
+8. metadataと固定summary asset uploadedを返し、既存handlerで監査する
 
-同名未削除アセットがある場合は `conflict` とする。
-削除済み同名アセットがある場合は、DB の `create_asset()` 挙動に従い新規 upload を許可する。
-upload raw bytes 10MiB 超過と decode 前 `data_base64` byte 長超過は `invalid_input` とする。
+同名未削除はconflict、削除済み同名は新AssetIDでuploadを許可する。入力不正はtxnのlock確認より先に失敗する。
+
+text用MIMEはmime_guessのmime再エクスポートで解析し、前後空白・ASCII制御文字・構文不正を拒否する。具体的なtext型、wildcardなし、charset未指定または単一UTF-8を要求する。大小文字とquoted charsetは解析後に比較し、保存時は元表記を保持する。Base64側の非空MIME検証は変えない。
+
+asset_input_bytesはCow<[u8]>でtextを借用、Base64を所有する。文字数のmaxLengthを容量制約に代用しない。本文排他はserviceでも検証し、schema依存にしない。
+
+NewAssetFile guardと既存エラー写像を再利用する。書込・登録・commit失敗時は新fileを回収し未commit txnをrollbackする。回収失敗ではFS残存の可能性があり、未保存・副作用なしを無条件に保証しない。commit後失敗は保存済みの可能性として扱う。
 
 #### 2.3.14 `delete_page_asset`
 
@@ -2023,7 +2044,7 @@ create、update、append、rename を個別実装として散在させず、
   - 本文更新
   - 追記文字列
   - rename 先 path
-  - upload 対象の `file_name`、`mime_type`、`data_base64`
+  - upload 対象の `file_name`、`mime_type`、排他的な`text`/`data_base64`
   - delete 対象の `file_name`
 - `options`
   - amend 可否
@@ -2073,7 +2094,7 @@ create と update / append / rename のように
 - 対象は「既存の現在 path」
 - `page_id` 解決が必要
 - `revision` と `instance_id` を受け取る
-- 単一の編集操作を受け取り、最新本文へ部分編集を適用する
+- 非空の編集操作配列を受け取り、初期本文へ結び付けた対象へ配列順に編集を適用する
 - サービス層で最新 revision および最新 instance_id との一致確認を行う
 - revision / instance_id 整合性確認が成功した後に、operation の selector 解決と内容検証を行う
 - `replace_section` では、selector 解決後に対象見出しレベルを確定し、そのレベルに基づいて `content` の見出し行制約を検証する
@@ -2085,7 +2106,15 @@ create と update / append / rename のように
 - `include_subsection == false` では、`content` 内の Markdown 見出し行を拒否する
 - `include_subsection == true` では、対象セクション配下のサブセクションを含めて置換する
 - `include_subsection == true` では、対象セクションより深いレベルの見出し行だけを許可し、同階層以上の見出し行を拒否する
-- 本文編集後の保存自体は update 系と同じ保存経路へ橋渡しできるようにする
+- 初期のID・titleから要求内identityへ結び付け、編集差分の半開byte範囲で見出し位置を更新する。挿入時の先頭境界は右、末尾境界は左へ対応付ける
+- 各操作時点のMarkdownを再解析し、元見出しの範囲・レベルとの対応を確認する。節本文と子節の範囲は現在の解析結果から求める
+- `replace_section.title` は元対象を保持する。削除対象はDeleted、任意の見出し書換えや解析文脈消失はUnresolvableとし、後続参照でそれぞれ `not_found` / `invalid_input` を返す。終端状態を別節へ再結合しない
+- 初期selectorの解決エラーはその操作の実行順まで遅延する。新設節・変更後titleは初期selectorで参照しない
+- `replace_text` は各操作開始時の一致範囲を後方から適用し、同一文字列置換では対象追跡を保持する
+- 全操作成功後の最終本文を update 系保存経路へ一度渡す。途中失敗は中間本文を破棄する。本文が元に戻る場合も既存どおり新revisionを保存する
+- 保存transactionで認可・状態・期待revision/instance_id・lock・最終front matterとprimitive索引を既存順で確認する
+- commit後の候補同期失敗は既存の `internal_error` を返す。正本が保存済みの場合があるため、クライアントは再取得して確認する
+- 成功summaryは `page edited (N operations)`、操作適用失敗messageは1始まりの `operation N failed: ...` とする。既存codeと一要求のUpdate監査を維持する
 
 #### 3.4.4 append
 
@@ -2108,7 +2137,7 @@ create と update / append / rename のように
 
 - 対象は「既存の現在 path に紐付く新規アセット」
 - `page_id` 解決が必要
-- `file_name`、`mime_type`、`data_base64` を追加 payload として受け取る
+- `file_name`、`mime_type`、排他的な`text`/`data_base64`を追加payloadとして受け取る
 - `revision` / `instance_id` による内容整合性確認は行わない
 - lock token 入力を受け付けず、ロック中ページは `conflict` とする
 - 実行結果として asset metadata と summary を得る
@@ -2514,3 +2543,28 @@ resource候補、URI逆引き索引、URI索引構築状態だけを再構成す
 M4初期版では再構成、保存後同期、rename、削除、importから
 resource集合変更通知を送信しない。
 クライアントは必要に応じて`resources/list`を再取得する。
+
+## authority出力時展開の接続
+
+mcp/authority_macro.rsの純粋helperで正式文字列の一回置換を行う。
+奇数個の直前バックスラッシュは抑止し、原文と生成値を再処理しない。
+resourceは最新source/path/ACL検証後のページ由来bodyだけ、promptは引数検証後の
+元system/本文に適用し、引数挿入はその後に行う。code内も対象。
+保存source・revision・metadata・索引・rawページ取得は変えない。
+フロントも同じfixtureの純粋helperを既存描画処理の先頭で使用する。
+
+## ページ状態snapshotと比較token
+
+- database/manager/page_state.rsは認証済みAuthContextのtoken_id・actor_idを用い、
+  token-ID索引・token・ユーザ・path索引・page index・latest sourceを同じread txnで取得する。
+- 現在のtokenの存在・主体・失効・期限、ユーザ存在、read scope、入力pathのprefixを先に確認。
+  名前で主体を再解決せず、再確認でスライディングTTLや保存値を変更しない。
+- 正規化pathの割当不在又はdraftは取得不能、索引・source欠落等は内部不整合。
+  deleted indexへのcurrent割当などの矛盾を不存在へ丸めない。
+- service/page_state.rsで、長さをu64 big-endianで前置したdomainと各入力をSHA-256へ渡す。
+  識別部はpath・内部ID、状態部はpath・内部ID・revision・instance_idを用いる。
+  domainはidentityとsourceで分離し、source識別子欠落時は別kindの本文bytesを使う。
+- 比較値はv1と二つの小文字hex digest。復号可能な内部IDや本文は公開しない。
+  これは同一pathの置き換わりとamendを照合する値であり、権限や取得履歴の証明ではない。
+- 正本commit後のsnapshotを観測し、候補／FTS同期の成否と分ける。
+  取得不能になった場合はunavailableを返し、削除・renameの個別履歴を追跡しない。

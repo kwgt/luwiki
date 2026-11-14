@@ -61,3 +61,22 @@ test('usePageSearch は front_matter を他対象と独立して保持できる'
   assert.equal(targetCode.value, true);
   assert.equal(targetFrontMatter.value, true);
 });
+
+test('path filterは表示pathのliteral部分一致で元配列を保持する', () => {
+  const state = usePageSearch();
+  const row = (path: string, revision = 1, deleted = false) => ({
+    page_id: 'id', revision, score: 1, path, deleted, text: 'snippet',
+  });
+  state.results.value = [
+    row('/docs'), row('/docs/a', 1), row('/docs/a', 2, true),
+    row('/docs-old'), row('/Docs'), row('/日本語/a.*'),
+  ];
+  for (const [filter, count] of [['', 6], ['  /docs  ', 4], ['/docs/', 2],
+    ['/Docs', 1], ['日本語', 1], ['.*', 1], ['削除済み', 0]] as const) {
+    state.pathFilter.value = filter;
+    assert.equal(state.filteredResults.value.length, count, filter);
+    assert.equal(state.results.value.length, 6);
+  }
+  state.pathFilter.value = '';
+  assert.equal(state.filteredResults.value.length, 6);
+});

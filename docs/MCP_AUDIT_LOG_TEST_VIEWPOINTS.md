@@ -444,3 +444,23 @@ MCP設計書群から参照される
 2026-10-13、MS4実装に合わせoperation/共通起動/停止失敗の観点を整合した。
 本書は観点書であり、個々の実行結果はMS4作業記録の証拠を参照する。
 Windows実正常停止とMS5全面受入れを実施済みとは扱わない。
+
+## 状態toolと非同期終了の追加観点
+
+- state取得・正常timeout・変更検知の監査は公開要求ごと1件。内部poll回数と独立する。
+- scope／prefix／失効拒否、cancel・future drop・shutdownの結果分類と固定summaryを確認する。
+- 不変actor_idを保持し、名前変更・ユーザ削除でも別主体へ再解決しない。
+- 本文・state_token・資格情報を記録せず、sink失敗で成功・業務失敗の結果を変更しない。
+- 停止gate後の新規受付拒否、session close後のlease数0、終了監査完了後の最終flushを確認する。
+  cancelと通常終了が競合しても二重記録せず、HTTP切断時の実際の資源終了条件を記録する。
+
+## ブラウザWebSocketの追加観点
+
+- GET /wsを接続ライフサイクルごとに一回、ws.page.checkを公開確認要求ごとに一回記録する。
+  page.state／page.changed、標準Ping/Pong、内部再照合で記録件数を増幅しない。
+- Origin拒否、read scope不足、path prefix拒否、誤check payloadと未知typeについて、
+  固定resultと接続元addressを確認する。認証失敗は従来のHTTPログに限定する。
+- Basicのpassword・資格識別値、Bearer生値、state_token、本文、生payloadを記録しない。
+  正常切断・送信失敗・取消・正常停止の競合でも重複や監査欠落を起こさない。
+- MCP待機とWS接続が共存する正常停止で、gate閉鎖→close／取消→終了監査→lease解放→
+  要求数0→最終flushを確認する。MCP無効でも共通監査sinkを利用する。

@@ -349,3 +349,30 @@ root以外末尾/、連続/、全角を含む空白/control拒否、dot解決・
 
 詳細ケースと全32アクション対応の正本は[REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md](REST_API_AUTHORIZATION_TEST_VIEWPOINTS.md)。
 2026-10-11時点で検証計画のみ反映し、テストの実行成功を示すものではない。
+
+## 状態取得・待機の追加観点
+
+- 同一read snapshotでtokenの存在・不変主体・失効・期限・ユーザ存在と現在scope／prefix、
+  path割当・index・sourceを照合する。入口の古いscope／prefixや名前解決を信用しない。
+- ReadOnlyでもreadは利用でき、readを暗黙包含しないupdate等だけでは拒否する。
+- 待機中の失効・ユーザ削除・prefix変更を次の照合で拒否し、正常変更へ変換しない。
+- rename先が権限外の場合も元pathのunavailableだけを返す。存在確認より前にprefixを認可する。
+- 再確認でtoken TTLを延長せず、旧instance_idなしの比較もreadで保存値を書き換えない。
+- 実行結果はOP1-MS2の検証記録へ対応付け、本観点の追加自体を実測成功とは扱わない。
+
+## ブラウザWebSocketと共用部の追加観点
+
+- 共通/wsはMCP sessionやMCP有効化に依存しない。Basicの不変actorと資格識別値を
+  同じsnapshotで確定し、passwordを接続へ保持しない。Origin欠落・null・他originを拒否する。
+- Bearerはhandshakeのreadに加え、送信前に現在token・actor・期限・scope・prefixを再確認する。
+  Basicの資格変更・NoBasicAuth・同名別主体、Bearer失効・期限切れを変更通知へ変換しない。
+- 入力pathと表示中IDのcurrent／last_deleted pathを認可する。MCP状態toolとは異なり、
+  ブラウザでは移動した表示中IDのpathが権限外ならforbiddenで終了し、移動先を返さない。
+- 先祖探索では最初の通常候補が非認可なら探索を終え、より上の候補へ迂回しない。
+  親が不在・draft、root終端・候補不在も確認する。状態の内部不整合を削除扱いにしない。
+- ReadOnly・MCP無効で購読でき、sourceの200／304の比較値が実際の本文と対応することを確認する。
+  共用token生成・DB commit通知の変更はOP1の認証・非移行fallback・停止にも回帰確認する。
+
+## 運用指示取得の認可
+
+`agent-skill` の標準読取と `get_agent_instructions` の両方で、独立した `append` scope は拒否し、`read` または包括 `write` は許可する。狭いページ prefix および read 付き ReadOnly で取得できる。Bearer 認証失敗、標準経路の JSON-RPC エラー、代替経路の `isError` を経路ごとに確認する。

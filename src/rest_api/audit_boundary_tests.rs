@@ -76,6 +76,7 @@ pub(super) fn fixture() -> (TempDir, SharedState, SharedSink) {
         db, FrontendConfig::default(),
         FtsIndexConfig::new(dir.path().join("fts")),
         None, "test".into(), None, 1024, Some(sink.clone()),
+        "local.luwiki".to_string(),
     );
     (dir, web::Data::new(Arc::new(RwLock::new(state))), sink)
 }

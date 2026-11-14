@@ -241,6 +241,13 @@ pub async fn get(
      * FTSの更新
      */
     let body = page_source.source();
+    let state_token = crate::page_state::state_token(
+        page.index.authorization_path()
+            .map_err(|_| actix_web::error::ErrorInternalServerError(
+                "page state lookup failed",
+            ))?.as_str(), &page_id,
+        page.revision, &page_source,
+    );
 
     if let Some(instance_id) = page_source.instance_id() {
         let etag = build_etag(instance_id.to_string());
@@ -251,6 +258,7 @@ pub async fn get(
                     CACHE_CONTROL_REVALIDATE_PRIVATE,
                 ))
                 .insert_header((header::ETAG, etag))
+                .insert_header(("X-LuWiki-Page-State", state_token))
                 .finish());
         }
 
@@ -261,12 +269,14 @@ pub async fn get(
                 CACHE_CONTROL_REVALIDATE_PRIVATE,
             ))
             .insert_header((header::ETAG, etag))
+            .insert_header(("X-LuWiki-Page-State", state_token))
             .body(body));
     }
 
     Ok(HttpResponse::Ok()
         .content_type("text/markdown")
         .insert_header((header::CACHE_CONTROL, CACHE_CONTROL_NO_STORE))
+        .insert_header(("X-LuWiki-Page-State", state_token))
         .body(body))
 }
 

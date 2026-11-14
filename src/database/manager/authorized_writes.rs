@@ -264,7 +264,7 @@ impl DatabaseManager {
         .map_err(|err| err.context(attempted))?;
         let mut outcome =
             mutation_outcome_in_txn(&txn, page_id, source.as_str(), affected)?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         outcome.no_op = no_op;
@@ -321,7 +321,7 @@ impl DatabaseManager {
             &prepared.source_path,
             vec![page_id.clone()],
         )?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone())
                 .context(RevisionAccessTarget { revision }))?;
         outcome.committed = true;
@@ -401,7 +401,7 @@ impl DatabaseManager {
             &prepared.source_path,
             affected,
         )?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         let mut committed = outcome.clone();

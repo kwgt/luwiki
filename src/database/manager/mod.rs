@@ -41,6 +41,8 @@ pub(crate) mod mutation;
 #[cfg(test)]
 mod mutation_tests;
 pub(crate) mod pages_read;
+pub(crate) mod page_state;
+pub(crate) mod page_events;
 pub(crate) mod pages_write;
 pub(crate) mod prompt_candidates;
 pub(crate) mod resource_candidates;
@@ -53,6 +55,9 @@ pub(crate) mod users;
 pub(crate) struct DatabaseManager {
     /// データベースオブジェクト
     db: Database,
+
+    /// commit確定後のページ・認可再照合を起こす印
+    page_changes: tokio::sync::watch::Sender<u64>,
 
     /// アセットデータ格納ディレクトリへのパス
     #[allow(dead_code)]
@@ -101,6 +106,7 @@ impl DatabaseManager {
 
         Ok(Self {
             db,
+            page_changes: tokio::sync::watch::channel(0).0,
             asset_path: asset_path.as_ref().into(),
             #[cfg(test)]
             fail_asset_upload_for_test: std::sync::atomic::AtomicU8::new(0),

@@ -330,7 +330,7 @@ impl DatabaseManager {
             }
         }
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         let page_ids: Vec<PageId> =
             bundle.pages.iter().map(|page| page.id.clone()).collect();
         self.sync_resource_candidates_for_page_ids(&page_ids)?;
@@ -423,7 +423,7 @@ impl DatabaseManager {
             remove_locks_by_page_ids(&mut lock_table, lock_page_ids)?;
         }
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         let page_ids: Vec<PageId> = exported_pages
             .iter()

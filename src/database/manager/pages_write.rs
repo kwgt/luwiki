@@ -188,7 +188,7 @@ impl DatabaseManager {
         let page_id = self.create_page_in_txn(
             &txn, path.as_ref(), user_name.as_ref(), source,
         )?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         self.sync_page_candidates_after_commit(&page_id, None)?;
         Ok(page_id)
     }
@@ -216,7 +216,7 @@ impl DatabaseManager {
         let mut outcome = mutation_outcome_in_txn(
             &txn, &page_id, path, vec![page_id.clone()],
         )?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         self.sync_page_candidates_after_commit(&page_id, Some(&outcome))?;
@@ -324,7 +324,7 @@ impl DatabaseManager {
         let result = self.create_draft_in_txn(
             &txn, path.as_ref(), user_name.as_ref(),
         )?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(result)
     }
 
@@ -349,7 +349,7 @@ impl DatabaseManager {
         let mut outcome = mutation_outcome_in_txn(
             &txn, &value.0, path, vec![value.0.clone()],
         )?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         Ok(AuthorizedMutation { value, outcome })
@@ -442,7 +442,7 @@ impl DatabaseManager {
     ) -> Result<()> {
         let txn = self.db.begin_write()?;
         self.put_page_in_txn(&txn, page_id, user_name, source, amend)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         self.sync_page_candidates_after_commit(page_id, None)
     }
 
@@ -494,7 +494,7 @@ impl DatabaseManager {
             index.set_lock_token(None);
             indexes.insert(page_id.clone(), index)?;
         }
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         self.finish_mutation_assets(&prepared.asset_cleanup, &outcome)?;
@@ -675,7 +675,7 @@ impl DatabaseManager {
     ) -> Result<AppendPageResult> {
         let txn = self.db.begin_write()?;
         let result = self.append_page_in_txn(&txn, request)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         self.sync_page_candidates_after_commit(&request.page_id, None)?;
         Ok(result)
     }
@@ -710,7 +710,7 @@ impl DatabaseManager {
             .map_err(|err| err.context(attempted))?;
         let mut outcome = mutation_outcome_in_txn(&txn, &request.page_id,
             &prepared.source_path, vec![request.page_id.clone()])?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         self.finish_mutation_assets(&prepared.asset_cleanup, &outcome)?;
@@ -861,7 +861,7 @@ impl DatabaseManager {
         let (target_ids, asset_ids) = self.delete_recursive_in_txn(
             &txn, page_id, hard_delete,
         )?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         /*
          * アセットファイルの削除
          */
@@ -1036,7 +1036,7 @@ impl DatabaseManager {
     ) -> Result<()> {
         let txn = self.db.begin_write()?;
         self.rollback_page_in_txn(&txn, page_id, rollback_to)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         self.sync_page_candidates_after_commit(page_id, None)?;
         Ok(())
     }
@@ -1177,7 +1177,7 @@ impl DatabaseManager {
     ) -> Result<()> {
         let txn = self.db.begin_write()?;
         self.compact_page_in_txn(&txn, page_id, keep_from)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(())
     }
 
@@ -1338,7 +1338,7 @@ impl DatabaseManager {
         self.rename_recursive_in_txn(
             &txn, page_id, rename_to, reuse_basename,
         )?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(())
     }
 
@@ -1574,7 +1574,7 @@ impl DatabaseManager {
         /*
          * コミット
          */
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         Ok(())
     }
@@ -1604,7 +1604,7 @@ impl DatabaseManager {
         let asset_ids = self.delete_page_with_token_in_txn(
             &txn, page_id, user_id, token,
         )?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         self.remove_template_candidate_by_page_id(page_id)?;
         for asset_id in asset_ids {
             let _ = fs::remove_file(self.asset_file_path(&asset_id));
@@ -1765,7 +1765,7 @@ impl DatabaseManager {
 
         asset_ids = delete_draft_in_txn(&txn, page_id)?;
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         for asset_id in asset_ids {
             let asset_path = self.asset_file_path(&asset_id);
@@ -1845,7 +1845,7 @@ impl DatabaseManager {
         let txn = self.db.begin_write()?;
         self.restore_page_in_txn(&txn, page_id, restore_to, with_assets,
             reuse_basename)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(())
     }
 
@@ -2039,7 +2039,7 @@ impl DatabaseManager {
         let txn = self.db.begin_write()?;
         self.restore_recursive_in_txn(&txn, page_id, restore_to, with_assets,
             reuse_basename)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(())
     }
 
@@ -2297,7 +2297,7 @@ impl DatabaseManager {
         /*
          * コミット
          */
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         self.remove_template_candidate_by_page_id(page_id)?;
         self.remove_prompt_candidate_by_page_id(page_id)?;
@@ -2416,7 +2416,7 @@ impl DatabaseManager {
          */
         let txn = self.db.begin_write()?;
         self.rename_page_in_txn(&txn, &path, &dst_path, None)?;
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(())
     }
 

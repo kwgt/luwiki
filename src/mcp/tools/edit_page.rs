@@ -50,7 +50,7 @@ pub(crate) async fn execute(
                 args.path,
                 args.revision,
                 args.instance_id,
-                args.operation.into(),
+                args.operation.into_iter().map(Into::into).collect(),
             ),
         ))
     })?;

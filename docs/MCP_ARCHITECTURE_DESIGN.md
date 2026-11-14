@@ -371,3 +371,13 @@ resource ACLを適用する。
 - rmcp型への変換をserver公開層に限定する
 - tools標準method、prompts標準method、resources標準method、LuWiki tool callのroutingを混在させない
 - resource URI、field、cursor、contents、protocol errorの外部契約は`MCP_RESOURCE_SPECS.md`を正本とする
+
+## 7. ページ状態取得・変更待ち
+
+`get_page_state`／`wait_page_change`は専用のmodel・service・handler子モジュールで扱う。
+公開契約はMCP_TOOL_SPECS.md 2.17〜2.18を正とする。DBは現在の認証情報とページ状態を
+同じread snapshotで確定し、serviceが内部IDを不透明な比較値へ変換する。
+handlerは短いblocking取得と非同期sleepを分離し、rmcp contextの取消と要求単位監査を扱う。
+既存RESTを内部呼出しせず、既存get_page等のエンベロープ・入力schemaを変更しない。
+状態モデルとsnapshot取得はブラウザの状態判定にも再利用可能だが、MCPのBearer入口を
+ブラウザ認証やrename先・先祖探索へそのまま流用しない。

@@ -76,6 +76,7 @@ async fn audit_startup_mcp_modes_share_prepared_sink_and_jsonl() {
             db, FrontendConfig::default(),
             FtsIndexConfig::new(dir.path().join("fts")),
             None, "fixture".into(), None, 1024, Some(sink.clone()),
+            "local.luwiki".to_string(),
         ))));
         assert!(Arc::ptr_eq(&sink,
             &state.read().unwrap().audit_sink().unwrap()));
@@ -299,6 +300,7 @@ fn audit_startup_run_missing_config_fails_for_both_mcp_modes() {
             std::path::PathBuf::new(), false, None, None,
             enabled.then(|| McpEndpoint::new("/mcp", "fixture".into())),
             None, None,
+            "local.luwiki".to_string(),
         );
         assert_eq!(result.unwrap_err().to_string(), "audit config missing");
     }

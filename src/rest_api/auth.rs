@@ -406,24 +406,16 @@ async fn validate_basic_auth(
             return Err((ErrorInternalServerError("state lock failed"), req));
         }
     };
-    let ok = match state.db().verify_user(&username, &password) {
-        Ok(ok) => ok,
+    let user_info = match state.db().authenticate_basic_user(
+        &username, &password,
+    ) {
+        Ok(Some(user)) => user,
+        Ok(None) => return Err((AuthErrorResponse::unauthorized().into(), req)),
         Err(_) => return Err((ErrorInternalServerError("auth failed"), req)),
     };
-
-    if !ok {
-        return Err((AuthErrorResponse::unauthorized().into(), req));
-    }
-
-    let user_info = match state.db().get_user_info_by_name(&username) {
-        Ok(Some(user_info)) => user_info,
-        Ok(None) => {
-            return Err((ErrorInternalServerError("user not found"), req));
-        }
-        Err(_) => {
-            return Err((ErrorInternalServerError("auth failed"), req));
-        }
-    };
+    req.extensions_mut().insert(crate::auth::BasicCredential(
+        user_info.credential_tag(),
+    ));
 
     req.extensions_mut().insert(AuthContext::new_with_actor(
         AuthUser::new(username),

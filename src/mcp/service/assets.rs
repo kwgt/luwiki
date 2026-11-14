@@ -8,6 +8,8 @@
 //! MCPサービスのassets処理を定義するモジュール
 //!
 
+use std::borrow::Cow;
+
 use base64::Engine;
 
 use super::{
@@ -86,6 +88,104 @@ impl McpService {
             ));
         }
 
+        Ok(())
+    }
+
+    ///
+    /// 排他入力を検証し、保存用bytesを取得する
+    ///
+    /// # 概要
+    /// textはUTF-8の借用bytes、Base64は復号した所有bytesを返す。
+    ///
+    /// # 引数
+    /// * `mime_type` - 保存するMIME表記
+    /// * `text` - 直接入力本文
+    /// * `data_base64` - Base64入力本文
+    ///
+    /// # 戻り値
+    /// 容量・MIME検証済みbytesまたは固定エラー。
+    ///
+    pub(super) fn asset_input_bytes<'a>(
+        &self,
+        mime_type: &str,
+        text: Option<&'a str>,
+        data_base64: Option<&str>,
+    ) -> Result<Cow<'a, [u8]>, McpError> {
+        /*
+         * 本文形式を選択し、形式別に検証する
+         */
+        match (text, data_base64) {
+            (Some(text), None) => {
+                self.validate_text_asset_mime(mime_type)?;
+                if text.len() as u64 > MAX_MCP_ASSET_DATA_SIZE {
+                    return Err(McpError::new(
+                        McpErrorCode::InvalidInput,
+                        "asset data too large",
+                    ));
+                }
+                Ok(Cow::Borrowed(text.as_bytes()))
+            }
+            (None, Some(encoded)) => {
+                self.decode_asset_data_base64(encoded).map(Cow::Owned)
+            }
+            _ => Err(McpError::new(
+                McpErrorCode::InvalidInput,
+                "exactly one of text or data_base64 is required",
+            )),
+        }
+    }
+
+    ///
+    /// 直接入力用のtext MIMEとUTF-8 charsetを検証する
+    ///
+    /// # 概要
+    /// 表記を正規化せず解析し、保存bytesとの文字コード矛盾を拒否する。
+    ///
+    /// # 引数
+    /// * `value` - 入力MIME表記
+    ///
+    /// # 戻り値
+    /// text型かつcharsetが未指定またはUTF-8なら成功。
+    ///
+    fn validate_text_asset_mime(&self, value: &str) -> Result<(), McpError> {
+        /*
+         * 前後空白・制御文字とMIME構文を検証する
+         */
+        let invalid = || McpError::new(
+            McpErrorCode::InvalidInput, "mime_type is invalid",
+        );
+        if value.trim() != value || value.bytes().any(|b| b.is_ascii_control()) {
+            return Err(invalid());
+        }
+        let mime: mime_guess::mime::Mime = value.parse()
+            .map_err(|_| invalid())?;
+
+        /*
+         * text型と単一のUTF-8 charsetを要求する
+         */
+        let mismatch = || McpError::new(
+            McpErrorCode::InvalidInput,
+            "text requires a text MIME type with UTF-8 charset",
+        );
+        if mime.type_() != mime_guess::mime::TEXT
+            || mime.subtype().as_str().contains('*')
+            || mime.suffix().is_some_and(|value| {
+                value.as_str().contains('*')
+            })
+        {
+            return Err(mismatch());
+        }
+        let mut charset_seen = false;
+        for (name, value) in mime.params() {
+            if name == mime_guess::mime::CHARSET {
+                if charset_seen
+                    || !value.as_str().eq_ignore_ascii_case("utf-8")
+                {
+                    return Err(mismatch());
+                }
+                charset_seen = true;
+            }
+        }
         Ok(())
     }
 
@@ -511,6 +611,7 @@ impl McpService {
     /// * `raw_path` - 対象ページ path
     /// * `file_name` - アセットファイル名
     /// * `mime_type` - MIME 種別
+    /// * `text` - UTF-8の直接入力本文
     /// * `data_base64` - base64 エンコード済みアセット本体
     ///
     /// # 戻り値
@@ -524,7 +625,8 @@ impl McpService {
         raw_path: &str,
         file_name: &str,
         mime_type: &str,
-        data_base64: &str,
+        text: Option<&str>,
+        data_base64: Option<&str>,
     ) -> Result<UploadPageAssetResult, McpError> {
         /*
          * 対象ページの認可とロック状態の確認
@@ -546,7 +648,7 @@ impl McpService {
          */
         self.validate_asset_file_name(file_name)?;
         self.validate_asset_mime_type(mime_type)?;
-        let data = self.decode_asset_data_base64(data_base64)?;
+        let data = self.asset_input_bytes(mime_type, text, data_base64)?;
 
         /*
          * アセットの作成と公開metadataの取得

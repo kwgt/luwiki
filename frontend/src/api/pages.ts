@@ -432,10 +432,17 @@ export async function createPage(
  * ページのMarkdownソースを取得する
  */
 export async function fetchPageSource(
+  pageId: string, revision?: number, noCache?: boolean,
+): Promise<string> {
+  return (await fetchPageSourceSnapshot(pageId, revision, noCache)).source;
+}
+
+/** 本文と同じsnapshotの比較値を受け取る。 */
+export async function fetchPageSourceSnapshot(
   pageId: string,
   revision?: number,
   noCache?: boolean,
-): Promise<string> {
+): Promise<{ source: string; stateToken: string }> {
   const headers = noCache
     ? {
       'Cache-Control': 'no-cache',
@@ -447,7 +454,7 @@ export async function fetchPageSource(
     headers,
     responseType: 'text',
   });
-  return res.data;
+  return { source: res.data, stateToken: String(res.headers['x-luwiki-page-state'] ?? '') };
 }
 
 /**

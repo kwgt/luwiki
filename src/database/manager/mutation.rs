@@ -371,7 +371,7 @@ impl DatabaseManager {
             &prepared.source_path,
             vec![page_id.clone()],
         )?;
-        txn.commit()
+        self.commit_page_change(txn)
             .map_err(|err| anyhow!(err).context(outcome.clone()))?;
         outcome.committed = true;
         outcome.cleanup_only = true;

@@ -11,6 +11,7 @@
 mod assets;
 mod audit;
 mod pages;
+pub(crate) mod page_state;
 mod prompts;
 mod resources;
 

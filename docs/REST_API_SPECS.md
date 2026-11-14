@@ -703,6 +703,7 @@ maxItems: 100
   | `Content-Type` | text/markdown
   | `Cache-Control` | `instance_id`が存在する場合は"private, max-age=3600, no-cache"、存在しない場合は"no-store"
   | `ETag` | `instance_id`が存在する場合は"{instance_id}"、存在しない場合は設定しない
+  | `X-LuWiki-Page-State` | 実際に返すsourceと同じsnapshotから生成した比較token。200／304で返す。旧instance_id欠落時は本文fallbackを用いる
 
 ボディには対象ページのMarkdownソースが返される。
 

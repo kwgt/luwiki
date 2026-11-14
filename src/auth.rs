@@ -50,6 +50,12 @@ pub(crate) struct AuthContext {
 }
 
 ///
+/// Basic認証した同じsnapshotの資格情報識別値
+///
+#[derive(Clone)]
+pub(crate) struct BasicCredential(pub(crate) String);
+
+///
 /// Bearer認証コアの成功結果
 ///
 #[derive(Clone, Debug)]

@@ -130,7 +130,7 @@ pub(in crate::database) const ROOT_PAGE_PATH: &str = "/";
 
 /// ルートページ雛形ソース
 pub(in crate::database) static DEFAULT_ROOT_SOURCE: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/default_root.md"));
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/default_root.md"));
 
 /// Sandboxページのパス
 pub(in crate::database) const SANDBOX_PAGE_PATH: &str = "/Sandbox";
@@ -139,7 +139,7 @@ pub(in crate::database) const SANDBOX_PAGE_PATH: &str = "/Sandbox";
 pub(in crate::database) static DEFAULT_SANDBOX_SOURCE: &str =
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/data/default_sandbox.md"
+        "/assets/default_sandbox.md"
     ));
 
 /// Sandboxサンプルコードのファイル名
@@ -152,14 +152,14 @@ pub(in crate::database) const SANDBOX_SAMPLE_CSV_FILE_NAME: &str = "table.csv";
 pub(in crate::database) static SANDBOX_SAMPLE_CODE_SOURCE: &str =
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/data/sandbox_sample.rs"
+        "/assets/sandbox_sample.rs"
     ));
 
 /// SandboxサンプルCSVのソース
 pub(in crate::database) static SANDBOX_SAMPLE_CSV_SOURCE: &str =
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/data/sandbox_table.csv"
+        "/assets/sandbox_table.csv"
     ));
 
 ///

@@ -352,6 +352,7 @@ mod tests {
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         ))
     }
 

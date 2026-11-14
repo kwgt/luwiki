@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="430" viewBox="0 0 760 430" role="img" aria-labelledby="title desc">
+  <title id="title">パスフィルタとコードコピーの配置</title>
+  <desc id="desc">検索結果カード内のフィルタと件数、コードフェンス内側右上の枠なしコピーアイコン</desc>
+  <style>text{font:16px sans-serif;fill:#20252b}.small{font-size:13px}.heading{font-size:20px;font-weight:bold}.box{fill:white;stroke:#aab2bb}.field{fill:#f6f8fa;stroke:#7c8794}</style>
+  <rect width="760" height="430" fill="#f3f4f6"/>
+  <rect class="box" x="20" y="20" width="720" height="225" rx="4"/>
+  <text class="heading" x="40" y="53">検索結果</text>
+  <rect class="field" x="555" y="32" width="160" height="32" rx="3"/>
+  <text x="570" y="54">ソート順 ▼</text>
+  <text x="40" y="91">パスに含む文字列</text>
+  <rect class="field" x="40" y="103" width="565" height="34" rx="3"/>
+  <text class="small" x="52" y="125">例: /projects/</text>
+  <rect class="field" x="620" y="103" width="95" height="34" rx="3"/>
+  <text x="650" y="126">解除</text>
+  <text class="small" x="40" y="160">取得済みの最大100件を絞り込みます</text>
+  <text x="40" y="188">表示 N 件 / 取得 M 件</text>
+  <text class="small" x="40" y="221">既存の結果レコード</text>
+  <rect x="20" y="270" width="720" height="140" rx="8" fill="#f6f8fa"/>
+  <text class="small" x="530" y="299">コピーしました</text>
+  <g transform="translate(690 284)" fill="#57606a" aria-label="コピー">
+    <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/>
+    <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/>
+  </g>
+  <text x="40" y="350">既存のコード表示 / Mermaid表示</text>
+  <text class="small" x="40" y="380">コピーアイコンは内側右上。コードとの余白を確保</text>
+</svg>

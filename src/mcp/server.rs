@@ -60,6 +60,7 @@ use crate::mcp::tools::{
     create_page,
     delete_page_asset,
     edit_page,
+    get_agent_instructions,
     get_page,
     get_page_asset_data,
     get_page_asset_metadata,
@@ -96,6 +97,35 @@ pub(crate) struct LuwikiMcpServer {
 }
 
 impl LuwikiMcpServer {
+    ///
+    /// 短いblocking状態取得に共有stateを渡す
+    ///
+    /// # 戻り値
+    /// 非同期sleepをまたいでlockしないための共有ハンドル。
+    ///
+    pub(crate) fn shared_state(&self) -> Arc<RwLock<AppState>> {
+        self.state.clone()
+    }
+
+    ///
+    /// 停止barrierと競合しない状態要求受付を行う
+    ///
+    /// # 戻り値
+    /// 監査終了までのlease又は停止・内部エラー。
+    ///
+    pub(crate) fn begin_page_state_request(
+        &self,
+    ) -> Result<
+        crate::http_server::app_state::PageStateLease, McpProtocolError,
+    > {
+        let state = self.state.read().map_err(|_| {
+            McpProtocolError::internal_error("internal error", None)
+        })?;
+        state.begin_page_state_request().ok_or_else(|| {
+            McpProtocolError::internal_error("server shutting down", None)
+        })
+    }
+
     ///
     /// MCP server 実装を生成する
     ///
@@ -185,20 +215,30 @@ impl LuwikiMcpServer {
     ///
     /// MCPハンドラを都度構築する
     ///
+    /// # 概要
+    /// 共有stateの監査/索引設定をサービスへ接続して返す。
+    ///
     /// # 戻り値
     /// 現在の共有状態に接続した MCP ハンドラを返す。
     ///
     pub(crate) fn create_handler(&self) -> McpHandler {
-        let audit_sink = self
-            .state
-            .read()
-            .ok()
-            .and_then(|state| state.audit_sink());
+        /* 共有stateから監査と同じ索引設定を取得する。 */
+        let (audit_sink, fts_config) = self.state.read().ok()
+            .map(|state| (
+                state.audit_sink(), Some(state.fts_config().clone()),
+            ))
+            .unwrap_or((None, None));
+
+        /* 公開MCPの保存サービスへ索引同期を接続する。 */
+        let mut service = McpService::with_resource_authority(
+            self.resource_authority.clone(),
+        );
+        if let Some(config) = fts_config {
+            service = service.with_fts_config(config);
+        }
         McpHandler::new(
             McpAuthGateway::new(),
-            McpService::with_resource_authority(
-                self.resource_authority.clone(),
-            ),
+            service,
             audit_sink,
         )
     }
@@ -302,6 +342,30 @@ impl LuwikiMcpServer {
 #[tool_router]
 impl LuwikiMcpServer {
     ///
+    /// 標準resourceを読めないクライアントに運用指示を返す。
+    ///
+    /// # 引数
+    /// * `_params` - 空のtool引数
+    /// * `context` - MCP要求文脈
+    ///
+    /// # 戻り値
+    /// 運用指示の取得結果。
+    ///
+    #[tool(
+        name = "get_agent_instructions",
+        description = "LuWiki MCPの運用指示を取得する。resource読取の代替。",
+        annotations(read_only_hint = true, destructive_hint = false,
+            idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn get_agent_instructions_tool(
+        &self,
+        _params: Parameters<get_agent_instructions::Args>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        get_agent_instructions::execute(self, context)
+    }
+
+    ///
     /// `get_page` の tool 入口
     ///
     #[tool(
@@ -314,6 +378,67 @@ impl LuwikiMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpProtocolError> {
         get_page::execute(self, params, context).await
+    }
+
+    ///
+    /// 軽量な最新状態を取得する
+    ///
+    /// # 引数
+    /// * `params` - 絶対path
+    /// * `context` - 認証・取消文脈
+    ///
+    /// # 戻り値
+    /// 本文を含まない状態応答。
+    ///
+    #[tool(
+        name = "get_page_state",
+        description = "指定pathの最新状態と比較用state_tokenを取得する。",
+        annotations(read_only_hint = true, destructive_hint = false,
+            idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn get_page_state_tool(
+        &self,
+        Parameters(args): Parameters<
+            crate::mcp::tools::page_state::GetPageStateToolArgs,
+        >,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        crate::mcp::handler::page_state::execute(
+            self, args.path,
+            crate::mcp::tools::page_state::StateRequest::Get, context,
+        ).await
+    }
+
+    ///
+    /// 基準状態からの変化を期限付きで待つ
+    ///
+    /// # 引数
+    /// * `params` - path・基準token・期限
+    /// * `context` - 認証・取消文脈
+    ///
+    /// # 戻り値
+    /// changed又は正常timeout。
+    ///
+    #[tool(
+        name = "wait_page_change",
+        description = "取得済みstate_tokenから最大30秒待つ。timeoutは正常結果。同じ基準で再待機する。",
+        annotations(read_only_hint = true, destructive_hint = false,
+            idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn wait_page_change_tool(
+        &self,
+        Parameters(args): Parameters<
+            crate::mcp::tools::page_state::WaitPageChangeToolArgs,
+        >,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpProtocolError> {
+        crate::mcp::handler::page_state::execute(
+            self, args.path,
+            crate::mcp::tools::page_state::StateRequest::Wait {
+                expected_state: args.expected_state,
+                timeout_seconds: args.timeout_seconds,
+            }, context,
+        ).await
     }
 
     ///
@@ -381,7 +506,9 @@ impl LuwikiMcpServer {
     ///
     #[tool(
         name = "edit_page",
-        description = "指定した path の Markdown 本文を単一操作で部分編集する。replace_section では対象見出し行を content に含めず、見出し変更は title を使う。"
+        description = "指定した path の Markdown 本文を非空の operation 配列で部分編集する。\
+            section/anchor は初期本文を参照し、全件成功後に一度保存する。\
+            replace_section の見出し変更は title を使う。"
     )]
     async fn edit_page_tool(
         &self,

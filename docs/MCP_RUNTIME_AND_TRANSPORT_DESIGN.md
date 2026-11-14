@@ -1095,6 +1095,14 @@ transport 再構築後の方針として、以下の構成を採用する。
 旧実装の独自`tool` / `arguments` JSONは廃止済みであり、
 公開クレートによる標準JSON-RPCとStreamable HTTPを使用する。
 
+### 3.1.1 MCPの受信容量と本文ログ
+
+/mcp scopeへPayloadConfig 64MiBを設定する。HTTP body全体（JSON escapeとenvelopeを含む）の上限で、超過はHTTP 413。raw asset上限10MiBはserviceで別に検証する。10MiBの全量\uXXXX表現は最大60MiBになるため、通常の他引数を含めて受信できる。巨大な他引数や空白を持つ全JSON表現の受理は保証しない。受信バッファのメモリ消費増加を伴う。REST設定は変更しない。stdio入口は提供しない。
+
+依存rmcp/rmcp_actix_webにはraw request/resultを出力するログがあるため、製品loggerのstdout/file/rotationすべてへ共通LogLineFilterを適用する。crate境界に一致するtargetを全レベル抑止し、RUST_LOG=traceでも解除しない。本文をformat・内容照合せずtargetだけで判定する。依存診断ログは減るが、LuWikiの安全なログと監査は維持する。
+
+現在の製品は独立したtracing subscriberを持たずlog bridge経由で出力する。独立subscriberやlibrary利用者の独自loggerを追加する場合は、同等のtarget除外を必須とする。
+
 ### 3.2 採用する HTTP メソッド
 
 `/mcp` に対する HTTP メソッドの扱いは、採用する公開クレートが要求する
@@ -1123,13 +1131,15 @@ HTTP メソッドの扱いは自前都合で固定せず、仕様適合を優先
 固定組み込みresourceは、MCP標準`resources/list`および`resources/read`で
 公開するLuWiki組み込みの読み取り専用resourceとする。
 
-初期版では以下を公開する。
+以下を公開する（既定の authority の例）。
 
+- `luwiki://local.luwiki/builtin/agent-skill`
+  - `assets/mcp/agent-skill.md` を埋め込み、代替ツール `get_agent_instructions` と共用する
 - `luwiki://local.luwiki/builtin/front-matter-spec`
-  - 内容は `docs/FRONT_MATTER_SPECS.md` と整合する
+  - 配信用の `assets/mcp/front-matter-spec.md` を埋め込む。開発向け正本は `docs/FRONT_MATTER_SPECS.md`
   - write系tool利用前の事前参照、およびfront matter起因失敗後の再参照先として使える
 - `luwiki://local.luwiki/builtin/mcp-prompt-spec`
-  - 内容は `docs/MCP_PROMPT_SPECS.md` と整合する
+  - 配信用の `assets/mcp/mcp-prompt-spec.md` を埋め込む。開発向け正本は `docs/MCP_PROMPT_SPECS.md`
   - MCP promptsを利用する前の事前参照先として使える
 
 固定組み込みresourceはページpath、page ID、path prefix制約に依存しない。
@@ -1460,3 +1470,29 @@ Authorization欠落、不正、失効はresources handler到達前にHTTP 401と
 
 resources追加後もrequest bodyとAuthorization headerを通常ログへ出力せず、
 既存toolsおよびpromptsの認証、routing、session管理を変更しない。
+
+## authorityのブラウザへの伝達と案内反映
+
+runの同じ解決値をendpointとhttp_server/AppStateへ渡す。
+AppStateの必須String fieldをHTML metaへ属性escapeして埋め込み、
+MacroContextへ渡す。MCP無効時も保持する。新設定APIやHost由来fallbackは追加しない。
+
+authority仕様・スキル・data/default_sandbox.mdの更新と検証はOP5-MS2、
+稼働サーバ・インストール済みスキルへの反映はOP7で行う。
+Sandboxは初期雛形であり既存ページを自動更新せず、利用者編集を無条件に上書きしない。
+
+## ページ状態待機の実行・停止
+
+- 状態toolの入力schemaと正常応答はMCP_TOOL_SPECS.md 2.17〜2.18を参照。
+- handler/page_state.rsは各snapshotを短いspawn_blockingで取得し、共有AppState read lockと
+  DB txnを解放後、最大500ms又は残時間の短い方だけtokio sleepする。
+- 期限は要求開始のmonotonic clockから計測し、最後の認可付きsnapshotの変更を優先する。
+  pollごとに現在の認証・scope・prefixを再確認する。SSE heartbeatとは別責務。
+- context.ctの取消と処理futureをselectし、取消・future drop時に一度だけ終了監査する。
+  開始済みspawn_blockingは即時取消できないが、短い読取に限定し長期待機を残さない。
+  HTTP切断からcancelが伝わらない接続では期限／session終了まで残り得る。
+- AppStateの停止gateと同じread guard内で要求leaseを登録する。監査guardが終了監査を
+  投入してからleaseを解放するため、通常終了・cancel・future dropの二重投入を避ける。
+- 停止時は既存のwrite barrierで新規受付を閉じ、session close後に状態要求の生存数が
+  0になるまでguardを持たず非同期で待つ。その後に既存の最終監査flushへ進む。
+  session closeの送信完了だけを、要求の終了監査完了とは扱わない。

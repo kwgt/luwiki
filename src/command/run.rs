@@ -222,6 +222,7 @@ impl RunCommandContext {
             mcp_endpoint,
             shutdown_signal,
             on_started,
+            self.mcp_authority.clone(),
         )
     }
 }

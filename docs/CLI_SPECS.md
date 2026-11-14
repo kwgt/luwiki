@@ -175,6 +175,9 @@ luwiki [OPTIONS] run [COMMAND-OPTIONS] [BIND-ADDR[:PORT]]
 
 MCP resource URI の authority は設定ファイルの`run.mcp_authority`で指定する。
 CLIオプションは提供しない。未設定時は`local.luwiki`を使用する。
+同じ解決値はブラウザのmcp-authority metaにも渡し、MCP無効時も保持する。
+設定変更は再起動後のHTML再取得/MCP再接続で反映する。
+HTTP Hostやブラウザoriginからauthorityを推測しない。
 `--save-config`指定時は、解決済みのauthorityを`run.mcp_authority`へ保存する。
 
 `--win-service`オプションは Windows 環境でのみ使用可能とし、非 Windows 環境ではオプション自体を提供しない。このオプションが指定された場合、`run` コマンドは Windows サービスとして起動されることを前提に SCM と連携して動作する。

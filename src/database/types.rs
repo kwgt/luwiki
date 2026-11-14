@@ -3470,6 +3470,19 @@ impl UserInfo {
     }
 
     ///
+    /// 接続中の資格情報変更を比較する内部識別値
+    ///
+    /// # 戻り値
+    /// passwordを保持せず比較するhash。外部・監査へ出力しない。
+    ///
+    pub(crate) fn credential_tag(&self) -> String {
+        crate::page_state::digest(b"luwiki:basic-credential:v1", &[
+            self.id.to_string().as_bytes(), self.password.as_bytes(),
+            &self.salt,
+        ])
+    }
+
+    ///
     /// Basic認証を許可できるかを返す
     ///
     /// # 戻り値

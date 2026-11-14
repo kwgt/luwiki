@@ -32,7 +32,7 @@ import {
   toErrorMessage,
 } from '../lib/pageCommon';
 import { resolveTemplateImmediateMacros } from '../lib/macroEngine';
-import { stripFrontMatter } from '../lib/pageContent';
+import { normalizeTemplateBody, stripFrontMatter } from '../lib/pageContent';
 import {
   resolveSelectedTemplateId,
   sortTemplateItems,
@@ -298,10 +298,11 @@ export function usePageEdit() {
     templateItem: TemplatePageItem,
   ): string {
     const body = stripFrontMatter(templateSource);
-    return resolveTemplateImmediateMacros(body, {
+    const expanded = resolveTemplateImmediateMacros(body, {
       pagePath: pagePath.value,
       pageId: pageId.value || undefined,
     }, templateItem.macro_expand === true);
+    return normalizeTemplateBody(expanded);
   }
 
   async function loadTemplatePages(): Promise<void> {

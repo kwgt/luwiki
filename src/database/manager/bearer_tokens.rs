@@ -322,7 +322,7 @@ impl DatabaseManager {
         /*
          * コミット
          */
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         Ok(created)
     }
@@ -487,7 +487,7 @@ impl DatabaseManager {
             info
         };
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(updated)
     }
 
@@ -542,7 +542,7 @@ impl DatabaseManager {
             (info, unrestricted)
         };
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(updated)
     }
 
@@ -585,7 +585,7 @@ impl DatabaseManager {
             result
         };
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(result)
     }
 
@@ -677,7 +677,7 @@ impl DatabaseManager {
             RevokeBearerTokensResult::new(updated_count, warning_count)
         };
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(result)
     }
 
@@ -716,7 +716,7 @@ impl DatabaseManager {
             let _ = token_id_table.remove(token_id.clone())?;
         }
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(1)
     }
 
@@ -772,7 +772,7 @@ impl DatabaseManager {
             targets.len()
         };
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(deleted_count)
     }
 
@@ -885,7 +885,7 @@ impl DatabaseManager {
             }
         };
 
-        txn.commit()?;
+        self.commit_page_change(txn)?;
         Ok(updated_expire_at)
     }
 }

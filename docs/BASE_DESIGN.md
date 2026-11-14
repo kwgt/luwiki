@@ -549,16 +549,16 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
 
   1. meta タグから `page_id`と`revision` を取得する
   2. meta タグから `wiki_title` および `wiki-icon-url` を取得し、ヘッダ表示に利用する
-  3. REST API `GET /api/page?id={page_id}&rev={revision}` により Markdown ソースを取得する
+  3. REST API `GET /api/pages/{page_id}/source?rev={revision}` により Markdown ソースを取得する
   4. markdown-it を用いて Markdown → HTML に変換する
-  5. asset 記法 asset:... に対して独自プラグインにより /api/asset?... へ変換する
+  5. asset 記法 asset:... に対して独自プラグインにより既存アセット参照APIのURLへ変換する
   6. 変換結果をフレーム HTML 上に描画する
 
 この構成により、以下の利点を得る：
 
   - URL 表現 /wiki/{page_path} により相対リンクの自然な解決を実現
   - Markdown レンダリングの拡張（asset マクロ等）をフロントで柔軟に対応できる
-  - サーバ側はテンプレート候補派生データの公開・再構成を担い、閲覧時のテンプレート適用処理はフロント側に残す
+  - サーバ側はテンプレート候補派生データの公開・再構成を担い、編集時のテンプレート適用処理はフロント側に残す
   - ブラウザの「戻る」「ブックマーク」「URL共有」が自然に機能する
   - ローカル運用においても SPA 型 UI に近い軽量実装を維持できる
 
@@ -607,6 +607,22 @@ $XDG_DATA_HOME/<app>/asset/{XX}/{YY}/{asset_id}
 rename / move に伴う現在位置の変化は `/wiki/{current_path}` 側で表現する。
 
 ---
+### 16.4 変更通知と読書位置の維持
+
+本文取得経路を維持し、sourceの200／304ヘッダX-LuWiki-Page-Stateを表示の基準として
+共通/wsへ購読する。DatabaseManagerのcommit成功直後に共有watchを起床し、購読側で
+同一read snapshotの現在認可・ページ状態を確認する。接続時・再接続時も照合する。
+用途別WS入口や本文差し替えREST APIは追加せず、更新は位置保存後の通常reloadで反映する。
+
+共通接続の認証・Origin・2項目の基本形式・type振分け・Ping/Pong・終了と、page.*の
+payload・状態照合・導線を分離する。wireはWEBSOCKET_SPECS.md、内部はWEBSOCKET_DESIGN.md
+を正本とし、Wikiなしで理解できる形にする。OP1の公開契約・待機方式は維持する。
+
+削除／rename時は表示保持。通知reloadの競合ではsessionStorage退避と一時queryの
+閲覧shellを使い、同一主体・tab・pathを確認して復元する。通常の未存在URLは変更しない。
+内容・見出し・保存量を使い、documentとarticleの両scrollを復元する。補正は描画後の
+期限内だけ行い、利用者操作・離脱でobserver／listener／timerを解放する。
+
 ## 17. ページ編集
 
 本章は、`docs/REQUIREMENTS.md` に定義するページ作成・編集の手順ポリシーのうち、
@@ -745,6 +761,11 @@ LockTokenはULIDで付与する(ULIDのタイムスタンプ部分はロック�
 - 削除状態(ソフトデリート状態)の記事も検索対象とする。
 - 記事の更新の場合は旧記事に相当するインデックスを削除してから、新記事のインデックスを追加する。
 - インデックス更新処理は時間がかかる事を前提とし、タスクとして独立できるように実装の検討を行う。
+- 公開MCPのcreate/update/edit/append/renameは、DB commit後のaffected_page_idsを使い
+  既存のFTS更新経路へ接続する。FTS設定の共有更新lockで正本の文書構築から索引commitまでを直列化し、
+  複数編集の一保存・追記amend・再帰renameの影響範囲を維持する。
+  FTS失敗時は固定のinternal_errorを返し、正本の保存を巻き戻さない。
+  拒否/不正入力・変更しないrenameでは同期せず、過去未索引データの自動再構築は行わない。
 
 ### 19.2 インデックス削除
 - 記事のソフトデリートではインデックスの削除を行わない。

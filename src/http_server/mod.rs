@@ -18,6 +18,8 @@ pub(crate) mod page_view;
 pub(crate) mod static_files;
 pub(crate) mod tls;
 pub(crate) mod wiki_icon;
+mod websocket;
+mod page_events;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -149,6 +151,7 @@ fn payload_too_large_handler<B>(
 /// * `key_path` - 分離した秘密鍵ファイルのパス
 /// * `audit_config` - 監査ログ設定
 /// * `mcp_endpoint` - 公開するMCP endpoint情報
+/// * `mcp_authority` - MCP無効時も保持する解決済みauthority
 ///
 /// # 戻り値
 /// 起動処理に成功した場合は`Ok(())`
@@ -171,6 +174,7 @@ pub(crate) fn run(
     mcp_endpoint: Option<McpEndpoint>,
     shutdown_signal: Option<ShutdownSignal>,
     on_started: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
+    mcp_authority: String,
 ) -> Result<()> {
     info!(
         "{} {} start",
@@ -202,6 +206,7 @@ pub(crate) fn run(
         wiki_icon,
         asset_limit_size,
         Some(audit_sink.clone()),
+        mcp_authority,
     ))));
     let mcp_session_manager =
         mcp_endpoint.as_ref().map(|_| ManagedSessionManager::new());
@@ -244,10 +249,13 @@ pub(crate) fn run(
         audit_sink.clone(), retention, stop_rx.clone(),
     ));
     let cleanup_task = rt.spawn(lock_cleanup_task(state.clone(), stop_rx));
-    let signal_task = if let Some(signal) = shutdown_signal {
+    let signal_task = {
         let _guard = rt.enter();
-        Some(shutdown_signal_hook(server.handle(), signal))
-    } else { None };
+        Some(shutdown_signal_hook(
+            server.handle(), shutdown_signal.unwrap_or_else(default_shutdown_signal),
+            state.clone(),
+        ))
+    };
     let handle = server.handle();
 
     /*
@@ -259,7 +267,7 @@ pub(crate) fn run(
     let (server_result, background_result) = rt.block_on(async {
         #[cfg(target_os = "windows")]
         if !has_external_shutdown && !startup_failed {
-            windows_event_fook(handle.clone());
+            windows_event_fook(handle.clone(), state.clone());
         }
         let result = if startup_failed {
             let (result, ()) = tokio::join!(server, handle.stop(true));
@@ -284,6 +292,14 @@ pub(crate) fn run(
         let session_failed = if let Some(manager) = mcp_session_manager {
             manager.shutdown().await.is_err()
         } else { false };
+        /* 非同期状態要求の終了監査を最終flushより先に完了させる。 */
+        loop {
+            let pending = state.read().map(|state| {
+                state.page_state_request_count()
+            }).unwrap_or(0);
+            if pending == 0 { break; }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         if let Some(task) = signal_task {
             task.abort();
             let _ = task.await;
@@ -601,6 +617,7 @@ fn create_server(
             // REST APIエンドポイント設定
             .app_data(state.clone())
             .service(rest_api::create_api_scope(payload_limit))
+            .service(websocket::endpoint())
             // Wiki閲覧用エンドポイント設定
             .route("/", web::get().to(page_view::get_root_redirect))
             .route("/w/{short_id}", web::get().to(page_view::get_short))
@@ -654,7 +671,7 @@ fn create_server(
         server.bind(bind_addr)?
     };
 
-    Ok(server.shutdown_timeout(10).run())
+    Ok(server.disable_signals().shutdown_timeout(10).run())
 }
 
 ///
@@ -667,7 +684,9 @@ fn create_server(
 /// なし
 ///
 #[cfg(target_os = "windows")]
-fn windows_event_fook(handle: ServerHandle) {
+fn windows_event_fook(
+    handle: ServerHandle, state: web::Data<Arc<RwLock<AppState>>>,
+) {
     let mut close = ctrl_close().expect("failed to install CLOSE handler");
     let mut logoff = ctrl_logoff().expect("failed to install LOGOFF handler");
     let mut shutdown =
@@ -681,8 +700,37 @@ fn windows_event_fook(handle: ServerHandle) {
             _ = shutdown.recv() => info!("caught SHUTDOWN event"),
         };
 
+        if let Ok(mut shared) = state.write() {
+            shared.begin_shutdown();
+        }
         handle.stop(true).await;
     });
+}
+
+///
+/// OS停止通知をWebSocket停止gateより先へ接続する
+///
+/// # 戻り値
+/// platformに応じた停止future。
+///
+fn default_shutdown_signal() -> ShutdownSignal {
+    let (sender, receiver) = oneshot::channel();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            let mut term = tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::terminate(),
+            ).expect("failed to install termination signal");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = term.recv() => {},
+            }
+        }
+        #[cfg(not(unix))]
+        { let _ = tokio::signal::ctrl_c().await; }
+        let _ = sender.send(());
+    });
+    receiver
 }
 
 ///
@@ -694,9 +742,13 @@ fn windows_event_fook(handle: ServerHandle) {
 ///
 fn shutdown_signal_hook(
     handle: ServerHandle, signal: ShutdownSignal,
+    state: web::Data<Arc<RwLock<AppState>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let _ = signal.await;
+        if let Ok(mut shared) = state.write() {
+            shared.begin_shutdown();
+        }
         handle.stop(true).await;
     })
 }
@@ -797,6 +849,7 @@ mod tests {
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         ))));
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -862,6 +915,7 @@ mod tests {
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         ))));
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -930,6 +984,7 @@ mod tests {
             Some(icon_path),
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         ))));
 
         let listener = TcpListener::bind(("127.0.0.1", 0))

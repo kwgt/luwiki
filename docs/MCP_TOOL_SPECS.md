@@ -21,6 +21,9 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
   | ツール | 用途
   |:--|:--
   | `get_page` | [ページ全体の取得](#tool-get-page)
+  | `get_agent_instructions` | [エージェント用運用指示の取得](#tool-get-agent-instructions) |
+  | `get_page_state` | [最新ページ状態の取得](#tool-get-page-state)
+  | `wait_page_change` | [ページ状態変更待ち](#tool-wait-page-change)
   | `get_page_toc` | [ページ見出し構造の取得](#tool-get-page-toc)
   | `list_pages` | [ページ一覧の取得](#tool-list-pages)
   | `search_pages` | [ページ検索の実行](#tool-search-pages)
@@ -41,6 +44,15 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 
 ## 1. 共通事項
 
+### 保存後の全文索引同期
+
+`create_page` / `update_page` / `edit_page` / `append_page` / `rename_page`は、
+正本の保存後に影響ページの全文索引を同期してから成功を返す。
+amendしたrevisionは置換し、再帰renameでは子ページも同期する。
+入力/認可/競合で保存前に拒否した要求では索引を更新しない。
+索引更新失敗は固定の`internal_error`として保存済みであることを伝えるため、
+未保存と推測せず最新本文を再取得する。既存の入力/出力schema・認可条件は変更しない。
+
 ### 1.1 基本方針
 
 - MCP は `run` コマンドで明示的に有効化された場合のみ公開する
@@ -54,7 +66,7 @@ resourcesの外部契約は`docs/MCP_RESOURCE_SPECS.md`を参照する。
 - アセットtoolの認可はBearerスコープとpath prefix制約の両方で判定し、path prefix制約は正規化済みの入力`path`を対象とする
 - 一覧、解決、メタ情報取得系のアセットtoolはアセット本体を返さない
 - アセット本体は`get_page_asset_data`のみが`data_base64`として返す
-- `upload_page_asset`はローカルファイルパスを受け付けず、`data_base64`入力で完結する
+- `upload_page_asset`はローカルファイルパスを受け付けず、排他的な`text`/`data_base64`入力で完結する
 - アセットuploadと本体取得で扱うraw binary sizeの上限は10MiBとする
 - `data_base64`、アセット本体bytes、Bearer token、Authorization header、lock token、内部保存パス、DB内部詳細は監査ログ、tracing、エラーsummaryに含めない
 - MCP promptsはread scopeを要求するが、ページ用path prefix制約を適用しない
@@ -73,6 +85,9 @@ JSON文字列の%表記をWikiパス処理でURLデコードしない。
 初期版では、少なくとも以下のツールを公開する。
 
 - `get_page`
+- `get_agent_instructions`
+- `get_page_state`
+- `wait_page_change`
 - `get_page_toc`
 - `list_pages`
 - `search_pages`
@@ -813,17 +828,16 @@ properties:
 
   operation:
     description: >-
-      編集操作を単一指定する。初期版では `replace_section`、`insert_section`、
-      `delete_section`、`replace_text` を公開対象とする。
-    oneOf:
-      - $ref: "#/definitions/replace_section"
-      - $ref: "#/definitions/insert_section"
-      - $ref: "#/definitions/delete_section"
-      # - $ref: "#/definitions/replace_lines"
-      # - $ref: "#/definitions/insert_lines"
-      # - $ref: "#/definitions/delete_lines"
-      # - $ref: "#/definitions/unified_diff"
-      - $ref: "#/definitions/replace_text"
+      配列順に適用する編集操作。1件でも配列で指定する。
+      sectionとanchorは初期本文の対象を参照する。
+    type: "array"
+    minItems: 1
+    items:
+      oneOf:
+        - $ref: "#/definitions/replace_section"
+        - $ref: "#/definitions/insert_section"
+        - $ref: "#/definitions/delete_section"
+        - $ref: "#/definitions/replace_text"
 
 definitions:
   replace_section:
@@ -1056,6 +1070,42 @@ properties:
   - 更新処理や内部処理で想定外の失敗が発生した
 
 #### 注記
+
+`operation` は非空配列とし、単一object・空配列・null・入れ子配列を拒否する。
+path・revision・instance_idは要求全体で一組とする。
+
+各操作は配列順に適用する。section／anchorのID・titleは初期本文に結び付け、
+前方への挿入・削除やreplace_section.titleでも元の対象を保持する。
+本文範囲と子節は各操作時点のMarkdownから求める。
+同じ元節へ同レベル節X、Yを連続挿入すると、afterはA・Y・X、beforeはX・Y・Aとなる。
+
+元対象の削除後の参照はnot_found、任意replace_textによる見出し行の変更や
+構文文脈の変化で追跡不能になった後の参照はinvalid_inputとする。
+置換前後が同一文字列なら追跡を維持する。見出し名変更にはreplace_section.titleを使う。
+新設節や変更後titleは初期selectorでは指定できないため、保存後の新しい要求で参照する。
+replace_textは中間本文を検索し、allはその操作開始時の一致範囲だけへ一度適用する。
+
+全件成功した最終本文を一度保存する。途中失敗は部分保存せず、
+最終本文が元と同じ場合も既存どおり新revision／instance_idを保存する。
+成功summaryは `page edited (N operations)` とする。
+操作適用エラーは既存codeを維持し、messageへ1始まりの
+`operation N failed: ...` を付ける。全体の認可・競合・保存エラーには操作番号を付けない。
+正本commit後の同期失敗はinternal_errorでも保存済みの場合があるため、
+クライアントはget_pageで状態を再取得してから再試行を判断する。
+
+配列入力の例（selectorは取得済みの初期TOCを参照する）。
+
+```json
+{
+  "path": "/例",
+  "revision": 7,
+  "instance_id": "取得した値",
+  "operation": [
+    {"type": "insert_section", "anchor": {"by": "id", "value": "s-001"}, "placement": "before", "content": "# 注意\n注意事項\n"},
+    {"type": "replace_section", "section": {"by": "id", "value": "s-002"}, "content": "使い方の更新本文"}
+  ]
+}
+```
 
 <a id="tool-append-page"></a>
 ### 2.8 `append_page`
@@ -1775,7 +1825,7 @@ properties:
 #### 概要
 
 入力 `path` で指定されたページへ、新規アセットをアップロードする。
-アップロード対象の本体は `data_base64` 入力で受け取り、ローカルファイルパス入力は受け付けない。
+アップロード対象の本体は `text` または `data_base64` をちょうど一方指定して受け取り、ローカルファイルパス入力は受け付けない。
 
 #### 認可
 
@@ -1792,7 +1842,11 @@ required:
   - path
   - file_name
   - mime_type
-  - data_base64
+oneOf:
+  - required: [text]
+    not: {required: [data_base64]}
+  - required: [data_base64]
+    not: {required: [text]}
 properties:
   path:
     description: >-
@@ -1805,6 +1859,11 @@ properties:
   mime_type:
     description: >-
       アップロードするアセットの MIME 種別。
+    type: string
+  text:
+    description: >-
+      UTF-8で保存するtext/*の直接入力。空文字を許可する。
+      charsetは未指定またはUTF-8。data_base64と排他。
     type: string
   data_base64:
     description: >-
@@ -1845,6 +1904,8 @@ properties:
   - path prefix 制約違反
   - `ReadOnly` ユーザによる upload
 - `invalid_input`
+  - text/data_base64の両方指定または両方欠落
+  - textのMIME/charset不正、UTF-8 byte長10MiB超過
   - `path` が不正
   - `file_name` が不正
   - `mime_type` が不正
@@ -1860,9 +1921,15 @@ properties:
 
 #### 注記
 
+- null・数値・配列等の本文型不正はhandler前のJSON-RPC invalid params（-32602）。欠落/両方指定はtool invalid_input
+- textは空文字を許可し、BOM・Unicode・改行・前後空白をそのままUTF-8 bytesとして保存する。Base64空は拒否する
+- text側はMIME構文、前後空白・ASCII制御文字の拒否、text型とwildcardなしのsubtypeを検証する。charsetは重複不可・未指定またはUTF-8（大小文字不問、quoted可）。他の有効parametersと入力MIME表記は保持する
+- Base64側のMIME検証は従来どおり空拒否のみ。sniffing・拡張子照合・文字コード変換は行わない
+- 認可・ページ解決後、file_name→MIME空→本文排他→text MIME/容量またはBase64検証→txn内の最新認可・状態・lock・同名の順とする
+- UTF-8 bytesの上限10MiBとHTTP body全体の上限64MiBを区別する。HTTP上限超過は413でtoolへ到達しない
 - 新規アセット upload のみ扱い、上書きは扱わない
 - ロック中ページへの upload では lock token 入力を受け付けず `conflict` とする
-- `data_base64` とアセット本体 bytes は監査ログ、tracing、エラー summary に含めない
+- `text`、`data_base64` とアセット本体 bytes は監査ログ、tracing、エラー summary に含めない
 - 成功時 `summary` はサーバ生成の短い固定的な文言とし、入力本体や base64 を含めない
 
 ---
@@ -1959,6 +2026,111 @@ properties:
 - 成功時 `summary` はサーバ生成の短い固定的な文言とし、内部保存パスや削除済みアセットの内部状態を含めない
 
 ---
+
+<a id="tool-get-page-state"></a>
+### 2.17 `get_page_state`
+
+現在の通常ページの軽量状態を取得する。Bearerの`read`（又は包含する`write`）と、
+正規化した入力pathへのpath prefix認可を要求する。ReadOnlyユーザも利用可能。
+
+#### 入力
+
+```yaml
+type: object
+required: [path]
+properties:
+  path:
+    type: string
+    description: 共通Wikiパス規則に従う絶対path
+```
+
+#### 出力
+
+```json
+{"path":"/example","revision":7,"instance_id":"source-instance","state_token":"v1:<identity-digest>:<state-digest>"}
+```
+
+- `instance_id`は旧sourceで欠落する場合だけnull。`state_token`は常にstring。
+- tokenは`v1:`と小文字64桁hexの識別部、`:`、小文字64桁hexの状態部（計132 bytes）。
+  上記例のdigest表記は説明用であり、実際にはサーバの返却値をそのまま使う。
+- path別の不透明な比較値であり、認証・権限証明ではない。本文・page_id・移動先は返さない。
+- `invalid_input`はpath不正、`forbidden`は現在のscope・prefix・認証主体の利用不能、
+  `not_found`は通常ページとして取得不能、`internal_error`は読取失敗・保存値不整合。
+  不存在・削除・draftの詳細を区別しない。
+
+<a id="tool-wait-page-change"></a>
+### 2.18 `wait_page_change`
+
+同じpathについて、取得済み状態からの差を期限付きで待つ。認可は`get_page_state`と同じ。
+toolの待機中も、現在のtoken・不変主体・scope・prefixを各snapshotで再確認する。
+
+#### 入力
+
+```yaml
+type: object
+required: [path, expected_state]
+properties:
+  path:
+    type: string
+  expected_state:
+    type: string
+    description: get_page_state又は直前timeoutのstate_token
+  timeout_seconds:
+    type: integer
+    minimum: 1
+    maximum: 30
+    default: 30
+```
+
+timeout_secondsのnull・小数・範囲外、tokenの長さ・版・hex不正は`invalid_input`。
+必須field欠落・path等の型不正のようにtool引数のdeserialize自体が失敗する場合は、
+既存tool同様にJSON-RPCのInvalidParamsとして拒否される。
+
+#### 正常出力
+
+```json
+{"path":"/example","status":"timeout","change":null,"state":{"revision":7,"instance_id":"source-instance","state_token":"v1:<identity-digest>:<state-digest>"}}
+```
+
+- `status`は`changed`又は`timeout`。正常timeoutは`isError: false`。
+- `changed`の`change`は、同一ページの更新・amendなら`updated`、同じpathの別ページなら
+  `replaced`、通常ページを取得不能なら`unavailable`。
+- `state`は`revision`・nullable `instance_id`・`state_token`。`unavailable`だけnull。
+- `timeout`では基準と同じ状態を返す。再待機ではそのtokenを維持し、間に状態を取得し直して
+  基準を更新しない。これにより取得直後・再呼出し前に入った持続する差を検出できる。
+- 初期`get_page_state`がnot_foundのpathには基準を発行せず、未存在pathの作成待ちは扱わない。
+  取得後からwait初回比較までの消失は正常な`changed/unavailable`。
+- unavailableは削除・rename・draft等を区別せず、元pathの状態だけを返す。移動先を追跡しない。
+- 入力・認可・内部エラーは状態取得と同じ分類。待機中の認証利用不能はtoolの固定forbidden。
+  HTTP受付時の認証失敗401とは区別する。認可拒否をchangedと解釈しない。
+
+#### 観測保証・終了
+
+- 短い同一read snapshotの照合と最大500msの非同期sleepを繰り返す。sleep中に共有lock・txnを
+  保持しない。期限はmonotonic clockで要求処理開始から計測する。
+- 最後の認可付きsnapshotで観測した差を優先し、差がなければ期限到達でtimeoutを返す。
+  OS・DB処理の遅延を含む厳密な壁時計の返信期限は保証しない。
+- 全中間イベント・順序・件数を配送しない。観測間に同じ状態へ戻る変化は見えない場合がある。
+- 正本commitを参照し、派生候補・FTS同期の成功は待たない。changed後の本文再取得では、
+  さらに新しい版や別のエラーになる可能性がある。
+- request cancel又はfuture破棄で待機を終了する。切断がcancelへ伝播しない接続では、
+  期限又はsession終了によるfuture破棄まで処理が残ることがある。
+- 両toolはreadOnly・non-destructive・idempotent・closed-worldのannotationsを持つ。
+  token再確認でスライディングTTLを延長しない。基準値・本文・資格情報を監査へ記録しない。
+- 分単位の人間の編集待ちは、利用者の待機指示が続く間の有限な再呼出しで行う。
+  利用者が停止を求めたら終了し、停止中のエージェントを起動する通知とは区別する。
+
+<a id="tool-get-agent-instructions"></a>
+### 2.19 `get_agent_instructions`
+
+固定組み込みリソース `luwiki://<authority>/builtin/agent-skill` の代替取得ツール。
+運用指示本文は標準リソースと共通で、コンパイル時に内包する。
+
+- 引数は省略または空オブジェクト `{}`。未定義の引数は JSON-RPC `-32602`。
+- Bearer の `read`、またはそれを包含する `write` を要求する。read を持つ ReadOnly ユーザーは利用できる。ページ用 path prefix や resource ACL は適用しない。
+- 成功時は `isError: false`。標準取得の contents と同じ `uri`、`mime_type`、`content` を JSON object として `result.content[0].text` に格納する。
+- scope 不足は `isError: true` の `forbidden`。Bearer 不在・無効・失効は transport の HTTP 401。
+- annotations は readOnly、non-destructive、idempotent、closed-world。
 
 ## 3. 改訂方針
 

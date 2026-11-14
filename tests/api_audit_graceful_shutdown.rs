@@ -290,3 +290,74 @@ fn api_audit_sigterm_flushes_rest_and_pending_mcp_append_for_both_modes() {
         fs::remove_dir_all(base).unwrap();
     }
 }
+
+///
+/// 実binaryの待機要求が正常停止後の監査へ一件だけ残る
+///
+/// # 注記
+/// HTTP body未完了の待機中にSIGTERMし、正常exit後の確定JSONLを調べる。
+///
+/// # 戻り値
+/// なし。
+///
+#[test]
+fn api_audit_sigterm_drains_page_state_request_before_final_flush() {
+    /* 隔離した実サーバでrootの状態を取得する。 */
+    let (base, db, assets) = prepare_test_dirs();
+    run_add_user(&db, &assets);
+    let token = run_create_token(&db, &assets, "read");
+    let audit = base.join("audit");
+    let port = reserve_port();
+    let mut server = GracefulFixture::start(port, &db, &assets, &audit, true);
+    let client = Client::builder().timeout(Duration::from_secs(15))
+        .build().unwrap();
+    let url = format!("http://127.0.0.1:{port}");
+    wait_ready(&client, &url);
+    let (session, _) = rpc(&client, &url, &token, None, json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-03-26","capabilities":{},
+            "clientInfo":{"name":"state-shutdown","version":"1"}}
+    }));
+    let session = session.unwrap();
+    rpc(&client, &url, &token, Some(&session), json!({
+        "jsonrpc":"2.0","method":"notifications/initialized"
+    }));
+    let (_, body) = rpc(&client, &url, &token, Some(&session), json!({
+        "jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"get_page_state","arguments":{"path":"/"}}
+    }));
+    let data = body.lines().find_map(|line| line.strip_prefix("data: "))
+        .unwrap();
+    let result: Value = serde_json::from_str(data).unwrap();
+    let state: Value = serde_json::from_str(
+        result["result"]["content"][0]["text"].as_str().unwrap(),
+    ).unwrap();
+
+    /* 8秒待機のHTTP headersを受け取った時点で正常停止を要求する。 */
+    let began = Instant::now();
+    let response = client.post(format!("{url}/mcp"))
+        .bearer_auth(&token).header("mcp-session-id", &session)
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"wait_page_change","arguments":{
+                "path":"/", "expected_state":state["state_token"],
+                "timeout_seconds":8}}}).to_string())
+        .send().unwrap();
+    assert!(began.elapsed() < Duration::from_secs(4));
+    let status = server.stop_gracefully_and_wait(Duration::from_secs(15));
+    assert!(status.success());
+    drop(response);
+
+    /* 最終flush後に監査が欠落・二重化していないことを確認する。 */
+    let text = fs::read_to_string(audit.join("audit.current.jsonl")).unwrap();
+    let rows: Vec<Value> = text.lines().map(|line| {
+        serde_json::from_str(line).unwrap()
+    }).collect();
+    assert_eq!(rows.iter().filter(|row| {
+        row["operation"] == "wait_page_change"
+    }).count(), 1);
+    assert!(!text.contains(state["state_token"].as_str().unwrap()));
+    drop(client);
+    fs::remove_dir_all(base).unwrap();
+}

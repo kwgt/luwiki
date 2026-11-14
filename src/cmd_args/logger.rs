@@ -17,6 +17,7 @@ use flexi_logger::{
     Cleanup, Criterion, DeferredNow, Duplicate, FileSpec, Logger, Naming,
     WriteMode
 };
+use flexi_logger::filter::{LogLineFilter, LogLineWriter};
 use log::Record;
 
 use super::Options;
@@ -26,6 +27,43 @@ const MAX_LOG_SIZE: u64 = 2 * 1024 * 1024;
 
 /// 保管するログファイルの最大数
 const MAX_LOG_FILES: usize = 10;
+
+///
+/// 依存MCPクレートの本文ログを製品出力から除外するfilter
+///
+struct McpLogFilter;
+
+impl LogLineFilter for McpLogFilter {
+    ///
+    /// 本文をformatせずtargetだけで出力可否を判定する
+    ///
+    /// # 引数
+    /// * `now` - 出力時刻
+    /// * `record` - 対象レコード
+    /// * `writer` - 製品出力先
+    ///
+    /// # 戻り値
+    /// 許可したレコードの出力結果。
+    ///
+    fn write(
+        &self,
+        now: &mut DeferredNow,
+        record: &Record,
+        writer: &dyn LogLineWriter,
+    ) -> std::io::Result<()> {
+        /*
+         * 依存クレートの本文ログを除き、他の出力を委譲する
+         */
+        let target = record.target();
+        if ["rmcp", "rmcp_actix_web"].iter().any(|name| {
+            target == *name || target.strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with("::"))
+        }) {
+            return Ok(());
+        }
+        writer.write(now, record)
+    }
+}
 
 ///
 /// ロガーの初期化
@@ -150,6 +188,7 @@ where
     S: AsRef<str>
 {
     Logger::try_with_env_or_str(level)?
+        .filter(Box::new(McpLogFilter))
         .log_to_stdout()
         .format(format)
         .write_mode(WriteMode::Direct)
@@ -187,6 +226,7 @@ where
      * 単一ファイル出力のロガーを初期化
      */
     Logger::try_with_env_or_str(level)?
+        .filter(Box::new(McpLogFilter))
         .log_to_file(FileSpec::try_from(std::fs::canonicalize(path)?)?)
         .format(format)
         .duplicate_to_stdout(if tee {
@@ -229,6 +269,7 @@ where
      * ローテーション付きロガーを初期化
      */
     Logger::try_with_env_or_str(level)?
+        .filter(Box::new(McpLogFilter))
         .log_to_file(path)
         .format(format)
         .duplicate_to_stdout(if tee {
@@ -246,4 +287,122 @@ where
         .start()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    ///
+    /// 製品loggerを隔離プロセスで初期化して秘匿を検証する
+    /// # 概要
+    /// 製品loggerを隔離プロセスで初期化して秘匿を検証する
+    ///
+    ///
+    /// # 注記
+    /// stdout/file/rotationとteeをtrace設定で確認する。
+    ///
+    /// # 戻り値
+    /// なし。
+    ///
+    #[test]
+    fn mcp_logger_outputs_hide_dependency_payloads() {
+        /*
+         * 出力先ごとに新しいプロセスで製品loggerを初期化する
+         */
+        for mode in ["stdout", "file", "file-tee", "directory", "dir-tee"] {
+            let dir = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(
+                std::env::current_exe().unwrap(),
+            ).args(["--exact", "cmd_args::logger::tests::mcp_logger_probe",
+                "--nocapture"])
+                .env("LUWIKI_LOG_PROBE_MODE", mode)
+                .env("LUWIKI_LOG_PROBE_DIR", dir.path())
+                .env("RUST_LOG", "trace")
+                .output().unwrap();
+            assert!(output.status.success(), "logger probe failed");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(!stdout.contains("PRIVATE_MCP_SENTINEL"));
+            assert!(!String::from_utf8_lossy(&output.stderr)
+                .contains("PRIVATE_MCP_SENTINEL"));
+            if mode == "stdout" || mode.ends_with("tee") {
+                assert!(stdout.contains("SAFE_LOG_MARKER"));
+            }
+            /*
+             * ローテーション先を含め全fileとstdoutを照合する
+             */
+            let mut captured = stdout.into_owned();
+            let mut count = 0;
+            for entry in std::fs::read_dir(dir.path()).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    let content = std::fs::read_to_string(path).unwrap();
+                    assert!(!content.contains("PRIVATE_MCP_SENTINEL"));
+                    assert!(content.contains("SAFE_LOG_MARKER"));
+                    captured.push_str(&content);
+                    count += 1;
+                }
+            }
+            for target in ["luwiki", "rmcp_extra", "rmcp_actix_web_extra"] {
+                assert!(captured.contains(&format!("SAFE_LOG_MARKER {target}")));
+            }
+            if mode != "stdout" { assert!(count > 0); }
+            if mode == "directory" || mode == "dir-tee" { assert!(count > 1); }
+        }
+    }
+
+    ///
+    /// 子プロセス専用の製品logger試験入口
+    /// # 概要
+    /// 子プロセス専用の製品logger試験入口
+    ///
+    ///
+    /// # 注記
+    /// 通常の単体実行では何も設定せず終了する。
+    ///
+    /// # 戻り値
+    /// なし。
+    ///
+    #[test]
+    fn mcp_logger_probe() {
+        /*
+         * 子プロセス指定時だけglobal loggerを初期化する
+         */
+        let Ok(mode) = std::env::var("LUWIKI_LOG_PROBE_MODE") else { return; };
+        let path = std::path::PathBuf::from(
+            std::env::var("LUWIKI_LOG_PROBE_DIR").unwrap(),
+        );
+        match mode.as_str() {
+            "stdout" => init_for_stdout("trace").unwrap(),
+            "file" | "file-tee" => init_for_file(
+                "trace", path.join("probe.log"), mode == "file-tee",
+            ).unwrap(),
+            _ => init_for_directory("trace", &path, mode == "dir-tee").unwrap(),
+        }
+
+        /*
+         * crate境界と全レベル、およびtracing bridgeを確認する
+         */
+        for target in ["rmcp", "rmcp::service", "rmcp_actix_web",
+            "rmcp_actix_web::transport"]
+        {
+            for level in [log::Level::Error, log::Level::Warn,
+                log::Level::Info, log::Level::Debug, log::Level::Trace]
+            {
+                log::log!(target: target, level, "PRIVATE_MCP_SENTINEL");
+            }
+        }
+        tracing::debug!(target: "rmcp::service",
+            message = "PRIVATE_MCP_SENTINEL");
+        for target in ["luwiki", "rmcp_extra", "rmcp_actix_web_extra"] {
+            log::info!(target: target, "SAFE_LOG_MARKER {}", target);
+        }
+        if mode == "directory" || mode == "dir-tee" {
+            let padding = "A".repeat(MAX_LOG_SIZE as usize);
+            for _ in 0..3 {
+                log::info!("SAFE_LOG_MARKER {}", padding);
+            }
+        }
+        log::logger().flush();
+    }
 }

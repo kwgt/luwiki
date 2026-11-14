@@ -25,6 +25,17 @@ export function stripFrontMatter(markdown: string): string {
   return markdown.slice(closingLineBreakIndex + 1);
 }
 
+/**
+ * テンプレート適用時の本文先頭の空行を除去する。
+ * @param source マクロ展開後のテンプレート本文
+ * @returns 先頭空行を除去し、本文のindent・内部・末尾を保持した文字列。
+ */
+export function normalizeTemplateBody(source: string): string {
+  return source
+    .replace(/^(?:[ \t]*\r?\n)+/, '')
+    .replace(/^[ \t]+$/, '');
+}
+
 export function stripLeadingTitleHeading(markdown: string): string {
   const lines = markdown.split(/\r?\n/);
   let index = 0;

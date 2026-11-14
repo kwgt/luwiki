@@ -14,6 +14,8 @@ mod entries;
 mod init;
 mod link_refs;
 mod manager;
+pub(crate) use manager::page_state::StateAccessDenied;
+pub(crate) use manager::page_events::BrowserPageState;
 mod primitive_names;
 mod prompt_candidates;
 mod resource_candidates;

@@ -36,6 +36,65 @@
     use crate::mcp::tools::McpToolName;
 
     ///
+    /// T17: 一括編集は一要求のUpdate監査を一件だけ生成する。
+    ///
+    /// # 戻り値
+    /// テスト結果。
+    ///
+    /// # 注記
+    /// 二操作後のrevisionとsummaryを監査JSONLと照合する。
+    ///
+    #[test]
+    fn edit_batch_records_one_update_audit() {
+        /*
+         * 隔離DBと監査sinkを準備する
+         */
+        let dir = tempdir().unwrap();
+        let manager = DatabaseManager::open(&dir.path().join("wiki.redb"),
+            &dir.path().join("assets")).unwrap();
+        manager.add_user("alice", "pass", None).unwrap();
+        let page = manager.create_page("/batch/page", "alice",
+            "before".into()).unwrap();
+        let source = manager.get_page_source(&page, 1).unwrap().unwrap();
+        let sink = Arc::new(RwLock::new(AuditSink::new(
+            AppendAuditBuffer::new(), AuditWriter::new(AuditWriterConfig {
+                output_dir: dir.path().join("audit"),
+                rotation_policy: AuditRotationPolicy::new(1024 * 1024),
+            }),
+        )));
+        let handler = McpHandler::new(McpAuthGateway::new(),
+            McpService::new(), Some(sink.clone()));
+        let auth = AuthContext::new(AuthUser::new("alice".into()),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/batch"]), None);
+
+        /*
+         * 同一要求の二操作を一度保存し監査を確定する
+         */
+        let operations = [("before", "middle"), ("middle", "after")]
+            .into_iter().map(|(old, new)| {
+                crate::mcp::model::McpEditPageOperation::ReplaceText {
+                    old_text: old.into(), new_text: new.into(),
+                    occurrence: None,
+                }
+            }).collect();
+        let result = handler.handle_edit_page(&auth, &manager, None,
+            crate::mcp::model::EditPageRequest::new("/batch/page".into(), 1,
+                source.instance_id().unwrap().to_string(), operations))
+            .unwrap();
+        assert_eq!(serde_json::to_value(result).unwrap()["revision"], 2);
+        sink.write().unwrap().flush().unwrap();
+        let log = fs::read_to_string(active_log_path(
+            &dir.path().join("audit"))).unwrap();
+        assert_eq!(log.lines().count(), 1);
+        let record: AuditRecord = serde_json::from_str(log.trim()).unwrap();
+        assert_eq!(record.operation, AuditOperation::Update);
+        assert_eq!(record.revision, Some(2));
+        assert_eq!(record.summary.as_deref(),
+            Some("page edited (2 operations)"));
+    }
+
+    ///
     /// テスト中のtracing eventを収集するsubscriber
     ///
     #[derive(Clone, Default)]
@@ -1033,7 +1092,8 @@
                 "/mcp/./assets",
                 "secret.bin",
                 "application/octet-stream",
-                "c2VjcmV0LXBheWxvYWQ=",
+                None,
+                Some("c2VjcmV0LXBheWxvYWQ="),
             )
             .expect("upload page asset failed");
         assert!(!sink
@@ -1251,7 +1311,8 @@
                     "/mcp/assets",
                     "scope.bin",
                     "application/octet-stream",
-                    "c2NvcGU=",
+                    None,
+                    Some("c2NvcGU="),
                 )
                 .expect_err("scope denied upload must fail")
                 .code(),
@@ -1279,7 +1340,8 @@
                     "/mcp/assets",
                     "read-only.bin",
                     "application/octet-stream",
-                    "cmVhZC1vbmx5",
+                    None,
+                    Some("cmVhZC1vbmx5"),
                 )
                 .expect_err("read only upload must fail")
                 .code(),
@@ -1308,7 +1370,8 @@
                         "/mcp/assets",
                         "invalid.bin",
                         "application/octet-stream",
-                        "private:not-base64",
+                        None,
+                        Some("private:not-base64"),
                     )
                     .expect_err("invalid upload must fail");
                 assert_eq!(error.message(), "data_base64 is invalid");
@@ -1346,7 +1409,6 @@
                     "/mcp/assets".to_string(),
                     "internal.bin".to_string(),
                     "application/octet-stream".to_string(),
-                    "private-internal-payload".to_string(),
                 ),
             ),
         );
@@ -1516,7 +1578,8 @@
                 "/mcp/assets",
                 "writer-failure.bin",
                 "application/octet-stream",
-                "d3JpdGVyLWZhaWx1cmU=",
+                None,
+                Some("d3JpdGVyLWZhaWx1cmU="),
             )
             .expect("audit write failure must not fail upload");
         let upload_json = serde_json::to_value(&upload)
@@ -1568,7 +1631,8 @@
                 "/mcp/assets",
                 "lock-failure.bin",
                 "application/octet-stream",
-                "bG9jay1mYWlsdXJl",
+                None,
+                Some("bG9jay1mYWlsdXJl"),
             )
             .expect("audit lock failure must not fail upload");
         let upload_json = serde_json::to_value(&upload)
@@ -1597,7 +1661,8 @@
                 "/mcp/assets",
                 "invalid.bin",
                 "application/octet-stream",
-                "not-valid-base64",
+                None,
+                Some("not-valid-base64"),
             )
             .expect_err("invalid payload must remain invalid input");
         assert_eq!(error.code(), McpErrorCode::InvalidInput);
@@ -1669,7 +1734,8 @@
                     "/mcp/assets",
                     "writer-failure.bin",
                     "application/octet-stream",
-                    SECRET_PAYLOAD,
+                    None,
+                    Some(SECRET_PAYLOAD),
                 )
                 .expect("audit write failure must not fail upload");
             let upload = serde_json::to_value(upload)
@@ -1684,7 +1750,8 @@
                     "/mcp/assets",
                     "invalid.bin",
                     "application/octet-stream",
-                    "not-valid-base64",
+                    None,
+                    Some("not-valid-base64"),
                 )
                 .expect_err("invalid payload must remain invalid input");
             assert_eq!(error.code(), McpErrorCode::InvalidInput);

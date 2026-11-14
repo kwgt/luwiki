@@ -178,10 +178,17 @@ impl McpService {
          * 引数を検証・展開して単一message本文を生成する
          */
         let values = validate_prompt_arguments(&prompt, arguments)?;
-        let body = expand_prompt_text(extracted.body(), &values)?;
+        let source = crate::mcp::authority_macro::expand_authority_macro(
+            extracted.body(), self.resource_authority(),
+        );
+        let body = expand_prompt_text(&source, &values)?;
         let message = match prompt.system() {
             Some(system) => {
-                let system = expand_prompt_text(system, &values)?;
+                let source =
+                    crate::mcp::authority_macro::expand_authority_macro(
+                        system, self.resource_authority(),
+                    );
+                let system = expand_prompt_text(&source, &values)?;
                 format!("{}\n\n{}", system, body)
             }
             None => body,

@@ -55,6 +55,7 @@
 | `/w/{short_id}` | 短縮URLによる閲覧ページ導線
 | `/edit/{page_path}` | 編集ページ
 | `/pages/{page_path}` | ページ一覧表示ページ
+| `/ws` | 機能共通のWebSocket接続
 
 ### 2.5 front matter
 
@@ -261,6 +262,16 @@
 - export / import では `page_id` を維持し、短縮URLの対応関係を追加の保存情報なしで再構成できること
 
 ---
+### 10.3 コードフェンスのコピー
+
+- 閲覧本文・過去revision本文・編集previewのコードフェンスを表示段階の文字列としてコピーできること
+- Mermaid元コード・SVGコード・include_code由来fenceを含め、inline code・diff・modalは対象外とする
+- ReadOnlyでもコピー可能とし、保存source/認可・API契約を変更しない
+- Clipboard APIと未提供時だけのuser gesture内fallbackを使い、成功/失敗を表示する
+- 原文bytesではなく表示tokenの内容をコピーし、HTML/装飾やbutton文字列を含めない
+- コードフェンスの操作は右上のオーバーレイに配置する。機能名をホバー・フォーカスで示し、コピー成功はポップアップで表示する
+- 描画済み Mermaid のコピー・拡大表示・全画面は同じ領域に横並びで表示する
+
 ## 11. ユーザ認証・ユーザ識別
 
 ### 11.1 基本方針
@@ -408,6 +419,14 @@
 ### 12.2.1 edit_page の扱い
 
 - MCP の `edit_page` は、ページ本文の一部編集を行う操作として提供する
+- `operation` は一つ以上の編集操作を持つ配列とし、1件の編集も配列で指定する
+- 各操作は配列順に適用し、全件成功した最終本文を一要求・単一トランザクションで一度保存する
+- `section` / `anchor` の ID と見出し文字列は、要求した `revision` / `instance_id` の初期本文で解決し、操作途中の見出し挿入・削除・見出し名変更でも元の対象を維持する
+- 元対象が削除された場合は `not_found`、任意の見出し行書換え等で追跡不能となった場合は `invalid_input` とし、後続操作を別節へ適用しない
+- 新設節を `section` / `anchor` で参照する編集は、保存後に最新 TOC を取得した次の要求で行う。`replace_text` は操作時点の中間本文を検索する
+- `replace_text` で見出し行を変更した後の元節参照は追跡不能として扱う。見出し名変更には `replace_section.title` を使い、同一文字列への置換では追跡を維持する
+- 全体で一組の競合トークンを確認し、保存トランザクションでも期待 `revision` / `instance_id` を再照合する
+- 操作途中の失敗では部分保存しない。正本 commit 後の派生同期失敗は保存済みの可能性を含む `internal_error` とし、クライアントは再取得して保存結果を確認する
 - `edit_page.replace_section` は既存 operation の拡張として扱い、新しい operation は追加しない
 - `replace_section` の `content` には、対象セクション自身の Markdown 見出し行を含めない
 - `replace_section` で対象セクションの見出し文字列を変更する場合は、`content` ではなく `title` を使用する
@@ -433,6 +452,26 @@
 - MCP アセット Tools は、正規化済みの入力 `path` を基準に path prefix 制約を判定する
 - MCP resources では、ページ由来 resource の current path が path prefix 範囲外でも一覧・取得対象とする
 - rename 後の旧 path は自動追跡せず、旧 path 指定時は見つからないものとして扱う
+
+#### ページ状態取得・変更待ち
+
+- `get_page_state`で単一pathの最新通常ページ状態を、本文・page_idなしで取得できること。
+- `wait_page_change`は取得済み`state_token`からの状態差を待つ。`timeout_seconds`は
+  省略時30秒、整数1〜30秒とし、null・小数・範囲外を拒否する。
+- 同一ページの通常更新・amendは`updated`、同じpathの別ページへの置き換わりは
+  `replaced`、通常ページが取得不能になった場合は`unavailable`として正常終了する。
+  削除とrenameを区別せず、移動先・削除済み本文・内部IDを返さない。
+- 変化なしの期限到達は正常な`timeout`とし、同じ基準tokenで再呼出しすることで
+  人間の編集を分単位以上待てること。取得後や再呼出し間に入った持続する状態差も検出する。
+- 初期取得不能のpathへ基準tokenを発行せず、未存在pathの新規作成待ちは提供しない。
+  取得後からwait初回比較までに消失した場合は`unavailable`を返す。
+- 状態は500ms間隔の照合で観測し、全中間イベント・発生順・変更件数の配送を保証しない。
+- path割当・index・最新sourceと、現在のBearer token・不変主体・scope・prefixの認可を
+  同一read snapshotで確定する。再確認でtoken TTLを延長しない。ReadOnlyでもreadは利用できる。
+- state_tokenはpath別の不透明な比較値とし、権限証明に用いない。旧instance_id欠落時も
+  保存値を移行せず比較できること。内部IDの平文・復号可能な表現を公開しない。
+- 待機中は共有lock・DB txnを保持せず、取消・終了時に待機資源を解放する。
+  監査は公開要求単位とし、内部照合ごとに増やさない。本文・比較値・資格情報を監査へ残さない。
 
 ### 12.4 append の扱い
 
@@ -491,10 +530,12 @@
 - `/builtin` および `/pages` 配下は LuWiki 予約 path とし、明示 `mcp.resource_path` では使用できない
 - resource URI の authority は run 設定 `mcp_authority` で指定し、未指定時は `local.luwiki` とする
 - 固定組み込み resource とページ由来 resource は `resources/list` の同じ一覧結果へ合流する
-- 初期版では front matter 詳細仕様と MCP prompts 仕様を固定組み込み resource として公開する
+- front matter 仕様、MCP prompts 仕様、エージェントの運用指示を固定組み込み resource として公開する
+- 仕様の配信用本文は、リポジトリを参照できない MCP クライアントでも利用できる Markdown とする
+- 運用指示は `agent-skill` から取得できる。代替の `get_agent_instructions` は同じ本文を返し、同じ Bearer の `read` scope を要求する
 - resource の名前、説明、MIME type は front matter から取得する
 - MIME type が front matter に未指定の場合は `text/markdown` を既定値とする
-- ページ由来 resource の本文は、front matter を除去した最新ページソースの raw Markdown 本文を使用する
+- ページ由来resource本文はfront matter除去済みの最新raw Markdownにauthority専用置換だけを適用する。その他の通常マクロ・wiki/asset linkは展開しない
 - `resources/list` で公開可能な resource の一覧情報を取得できること
 - `resources/read` で指定 URI の resource 本文を取得できること
 - `resources/list` および `resources/read` は Bearer の `read` scope を要求する
@@ -562,6 +603,11 @@
   - リネームや履歴構造と整合が取れる
   - 英字を含む検索は大文字小文字を区別しない
 - 全文検索は独立した検索画面で行い、検索式のリアルタイム評価を行う。
+- 公開MCPのページ作成・更新・部分編集・追記・リネームも、保存成功後に
+  影響ページの全文索引を同期し、成功応答後の検索へ反映すること。
+  追記amendは同じrevisionの索引を置換し、再帰リネームでは子ページも同期する。
+- 索引同期に失敗した場合は成功応答を返さず、正本が保存済みであることを伝える。
+  保存前の認可拒否・競合・不正入力は索引を更新せず、既存環境の索引を無条件に再構築しない。
 
 ### 14.2 検索対象
 
@@ -586,6 +632,11 @@
   - マッチしたテキストのスニペット
 - 検索結果は入力された検索結果及び、検索対象について最大100件を表示する
 
+ブラウザのパスフィルタは取得済み最大100件の表示結果に対するリテラル部分一致とする。
+前後空白を除去し、空なら解除、表示pathの大小文字は区別する。
+全文検索式の英字case-insensitiveは維持する。正規表現/glob・Unicode正規化やpath解決はしない。
+元結果と表示結果の件数を区別し、フィルタ変更だけでREST検索を再実行しない。
+
 ### 14.4 履歴・リネームとの関係
 - リネームは全文検索の索引単位に影響しない
   - 検索結果は常に 現在の path で表示される
@@ -607,8 +658,11 @@
   - 他ページからの参照維持
 - 内部的には (PageId → AssetId) の対応を管理し、逆引き (AssetId → PageId) は必要に応じて利用する
 - MCP 初期版のアセット操作は、ページの `path` とページ内 `file_name` を主入力として扱い、`asset_id` は出力上の識別情報として扱う
-- MCP 初期版では、アセット本体の取得は `get_page_asset_data` の `data_base64` 出力、アセット upload は `upload_page_asset` の `data_base64` 入力で扱う
-- MCP 初期版で取得または upload するアセット本体の raw binary size 上限は 10MiB とする
+- MCP 初期版では、アセット本体の取得は `get_page_asset_data` の `data_base64` 出力、アセット upload は `upload_page_asset` の `text` または `data_base64` をちょうど一方指定して扱う
+- MCPの直接入力`text`は具体的なtext/* MIME専用とし、charsetは未指定またはUTF-8に限定する。nullは拒否し、空textは許可する
+- textはJSON復号後のUTF-8 bytesをUnicode・BOM・改行・前後空白の変換なしで保存し、入力MIME表記も保持する
+- MCPで取得またはuploadするアセット本体のraw size上限は10MiBとし、textはUTF-8 byte長で判定する
+- MCP HTTP body上限は/mcp限定で64MiBとする。JSON escapeを含む全体の上限であり、raw上限とは区別する
 - MCP 初期版の upload では、decode 前の `data_base64` byte 長上限を 13,981,016 bytes とし、decode 後の raw binary size も確認する
 
 ---
@@ -638,6 +692,11 @@
 - `template_root` が未設定でもテンプレート機能自体は無効化しないこと
 - テンプレート候補が存在しない場合は、編集画面では空状態として扱えること
 - `template_root` 由来の候補と `wiki.template` 由来の候補が重複する場合は、`wiki.template` 由来の候補を正とすること
+- テンプレート適用時は、front matter除去と既存の即時マクロ処理の後に、本文先頭の空行をすべて除去すること
+  - LF／CRLFの空行と、半角スペース・タブだけの行を対象とし、front matterの有無にかかわらず適用する
+  - 本文がこれらの改行・空白だけの場合は空文字とする
+  - 最初の非空行の字下げ、本文内部・末尾・コード内の空白と改行は保持する
+  - 通常の閲覧・編集本文や保存済みページの原文を一括で変更しない
 
 ---
 
@@ -651,6 +710,10 @@
 - ページ一覧表示は100件程度毎にページ切替を行う
 
 ## 18. マクロ機能
+- authority専用マクロ`{{mcp:authority}}`は保存sourceを保持して出力時に展開する
+- ブラウザ表示/編集preview、ページ由来resource本文、promptの元system/本文でcode内も展開する。prompt要求引数値は再処理しない
+- run.mcp_authorityの同じ解決値をMCPとHTML metaへ渡す。MCP無効時もブラウザに利用でき、設定変更は再起動後のHTML再取得/MCP再接続で反映する
+
 - マクロ機能は以下の二種類を提供する
     - 入力支援を目的とした即時変換タイプ(日付入力など)。即時変換タイプはソースコードには残らない。
     - 記述拡張または自動化を目的としたレンダリング時変換タイプ(子ページのリスト作成など)。レンダリング時変換タイプはソースコードに残りデータベースにそのまま記録される。
@@ -761,3 +824,26 @@
 - 削除済みページへのリンクは、通常の未存在リンクと同様に扱う
 - `page_id` 直接指定リンクについては、マイグレート仕様上の考慮対象外とする
 - `migrate` ではrename情報を用いた再解決は行わない
+
+## 20. ブラウザの変更通知と閲覧位置維持
+
+- 通常の閲覧画面で、他のブラウザ・MCP等によるページ更新・amend・削除・
+  rename・同じpathの別ページへの置き換わりを検出できること。
+- 共通`/ws`と`type`・`payload`の2項目のJSONを使い、機能・操作はtypeで
+  識別する。用途別入口・channel・必須version・独自ACK／再送を追加しない。
+- DB commit確定後に通知を起こし、現在の認可と対象状態を同じread snapshotで
+  確認する。本文取得後から購読までと切断中の変更は初期／再接続で照合する。
+- 自動・半自動・無視を選べ、半自動を既定に同一originのブラウザ共通設定として
+  保存する。自動は通常reload、半自動はトーストの「更新」でreload、無視は購読しない。
+- 削除／renameでは表示を保持し、認可できた移動先または最も近い存在する通常先祖への
+  導線を示す。自動でも編集画面へ自動転送しない。通知reload直前の削除に備えた
+  表示退避は同じ主体・tab・pathに限定し、退避不能ならreloadを中止する。
+- 同一path・同一IDの自動・半自動・通常reloadで、内容ブロック、見出し、保存scroll量の
+  順で読書位置を復元する。基準消失・本文短縮時は有効範囲へ補正する。
+- ブラウザの「戻る」「進む」では、通常閲覧の同一URL・同一IDに対応する履歴エントリごとの位置を復元する。
+- 新しいhash操作を優先し、描画後の画像／Mermaidによる高さ変化を扱う。利用者操作で
+  復元補正を中止する。別ID・別pathや編集／履歴等の画面へ旧位置を適用しない。
+- 認証・認可・通信失敗を削除と区別し、非表示・離脱・設定変更で接続資源を解放する。
+  ReadOnly・MCP無効でも利用できること。既存の認可・監査・正常停止の順序を守る。
+- 通知は現在状態への収束であり、全中間イベント・件数・再生を保証しない。
+  wire契約はWEBSOCKET_SPECS.md、内部境界はWEBSOCKET_DESIGN.mdを正本とする。

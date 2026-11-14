@@ -8,6 +8,11 @@
 //! MCP transport tests
 //!
 
+    mod authority_macro;
+    mod fts_sync;
+    mod text_asset;
+    mod page_state;
+
     use std::net::TcpListener;
     use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
@@ -430,6 +435,7 @@
             path_prefixes,
             attributes,
             false,
+            DEFAULT_RESOURCE_AUTHORITY,
         )
         .await
     }
@@ -447,6 +453,7 @@
             path_prefixes,
             UserAttributeSet::new(),
             true,
+            DEFAULT_RESOURCE_AUTHORITY,
         )
         .await
     }
@@ -460,6 +467,7 @@
         path_prefixes: PathPrefixSet,
         attributes: UserAttributeSet,
         enable_audit: bool,
+        resource_authority: &str,
     ) -> TestServerContext {
         /*
          * テスト用 AppState を構築する
@@ -512,6 +520,7 @@
             None,
             1024 * 1024,
             audit_sink,
+            resource_authority.to_string(),
         ))));
 
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -523,10 +532,11 @@
             ManagedSessionManager::new_with_config(session_config);
         session_manager.start_background_sweep();
         let server_state = state.clone();
+        let resource_authority = resource_authority.to_string();
         let server = HttpServer::new(move || {
             App::new().service(create_scope(
                 create_endpoint(
-                    DEFAULT_RESOURCE_AUTHORITY.to_string(),
+                    resource_authority.clone(),
                 ),
                 server_state.clone(),
                 session_manager.clone(),
@@ -909,6 +919,8 @@
             .find(|tool| tool["name"] == "edit_page")
             .expect("edit_page tool missing");
         let schema = &edit_page_tool["inputSchema"];
+        assert_eq!(schema["properties"]["operation"]["type"], "array");
+        assert_eq!(schema["properties"]["operation"]["minItems"], 1);
         let schema_text = serde_json::to_string(schema)
             .expect("edit_page schema must serialize");
 
@@ -1065,13 +1077,13 @@
         let upload_schema = &upload_tool["inputSchema"];
         assert!(json_value_has_required_fields(
             upload_schema,
-            &["path", "file_name", "mime_type", "data_base64"],
+            &["path", "file_name", "mime_type"],
         ));
         let upload_properties = upload_schema["properties"]
             .as_object()
             .expect("upload_page_asset properties missing");
-        assert_eq!(upload_properties.len(), 4);
-        for field in ["path", "file_name", "mime_type", "data_base64"] {
+        assert_eq!(upload_properties.len(), 5);
+        for field in ["path", "file_name", "mime_type", "text", "data_base64"] {
             assert!(upload_properties.contains_key(field));
         }
 
@@ -3940,11 +3952,11 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
 
@@ -3968,8 +3980,116 @@
         assert_eq!(payload_json["path"], "/mcp/page");
         assert_eq!(payload_json["revision"], 2);
         assert!(payload_json["instance_id"].is_string());
-        assert_eq!(payload_json["summary"], "page edited");
+        assert_eq!(payload_json["summary"], "page edited (1 operations)");
 
+        context.shutdown().await;
+    }
+
+    ///
+    /// T01/T02/T17: 通常のtools/callで配列必須と一保存を確認する。
+    ///
+    /// # 戻り値
+    /// テスト結果。
+    ///
+    /// # 注記
+    /// 有効な二操作と旧object・空配列のprotocol拒否を比較する。
+    ///
+    #[actix_web::test]
+    async fn edit_page_batch_array_contract_through_transport() {
+        /*
+         * 認証済みsessionと最新トークンを準備する
+         */
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        ).await;
+        let session = context.initialize_session().await;
+        context.send_initialized_notification(&session).await;
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        let first = json!({"type": "replace_text", "old_text": "body",
+            "new_text": "middle"});
+        let arguments = json!({"path": "/mcp/page", "revision": revision,
+            "instance_id": instance_id, "operation": [first.clone(),
+                {"type": "replace_text", "old_text": "middle",
+                    "new_text": "final"}]});
+        let response = context.post_json(&build_tool_call_body("edit_page",
+            arguments)).header("mcp-session-id", &session)
+            .send().await.unwrap().text().await.unwrap();
+        let (_, payload) = parse_tool_result_payload(&response);
+        assert_eq!(payload["revision"], revision + 1);
+        assert_eq!(payload["summary"], "page edited (2 operations)");
+        assert!(get_latest_page_source(&context, "/mcp/page")
+            .contains("final"));
+
+        /*
+         * 配列以外と空配列はserviceへ進まず引数復号で拒否する
+         */
+        for operation in [first, json!([])] {
+            let invalid = json!({"path": "/mcp/page", "revision": revision,
+                "instance_id": instance_id, "operation": operation});
+            let response = context.post_json(&build_tool_call_body("edit_page",
+                invalid)).header("mcp-session-id", &session)
+                .send().await.unwrap().text().await.unwrap();
+            let body = parse_sse_payload(&response);
+            assert_eq!(body["error"]["code"], -32602);
+        }
+        context.shutdown().await;
+    }
+
+    ///
+    /// 配布スキルに掲載した配列例を通常のMCP呼出しで検証する。
+    ///
+    /// # 戻り値
+    /// テスト結果。
+    ///
+    /// # 概要
+    /// 配信する運用指示本文のJSONを読み、試験用の版情報を設定して適用する。
+    ///
+    /// # 注記
+    /// 前方挿入後も初期s-002が元の第二節を指すことを確認する。
+    ///
+    #[actix_web::test]
+    async fn skill_setup_batch_example_uses_original_sections() {
+        /*
+         * 配布用JSONと試験用の本文・sessionを準備する
+         */
+        let setup = include_str!("../../../assets/mcp/agent-skill.md");
+        let example = setup.split("Example for initial TOC IDs")
+            .nth(1).expect("skill example heading");
+        let json_source = example.split("```json\n").nth(1)
+            .expect("skill JSON block").split("```").next().unwrap();
+        let mut arguments: Value = serde_json::from_str(json_source)
+            .expect("skill example JSON");
+        let context = spawn_test_server_with_auth(
+            SessionManagerConfig::default(),
+            BearerScopeSet::from_iter([BearerScope::Update]),
+            PathPrefixSet::from_iter(["/"]),
+        ).await;
+        context.put_page("/mcp/page", "alice",
+            "# Overview\nintro\n# Usage\nold\n");
+        let session = context.initialize_session().await;
+        context.send_initialized_notification(&session).await;
+        let (revision, instance_id) =
+            context.latest_revision_and_instance_id("/mcp/page");
+        arguments["path"] = json!("/mcp/page");
+        arguments["revision"] = json!(revision);
+        arguments["instance_id"] = json!(instance_id);
+
+        /*
+         * 掲載例をそのまま呼び出して元対象への適用と一保存を照合する
+         */
+        let response = context.post_json(&build_tool_call_body("edit_page",
+            arguments)).header("mcp-session-id", &session)
+            .send().await.unwrap().text().await.unwrap();
+        let (_, payload) = parse_tool_result_payload(&response);
+        assert_eq!(payload["revision"], revision + 1);
+        assert_eq!(payload["summary"], "page edited (2 operations)");
+        assert_eq!(get_latest_page_source(&context, "/mcp/page"), concat!(
+            "# Notice\nText\n# Overview\nintro\n# Usage\n",
+            "Updated body of the original second section\n",
+        ));
         context.shutdown().await;
     }
 
@@ -4010,13 +4130,13 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Target",
                     "title": "Renamed",
                     "content": "new body",
                     "include_subsection": false
-                }
+                }]
             }),
         );
         let rename_response = context
@@ -4033,7 +4153,7 @@
         let (_, rename_payload) = parse_tool_result_payload(&rename_text);
         assert_eq!(rename_payload["path"], "/mcp/page");
         assert!(rename_payload["instance_id"].is_string());
-        assert_eq!(rename_payload["summary"], "page edited");
+        assert_eq!(rename_payload["summary"], "page edited (1 operations)");
         assert_eq!(
             get_latest_page_source(&context, "/mcp/page"),
             concat!(
@@ -4056,11 +4176,11 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Renamed",
                     "content": "default body"
-                }
+                }]
             }),
         );
         let default_response = context
@@ -4075,7 +4195,7 @@
             .await
             .expect("read replace_section default response failed");
         let (_, default_payload) = parse_tool_result_payload(&default_text);
-        assert_eq!(default_payload["summary"], "page edited");
+        assert_eq!(default_payload["summary"], "page edited (1 operations)");
         assert_eq!(
             get_latest_page_source(&context, "/mcp/page"),
             concat!(
@@ -4098,12 +4218,12 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Renamed",
                     "content": "whole body\n\n### Replacement\nchild replaced",
                     "include_subsection": true
-                }
+                }]
             }),
         );
         let include_response = context
@@ -4118,7 +4238,7 @@
             .await
             .expect("read replace_section include response failed");
         let (_, include_payload) = parse_tool_result_payload(&include_text);
-        assert_eq!(include_payload["summary"], "page edited");
+        assert_eq!(include_payload["summary"], "page edited (1 operations)");
         assert_eq!(
             get_latest_page_source(&context, "/mcp/page"),
             concat!(
@@ -4166,17 +4286,18 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Root",
                     "content": "\n# Root\nupdated",
                     "include_subsection": true
-                }
+                }]
             }),
             "invalid_input",
-            Some(
+            Some(concat!(
+                "operation 1 failed: ",
                 "replace_section.content must not include the target heading line",
-            ),
+            )),
         )
         .await;
 
@@ -4189,18 +4310,19 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Root",
                     "title": "Renamed root",
                     "content": "\n# Renamed root\nupdated",
                     "include_subsection": true
-                }
+                }]
             }),
             "invalid_input",
-            Some(
+            Some(concat!(
+                "operation 1 failed: ",
                 "replace_section.content must not include the target heading line",
-            ),
+            )),
         )
         .await;
 
@@ -4213,17 +4335,18 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Root",
                     "content": "updated\n\n## Unexpected\nbody",
                     "include_subsection": false
-                }
+                }]
             }),
             "invalid_input",
-            Some(
+            Some(concat!(
+                "operation 1 failed: ",
                 "replace_section.content must not include Markdown heading lines",
-            ),
+            )),
         )
         .await;
 
@@ -4236,17 +4359,18 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Child",
                     "content": "updated\n\n## Peer\nbody",
                     "include_subsection": true
-                }
+                }]
             }),
             "invalid_input",
-            Some(
+            Some(concat!(
+                "operation 1 failed: ",
                 "replace_section.content must not include same or higher level headings",
-            ),
+            )),
         )
         .await;
 
@@ -4279,12 +4403,12 @@
                 "path": "/mcp/page",
                 "revision": stale_revision,
                 "instance_id": stale_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Root",
                     "content": "\n# Root\nupdated",
                     "include_subsection": true
-                }
+                }]
             }),
             "not_latest_revision",
             Some("revision is not latest"),
@@ -4300,12 +4424,12 @@
                 "path": "/mcp/page",
                 "revision": latest_revision,
                 "instance_id": "instance-mismatch",
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Root",
                     "content": "\n# Root\nupdated",
                     "include_subsection": true
-                }
+                }]
             }),
             "instance_id_not_match",
             Some("instance_id does not match latest content"),
@@ -4321,15 +4445,15 @@
                 "path": "/mcp/page",
                 "revision": latest_revision,
                 "instance_id": latest_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_section",
                     "section": "Missing",
                     "content": "\n# Root\nupdated",
                     "include_subsection": true
-                }
+                }]
             }),
             "not_found",
-            Some("section not found: Missing"),
+            Some("operation 1 failed: section not found: Missing"),
         )
         .await;
 
@@ -4550,11 +4674,11 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let stale_revision_response = context
@@ -4583,11 +4707,11 @@
                 "path": "/mcp/page",
                 "revision": latest_revision,
                 "instance_id": "instance-mismatch",
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let mismatched_instance_response = context
@@ -4636,11 +4760,11 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id.clone(),
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let invalid_input_response = context
@@ -4664,11 +4788,11 @@
                 "path": "/mcp/page",
                 "revision": revision,
                 "instance_id": instance_id.clone(),
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let conflict_response = context
@@ -4703,10 +4827,10 @@
                 "path": "/mcp/page",
                 "revision": missing_page_revision,
                 "instance_id": missing_page_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "delete_section",
                     "section": { "by": "id", "value": "s-999" }
-                }
+                }]
             }),
         );
         let not_found_response = missing_page_context
@@ -4749,11 +4873,11 @@
                 "path": "/mcp/page",
                 "revision": update_revision,
                 "instance_id": update_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let update_response = update_context
@@ -4767,7 +4891,7 @@
             .await
             .expect("read update scope response failed");
         let (_, update_payload) = parse_tool_result_payload(&update_text);
-        assert_eq!(update_payload["summary"], "page edited");
+        assert_eq!(update_payload["summary"], "page edited (1 operations)");
 
         let write_context = spawn_test_server_with_auth(
             SessionManagerConfig::default(),
@@ -4787,11 +4911,11 @@
                 "path": "/mcp/page",
                 "revision": write_revision,
                 "instance_id": write_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let write_response = write_context
@@ -4805,7 +4929,7 @@
             .await
             .expect("read write scope response failed");
         let (_, write_payload) = parse_tool_result_payload(&write_text);
-        assert_eq!(write_payload["summary"], "page edited");
+        assert_eq!(write_payload["summary"], "page edited (1 operations)");
 
         let append_only_context = spawn_test_server_with_auth(
             SessionManagerConfig::default(),
@@ -4825,11 +4949,11 @@
                 "path": "/mcp/page",
                 "revision": append_revision,
                 "instance_id": append_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let append_only_response = append_only_context
@@ -4868,11 +4992,11 @@
                 "path": "/mcp/page",
                 "revision": prefix_revision,
                 "instance_id": prefix_instance_id,
-                "operation": {
+                "operation": [{
                     "type": "replace_text",
                     "old_text": "body",
                     "new_text": "updated"
-                }
+                }]
             }),
         );
         let prefix_denied_response = prefix_denied_context

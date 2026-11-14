@@ -59,7 +59,7 @@
 - アセット tool はページ path に紐付く通常アセットを扱う path ベース tool とする
 - アセット tool の入力識別子は `path + file_name` を主とし、初期版では `asset_id` 単独入力を採用しない
 - アセット本体を返す tool は `get_page_asset_data` のみに限定する
-- アセット upload は `data_base64` 入力で完結させ、ローカルファイルパス入力は受け付けない
+- アセットuploadは排他的な`text`/`data_base64`入力で完結させ、ローカルファイルパス入力は受け付けない
 - 対象外機能をツールへ混在させない
 
 ### 2.2 初期版で公開するツール
@@ -151,7 +151,7 @@
 
 #### 2.3.7 `edit_page`
 
-- current path と単一の編集操作を受け取る
+- current path と非空の編集操作配列を受け取る
 - update スコープと current path への認可を要求する
 - revision と instance_id による内容整合性確認を行う
 - セクション単位またはテキスト単位の部分編集を行う
@@ -213,7 +213,7 @@
 
 #### 2.3.15 `upload_page_asset`
 
-- `path`、`file_name`、`mime_type`、`data_base64` を入力とする
+- `path`、`file_name`、`mime_type`と排他的な`text`/`data_base64`を入力とする
 - update scope と正規化済み入力 `path` への path prefix 認可を要求する
 - `ReadOnly` ユーザでは拒否する
 - 新規 upload のみ扱い、既存アセットの上書きは扱わない
@@ -484,7 +484,7 @@ Markdown 解析結果から動的生成する revision-local な識別子とす�
 - `revision`
 - `instance_id`
 - `operation`
-  - 単一の編集操作を指定する
+  - 一つ以上の編集操作を配列で指定する。単一objectと空配列は受理しない
   - 初期版では `replace_section`、`insert_section`、`delete_section`、`replace_text` を受け付ける
 
 `operation` 内のセクション指定は、
@@ -515,6 +515,19 @@ operation 内容検証より先に行う。
 `instance_id` が最新内容の識別子と一致しない場合は
 `instance_id_not_match` を返し、
 その場合は `replace_section` の selector 解決や `title` / `content` 検証へ進まない。
+
+操作列のsection／anchorは要求の初期本文で解決し、要求内identityへ結び付ける。
+配列順に編集し、各操作時点の範囲と子節を使う。初期selectorの未存在・曖昧性は
+当該操作の順でエラーにし、後続の解決エラーを先行操作より先に返さない。
+元対象削除後はnot_found、任意の見出し行書換え等による追跡不能はinvalid_input。
+新設節・変更後titleは初期selectorで参照せず、次の要求で新TOCを取得する。
+
+型不正・空配列は引数復号で拒否する。復号できた操作の内容検証は
+既存のrevision／instance_id照合後とし、全件成功した最終本文を一度保存する。
+保存transactionでも期待版・認可・lock等を再確認する。
+途中失敗では保存せず、操作適用エラーのmessageに1始まりの番号を付ける。
+既存codeとprotocol／業務エラーの分類を維持する。
+commit後の同期失敗は既存internal_errorで、クライアントは保存有無を再取得で確認する。
 
 #### 3.4.8 `append_page`
 
@@ -564,7 +577,7 @@ operation 内容検証より先に行う。
   - `path`
   - `file_name`
   - `mime_type`
-  - `data_base64`
+  - `text` または `data_base64`（ちょうど一方）
 - `delete_page_asset`
   - `path`
   - `file_name`
@@ -575,6 +588,9 @@ serde 既定挙動で無視する。
 `mime_type` は空文字を許可しない。
 `data_base64` は空文字、decode 失敗、decode 前 byte 長 13,981,016 超過、
 decode 後 raw bytes 10MiB 超過を不正または制約超過として扱う。
+textは空を許可し、具体的text/* MIME、未指定または単一UTF-8 charset、UTF-8 byte長10MiBを検証する。MIME表記・Unicode・BOM・改行・前後空白を保持する。
+本文null/型不正はhandler前のJSON-RPC invalid params（-32602）、両方/欠落はserviceのinvalid_inputとする。型不正エラーに本文値を含めない。schemaは非nullable StringとoneOfを公開する。
+検証順は認可・ページ→file_name→MIME空→本文排他→形式別検証→txn内最新認可・状態・lock・同名→保存とする。
 `asset_id` は初期版では入力に採用しない。
 
 ### 3.5 ツール別出力モデル
@@ -669,6 +685,9 @@ decode 後 raw bytes 10MiB 超過を不正または制約超過として扱う�
 - `instance_id`
 - `summary`
 
+summaryは `page edited (N operations)` とし、Nは要求の操作数を表す。
+操作別の中間revisionや結果配列は返さない。
+
 #### 3.5.8 `append_page`
 
 出力:
@@ -759,7 +778,7 @@ MCP ツールの失敗として扱う。
   - ロック中ページへの upload / delete、同名アセット重複、返却前に検出できる MCP result / transport payload 上限超過
 - `invalid_input`
   - path 不正、検索式不正、section 指定不正
-  - file_name 不正、mime_type 不正、data_base64 空または decode 失敗
+  - file_name/MIME不正、本文の欠落/両方、textのMIME/charset・容量不正、data_base64空/decode失敗
   - upload の decode 前 base64 byte 長上限超過、または decode 後 raw bytes 10MiB 超過
   - `create_page` `update_page` `append_page` に渡された
     raw source 内の front matter 構文不正またはスキーマ不正
@@ -808,7 +827,7 @@ write 系および認可失敗系では、
 
 この情報はサービス層の共通出力モデルから組み立てる。
 アセット tool の成功監査には、正規化済み page path と安全な metadata のみを渡す。
-`data_base64`、アセット本体 bytes、serialize 済み request body、内部保存パス、
+`text`、`data_base64`、アセット本体 bytes、serialize 済み request body、内部保存パス、
 DB 内部詳細は監査ログへ渡さない。
 アセット操作では page 本文 revision に対応しないため、監査ログの `revision` は `null` とする。
 
@@ -1070,7 +1089,7 @@ rename 先 path が不正な場合は `invalid_input` とする。
 運用上必要な監査粒度を維持する。
 アセット操作では外部エラー message 自体に秘匿情報を含めない。
 失敗監査 summary は公開 message 相当の固定的・抽象的文言に限定する。
-`data_base64`、アセット本体 bytes、内部保存パス、DB 内部エラー詳細は
+`text`、`data_base64`、アセット本体 bytes、内部保存パス、DB 内部エラー詳細は
 監査ログと tracing に含めない。
 
 ### 4.11 エラー応答に関する設計判断
@@ -1116,7 +1135,7 @@ prompt名を`nextCursor`とする。候補なし、またはcursor適用後に0�
 ### 5.2 `prompts/get`
 
 primitive共通名前索引からpage IDを解決し、latest sourceのfront matterを
-共通parserで再検証する。front matter除去後のraw Markdown本文を使用し、
+共通parserで再検証する。front matter除去後のraw本文を元に、authority専用置換を引数挿入より前に行い、
 prompt候補テーブルの欠損だけでは取得不能にしない。
 
 要求argumentsは一意キーのJSON objectとして受け取る。
@@ -1208,7 +1227,7 @@ URIから固定組み込みresourceまたはページ由来resourceを判定す�
 - ページ由来resourceはresource URI逆引き索引からpage IDを解決する
 - ページ由来resourceはlatest page state、latest revision、latest sourceを取得する
 - latest sourceのfront matterを再検証し、resource path一致を確認する
-- 本文はfront matter除去後のraw Markdown本文とする
+- 本文はfront matter除去後のraw Markdownにauthority専用置換だけを適用する。通常マクロの一般展開はしない
 - 空または空白だけの本文もresource本文として返す
 
 server層ではservice結果を`ResourceContents.text`へ変換する。
@@ -1252,3 +1271,14 @@ read scopeを要求する。
 固定組み込みresourceにはページ用path prefix制約を適用しない。
 ページ由来resourceにもページ用path prefix制約を適用しない。
 同じBearerを使うpathベースtoolsには従来どおりpath prefix制約を適用する。
+
+## 状態取得・変更待ちの公開境界
+
+get_page_state／wait_page_changeはMCP_TOOL_SPECS.md 2.17〜2.18を契約正本とする。
+新しいDTOをmodel/page_state.rs、引数をtools/page_state.rs、非同期制御をhandler/page_state.rsへ
+分離し、既存toolの入出力と単一JSON文字列content方式を維持する。
+状態待機のtimeoutは成功であり、取得不能への変化はchanged/unavailableである。
+現在権限の拒否はforbidden、入力の値不正はinvalid_input、DB矛盾は固定internal_error。
+型不正・必須field欠落等のdeserialize失敗は既存同様にprotocol InvalidParamsと区別する。
+HTTP受付時の未認証401と、受付後に認証主体が利用不能となるtool forbiddenも区別する。
+新toolはreadOnly・non-destructive・idempotent・closed-worldを正確に宣言する。

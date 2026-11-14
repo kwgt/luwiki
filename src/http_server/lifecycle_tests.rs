@@ -216,7 +216,7 @@ fn lifecycle_startup_callback_and_bind_failures_finish_cleanup() {
                 None, 1024, false, PathBuf::new(), false, None,
                 Some(config), None, None, Some(Arc::new(|| {
                     Err(anyhow!("fixture startup callback failure"))
-                })));
+                })), "local.luwiki".into());
             done.send(result).unwrap();
         });
         let result = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -254,6 +254,7 @@ fn lifecycle_mcp_state_barrier_prevents_records_after_final_flush() {
         db, FrontendConfig::default(),
         FtsIndexConfig::new(dir.path().join("fts")),
         None, "fixture".into(), None, 1024, Some(shared.clone()),
+        "local.luwiki".to_string(),
     )));
     let server =
         Arc::new(crate::mcp::server::LuwikiMcpServer::new(state.clone()));

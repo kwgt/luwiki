@@ -7,7 +7,7 @@
 MCP 設計書群から参照される実装・テスト実装向け文書として扱う。
 
 `edit_page` は単なる更新ではなく、
-「単一 operation による部分編集」「`revision` と `instance_id` による内容整合性確認」
+「非空の operation 配列による部分編集」「`revision` と `instance_id` による内容整合性確認」
 「`update_page` / `append_page` との責務分離」「将来的な operation 種別増加への追従」
 を同時に満たす必要がある。
 そのため本書では、入力モデル、operation 別意味論、整合性失敗、エラー写像、保存結果まで含めて観点を整理する。
@@ -45,7 +45,7 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 ### 3.1 基本入力
 
 1. `path`、`revision`、`instance_id`、`operation` が必須であること
-2. `operation` が単数受理であり、配列や複数指定を受け付けないこと
+2. `operation` が非空配列を受理し、単一object・空配列・null・入れ子配列を拒否すること。schemaの `type: array` / `minItems: 1` と復号結果が一致すること
 3. `path` 不正が `invalid_input` になること
 4. `revision` の型不正や値不正が `invalid_input` になること
 5. `instance_id` の型不正や空値扱いが `invalid_input` になること
@@ -161,6 +161,25 @@ MCP 設計書群から参照される実装・テスト実装向け文書とし�
 1. operation 適用後の全文が update 系保存経路へ橋渡しされること
 2. 保存後に本文、latest revision、`instance_id` の整合が保たれること
 3. `edit_page` が append 専用の amend 挙動を暗黙に持ち込まないこと
+4. 全操作成功時だけ一度保存し、途中操作や最終本文検証の失敗で本文・revision・instance_idを更新しないこと
+5. 本文が元へ戻る操作列も一度保存し、新revisionとinstance_idを返すこと
+6. 保存transactionで他更新・amendを検出し、要求全体を拒否すること
+7. commit後の候補同期失敗ではinternal_errorでも正本保存済みの場合があり、再取得で状態を確認できること
+
+### 8.3 複数操作と初期対象の追跡
+
+1. 前方挿入・削除・同名title追加後も初期IDまたは一意titleが元対象を参照すること
+2. 親置換のinclude_subsectionがfalseなら子を保持し、trueで除去した元の子への後続参照はnot_foundになること
+3. 新設子の前後関係を現在本文から解決し、子削除では兄弟を残し、親削除では現在の子を含めて削除すること
+4. 同じanchorへの同レベル節の連続挿入が、afterならA・Y・X、beforeならX・Y・Aとなること
+5. replace_section.titleで元対象を保持し、新設節や変更後titleを初期selectorとして解決しないこと
+6. replace_textは中間本文を検索し、allは操作開始時の一致だけを置換すること
+7. 見出し行の実変更・コードフェンス等の解析文脈変化では元対象を追跡不能とし、後続参照がinvalid_inputになること。同一文字列置換は追跡を保持すること
+8. 削除・追跡不能から後の文字列復元で元対象を復活させないこと
+9. UTF-8、Setext、装飾見出し、末尾改行なし、byte境界の不正・桁溢れを確認すること
+10. 初期selectorの解決エラーを当該操作まで遅延し、先行操作のエラーを追い越さないこと
+11. 成功summaryが操作数を示し、操作適用失敗に1始まりの番号を付け、要求全体の競合・保存失敗へ番号を付けないこと
+12. 1要素配列で既存4操作の意味を維持し、一要求に一つのUpdate監査を記録すること
 
 ## 9. 公開面との接続観点
 

@@ -3,6 +3,12 @@ let panZoomModulePromise: Promise<any> | null = null;
 let mermaidInitialized = false;
 let mermaidRenderCount = 0;
 let activeViewerSvg: SVGSVGElement | null = null;
+let viewerTrigger: HTMLButtonElement | null = null;
+let viewerRequest = 0;
+
+// GitHub Octicons maximize-16 / screen-full-16 (MIT)。public/licenses/octicons.txt を参照。
+const MAXIMIZE_PATH = 'M6.137 8.803a.749.749 0 1 1 1.06 1.06L3.811 13.25H6a.75.75 0 0 1 0 1.5H2a.75.75 0 0 1-.75-.75v-4a.75.75 0 0 1 1.5 0v2.19l3.387-3.387ZM14.75 6a.75.75 0 0 1-1.5 0V3.811L9.863 7.197a.749.749 0 1 1-1.06-1.06L12.19 2.75H10a.75.75 0 0 1 0-1.5h4a.75.75 0 0 1 .75.75v4Z';
+const SCREEN_FULL_PATH = 'M1.75 10a.75.75 0 0 1 .75.75v2.5c0 .138.112.25.25.25h2.5a.75.75 0 0 1 0 1.5h-2.5A1.75 1.75 0 0 1 1 13.25v-2.5a.75.75 0 0 1 .75-.75Zm12.5 0a.75.75 0 0 1 .75.75v2.5A1.75 1.75 0 0 1 13.25 15h-2.5a.75.75 0 0 1 0-1.5h2.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 .75-.75ZM2.75 2.5a.25.25 0 0 0-.25.25v2.5a.75.75 0 0 1-1.5 0v-2.5C1 1.784 1.784 1 2.75 1h2.5a.75.75 0 0 1 0 1.5ZM10 1.75a.75.75 0 0 1 .75-.75h2.5c.966 0 1.75.784 1.75 1.75v2.5a.75.75 0 0 1-1.5 0v-2.5a.25.25 0 0 0-.25-.25h-2.5a.75.75 0 0 1-.75-.75Z';
 
 const INLINE_MAX_SCALE_ABS = 2.0;
 const INLINE_MAX_FONT_PX = 16;
@@ -89,6 +95,9 @@ function ensureViewerModal(): MermaidViewerModal {
 
 function closeViewerModal(): void {
   const modal = ensureViewerModal();
+  viewerRequest += 1;
+  const trigger = viewerTrigger;
+  viewerTrigger = null;
   if (activeViewerSvg) {
     const instance = (activeViewerSvg as any).__luwikiViewerPanZoom;
     if (instance && typeof instance.destroy === 'function') {
@@ -100,8 +109,13 @@ function closeViewerModal(): void {
   modal.root.classList.remove('is-fullscreen');
   modal.canvas.innerHTML = '';
   activeViewerSvg = null;
+  const restoreFocus = () => {
+    if (!viewerTrigger && trigger?.isConnected) trigger.focus({ preventScroll: true });
+  };
   if (document.fullscreenElement === modal.panel) {
-    void document.exitFullscreen();
+    void document.exitFullscreen().then(restoreFocus, restoreFocus);
+  } else {
+    restoreFocus();
   }
 }
 
@@ -371,6 +385,7 @@ async function initializeViewerPanZoom(svg: SVGSVGElement): Promise<void> {
   }
 
   const svgPanZoom = await loadPanZoom();
+  if (!svg.isConnected) return;
   const instance = svgPanZoom(svg, {
     zoomEnabled: true,
     controlIconsEnabled: true,
@@ -387,74 +402,72 @@ async function initializeViewerPanZoom(svg: SVGSVGElement): Promise<void> {
   instance.center();
 }
 
-async function openViewer(source: string, mode: 'expanded' | 'fullscreen'): Promise<void> {
+async function openViewer(
+  source: string, mode: 'expanded' | 'fullscreen', trigger: HTMLButtonElement,
+): Promise<void> {
   const modal = ensureViewerModal();
+  const request = ++viewerRequest;
+  viewerTrigger = trigger;
   modal.root.classList.remove('hidden');
   modal.root.classList.toggle('is-fullscreen', mode === 'fullscreen');
   modal.canvas.innerHTML = '<div class="mermaid-viewer-loading">Rendering...</div>';
+  modal.closeButton.focus({ preventScroll: true });
 
-  const mermaid = await loadMermaid();
-  const renderId = `luwiki-mermaid-viewer-${mermaidRenderCount}`;
-  mermaidRenderCount += 1;
+  // Fullscreen の要求は操作時のユーザーアクティベーションが有効な間に行う。
+  if (mode === 'fullscreen' && modal.panel.requestFullscreen) {
+    void modal.panel.requestFullscreen().then(() => {
+      if (request !== viewerRequest && !viewerTrigger) {
+        return document.exitFullscreen();
+      }
+      refitPanZoom(activeViewerSvg);
+    }).catch(() => { /* 全画面を利用できない場合もビューアーを表示する。 */ });
+  }
 
-  if (await mermaid.parse(source, {suppressErrors: true})) {
-    try {
-      const { svg } = await mermaid.render(renderId, source);
-      modal.canvas.innerHTML = svg;
-      const svgElement = modal.canvas.querySelector<SVGSVGElement>('svg');
-      if (svgElement) {
-        normalizeSvgElement(svgElement);
-        fitViewBoxToContent(svgElement);
-        svgElement.style.height = '100%';
-        await initializeViewerPanZoom(svgElement);
-        activeViewerSvg = svgElement;
-        requestAnimationFrame(() => {
-          refitPanZoom(svgElement);
-        });
-      }
-      if (mode === 'fullscreen' && modal.panel.requestFullscreen) {
-        await modal.panel.requestFullscreen();
-        requestAnimationFrame(() => {
-          refitPanZoom(svgElement ?? null);
-        });
-        window.setTimeout(() => {
-          refitPanZoom(svgElement ?? null);
-        }, 180);
-      }
-    } catch {
-      const escaped = escapeHtml(source);
-      modal.canvas.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
-    }
+  try {
+    const mermaid = await loadMermaid();
+    const renderId = `luwiki-mermaid-viewer-${mermaidRenderCount++}`;
+    const { svg } = await mermaid.render(renderId, source);
+    if (request !== viewerRequest) return;
+    modal.canvas.innerHTML = svg;
+    const svgElement = modal.canvas.querySelector<SVGSVGElement>('svg');
+    if (!svgElement) return;
+    normalizeSvgElement(svgElement);
+    fitViewBoxToContent(svgElement);
+    svgElement.style.height = '100%';
+    await initializeViewerPanZoom(svgElement);
+    if (request !== viewerRequest) return;
+    activeViewerSvg = svgElement;
+    requestAnimationFrame(() => refitPanZoom(activeViewerSvg));
+  } catch {
+    if (request !== viewerRequest) return;
+    const escaped = escapeHtml(source);
+    modal.canvas.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
   }
 }
 
+/** 描画した図の操作をコピーと共通のボタン領域へ追加する。 */
 function decorateBlock(block: HTMLElement, source: string): void {
   block.classList.add('mermaid-block');
-  block.setAttribute('data-mermaid-source', source);
+  const panel = block.closest('.luwiki-code-block');
+  const toolbar = panel?.querySelector('.code-copy-toolbar');
+  if (!toolbar) return;
+  const copyButton = toolbar.querySelector('[data-code-copy-id]');
 
-  let toolbar = block.querySelector<HTMLElement>('.mermaid-toolbar');
-  if (!toolbar) {
-    toolbar = document.createElement('div');
-    toolbar.className = 'mermaid-toolbar';
-    toolbar.innerHTML = `
-      <button type="button" class="btn btn-xs btn-outline mermaid-action-expand">拡大表示</button>
-      <button type="button" class="btn btn-xs btn-outline mermaid-action-fullscreen">全画面</button>
-    `;
-    block.prepend(toolbar);
+  for (const [mode, label, icon] of [
+    ['expanded', '拡大表示', MAXIMIZE_PATH],
+    ['fullscreen', '全画面', SCREEN_FULL_PATH],
+  ] as const) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'code-copy-button';
+    button.setAttribute('aria-label', label);
+    button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+      viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="${icon}"/></svg>`;
+    button.addEventListener('click', () => { void openViewer(source, mode, button); });
+    toolbar.insertBefore(button, copyButton);
   }
-
-  const expandButton = toolbar.querySelector<HTMLButtonElement>('.mermaid-action-expand');
-  const fullscreenButton = toolbar.querySelector<HTMLButtonElement>('.mermaid-action-fullscreen');
-  if (expandButton) {
-    expandButton.onclick = () => {
-      void openViewer(source, 'expanded');
-    };
-  }
-  if (fullscreenButton) {
-    fullscreenButton.onclick = () => {
-      void openViewer(source, 'fullscreen');
-    };
-  }
+  panel?.classList.add('has-mermaid-actions');
 }
 
 export async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
@@ -473,15 +486,9 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
   }
 
   for (const block of blocks) {
+    if (block.classList.contains('mermaid-block')) continue;
     const source = block.textContent ?? '';
-    if (source.trim().length === 0) {
-      continue;
-    }
-
-    const previousSource = block.getAttribute('data-mermaid-source');
-    if (previousSource === source && block.querySelector('svg')) {
-      continue;
-    }
+    if (source.trim().length === 0) continue;
 
     const renderId = `luwiki-mermaid-${mermaidRenderCount}`;
     mermaidRenderCount += 1;
@@ -489,6 +496,7 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
     if (await mermaid.parse(source, {suppressErrors: true})) {
       try {
         const { svg } = await mermaid.render(renderId, source);
+        if (!block.isConnected || block.classList.contains('mermaid-block')) continue;
         block.innerHTML = svg;
         decorateBlock(block, source);
         const svgElement = block.querySelector<SVGSVGElement>('svg');
@@ -502,6 +510,7 @@ export async function renderMermaidBlocks(container: HTMLElement): Promise<void>
           });
         }
       } catch {
+        if (!block.isConnected || block.classList.contains('mermaid-block')) continue;
         const escaped = escapeHtml(source);
         block.innerHTML = `<code class="text-error">Mermaid render error</code><code>${escaped}</code>`;
       }

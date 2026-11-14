@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use actix_web::{http::header, HttpResponse, web};
+use actix_web::{http::header, HttpRequest, HttpResponse, web};
 
 use crate::database::short_id::decode_page_short_id;
 use crate::http_server::app_state::AppState;
@@ -18,12 +18,30 @@ use crate::http_server::static_files;
 use crate::wiki_path::NormalizedWikiPath;
 
 ///
+/// 通知reloadの印だけを解釈する
+///
+/// # 引数
+/// * `req` - HTTP要求
+///
+/// # 戻り値
+/// 退避表示を復元する閲覧shellを利用する場合true。
+///
+fn guarded_reload(req: &HttpRequest) -> bool {
+    web::Query::<std::collections::HashMap<String, String>>::from_query(
+        req.query_string(),
+    ).ok().is_some_and(|query| {
+        query.get("_view_reload").is_some_and(|value| value == "1")
+    })
+}
+
+///
 /// ルートページ表示
 ///
 pub(crate) async fn get_root(
+    req: HttpRequest,
     data: web::Data<Arc<RwLock<AppState>>>,
 ) -> HttpResponse {
-    get_by_path(String::new(), data).await
+    get_by_path(String::new(), data, guarded_reload(&req)).await
 }
 
 ///
@@ -39,10 +57,11 @@ pub(crate) async fn get_root_redirect() -> HttpResponse {
 /// 任意ページ表示
 ///
 pub(crate) async fn get(
+    req: HttpRequest,
     path: web::Path<String>,
     data: web::Data<Arc<RwLock<AppState>>>,
 ) -> HttpResponse {
-    get_by_path(path.into_inner(), data).await
+    get_by_path(path.into_inner(), data, guarded_reload(&req)).await
 }
 
 ///
@@ -256,6 +275,7 @@ pub(crate) async fn get_rev(
 async fn get_by_path(
     raw_path: String,
     data: web::Data<Arc<RwLock<AppState>>>,
+    guarded: bool,
 ) -> HttpResponse {
     /*
      * パスの検証
@@ -275,12 +295,14 @@ async fn get_by_path(
 
     let page_id = match state.db().get_page_id_by_path(&page_path) {
         Ok(Some(page_id)) => page_id,
+        Ok(None) if guarded => return render_page_html(&state, "", ""),
         Ok(None) => return redirect_missing_view_page_to_edit(&page_path),
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
     let page_index = match state.db().get_page_index_by_id(&page_id) {
         Ok(Some(index)) => index,
+        Ok(None) if guarded => return render_page_html(&state, "", ""),
         Ok(None) => return HttpResponse::NotFound().finish(),
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
@@ -288,6 +310,9 @@ async fn get_by_path(
     /*
      * 最新リビジョンの画面を返す
      */
+    if guarded && (page_index.is_draft() || page_index.deleted()) {
+        return render_page_html(&state, "", "");
+    }
     let revision = page_index.latest();
     render_page_html(&state, &page_id.to_string(), &revision.to_string())
 }
@@ -535,6 +560,10 @@ fn render_page_html(
     /*
      * プレースホルダの置換
      */
+    html = html.replace(
+        "{{MCP_AUTHORITY}}",
+        &escape_html_attribute(state.mcp_authority()),
+    );
     html = html.replace("{{PAGE_ID}}", page_id);
     html = html.replace("{{REVISION}}", revision);
     html = html.replace(
@@ -652,6 +681,7 @@ mod path_input_tests {
             manager, FrontendConfig::default(),
             FtsIndexConfig::new(dir.path().join("fts")),
             None, "URL test".to_string(), None, 1024, None,
+            "local.luwiki".to_string(),
         ))));
         let app = test::init_service(App::new().app_data(state)
             .route("/wiki/{page_path:.*}", web::get().to(super::get)))
@@ -682,6 +712,65 @@ mod path_input_tests {
             let response = test::call_service(&app,
                 test::TestRequest::get().uri(uri).to_request()).await;
             assert_eq!(response.status(), 400, "{uri}");
+        }
+    }
+
+    ///
+    /// MCP無効時も埋め込みHTMLに独自authorityを渡す
+    ///
+    /// # 概要
+    /// HTML再取得後の値と属性escape、MCP非公開を確認する。
+    ///
+    /// # 注記
+    /// 保存sourceは同じまま、AppStateの設定値を変えて描画する。
+    ///
+    /// # 戻り値
+    /// なし。
+    ///
+    #[actix_web::test]
+    async fn authority_macro_html_meta_without_mcp() {
+        use std::sync::{Arc, RwLock};
+        use actix_web::{App, test, web};
+        use crate::database::DatabaseManager;
+        use crate::fts::FtsIndexConfig;
+        use crate::http_server::app_state::AppState;
+        use crate::http_server::FrontendConfig;
+
+        /*
+         * 各起動設定で同じ保存ソースをHTMLへ渡す
+         */
+        for (authority, expected) in [
+            ("local.luwiki", "local.luwiki"),
+            ("docs.example.test", "docs.example.test"),
+            ("a\"<test", "a&quot;&lt;test"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let manager = DatabaseManager::open(
+                dir.path().join("html.redb"), dir.path().join("assets"),
+            ).unwrap();
+            manager.add_user("user", "pass", None).unwrap();
+            manager.create_page("/page", "user",
+                "# Page\n{{mcp:authority}}".into()).unwrap();
+            let state = web::Data::new(Arc::new(RwLock::new(AppState::new(
+                manager, FrontendConfig::default(),
+                FtsIndexConfig::new(dir.path().join("fts")), None,
+                "test".into(), None, 1024, None, authority.into(),
+            ))));
+            let app = test::init_service(App::new().app_data(state)
+                .route("/wiki/{page_path:.*}", web::get().to(super::get)))
+                .await;
+            let response = test::call_service(&app, test::TestRequest::get()
+                .uri("/wiki/page").to_request()).await;
+            assert_eq!(response.status(), 200);
+            let html = test::read_body(response).await;
+            let html = std::str::from_utf8(&html).unwrap();
+            assert!(html.contains(&format!(
+                "name=\"mcp-authority\" content=\"{expected}\"",
+            )));
+            assert!(!html.contains("{{MCP_AUTHORITY}}"));
+            let response = test::call_service(&app, test::TestRequest::get()
+                .uri("/mcp").to_request()).await;
+            assert_eq!(response.status(), 404);
         }
     }
 

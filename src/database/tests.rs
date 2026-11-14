@@ -1296,6 +1296,7 @@ fn merge_resource_list_entries_combines_builtin_and_page_resources() {
     assert_eq!(
         uris,
         vec![
+            "luwiki://local.test/builtin/agent-skill",
             "luwiki://local.test/builtin/front-matter-spec",
             "luwiki://local.test/builtin/mcp-prompt-spec",
             "luwiki://local.test/docs/spec",
@@ -1303,12 +1304,12 @@ fn merge_resource_list_entries_combines_builtin_and_page_resources() {
     );
     assert_eq!(entries[0].source(), ResourceListSource::Builtin);
     assert_eq!(entries[0].page_id(), None);
-    assert_eq!(entries[2].source(), ResourceListSource::Page);
-    assert_eq!(entries[2].page_id(), Some(page_id));
-    assert_eq!(entries[2].current_path(), Some("/resources/spec"));
-    assert_eq!(entries[2].name(), "Spec");
-    assert_eq!(entries[2].description(), "Page resource");
-    assert_eq!(entries[2].mime_type(), "application/json");
+    assert_eq!(entries[3].source(), ResourceListSource::Page);
+    assert_eq!(entries[3].page_id(), Some(page_id));
+    assert_eq!(entries[3].current_path(), Some("/resources/spec"));
+    assert_eq!(entries[3].name(), "Spec");
+    assert_eq!(entries[3].description(), "Page resource");
+    assert_eq!(entries[3].mime_type(), "application/json");
 }
 
 ///
@@ -6690,6 +6691,8 @@ fn export_import_low_level_db_api_works() {
             .expect("get prompt candidate before migrate failed")
             .is_some()
     );
+    let mut page_changes = manager.subscribe_page_changes();
+    drop(page_changes.borrow_and_update());
     manager
         .delete_for_migrate_export(
             "/tree",
@@ -6709,6 +6712,7 @@ fn export_import_low_level_db_api_works() {
             &lock_page_ids,
         )
         .expect("delete for migrate export failed");
+    assert!(page_changes.has_changed().unwrap());
 
     assert!(
         manager
@@ -6829,9 +6833,12 @@ fn import_bundle_and_asset_staging_api_work() {
     });
     bundle.sync_manifest_counts();
 
+    let mut page_changes = manager.subscribe_page_changes();
+    drop(page_changes.borrow_and_update());
     manager
         .insert_import_bundle(&bundle)
         .expect("insert import bundle failed");
+    assert!(page_changes.has_changed().unwrap());
 
     let imported_page_id = manager
         .get_page_id_by_path("/imported")

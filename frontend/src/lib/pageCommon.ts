@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { installCodeCopyRenderer } from './codeCopy';
 import MarkdownIt from 'markdown-it';
 import anchor from 'markdown-it-anchor';
 import taskLists from 'markdown-it-task-lists';
@@ -354,6 +355,7 @@ export function createMarkdownRenderer(
     return self.renderToken(tokens, idx, options);
   };
 
+  installCodeCopyRenderer(md);
   return md;
 }
 

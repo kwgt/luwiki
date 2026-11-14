@@ -10,6 +10,8 @@
 
 use std::fmt;
 
+pub(crate) mod page_state;
+
 use serde::Serialize;
 
 use crate::fts::FtsSearchTarget;
@@ -253,9 +255,6 @@ pub(crate) struct UploadPageAssetRequest {
 
     /// アップロードするアセットの MIME 種別
     mime_type: String,
-
-    /// base64 エンコード済みアセット本体
-    data_base64: String,
 }
 
 impl UploadPageAssetRequest {
@@ -266,7 +265,6 @@ impl UploadPageAssetRequest {
     /// * `path` - 対象ページ path
     /// * `file_name` - アップロードするアセットファイル名
     /// * `mime_type` - アップロードするアセットの MIME 種別
-    /// * `data_base64` - base64 エンコード済みアセット本体
     ///
     /// # 戻り値
     /// 生成した入力モデルを返す。
@@ -275,13 +273,11 @@ impl UploadPageAssetRequest {
         path: String,
         file_name: String,
         mime_type: String,
-        data_base64: String,
     ) -> Self {
         Self {
             path,
             file_name,
             mime_type,
-            data_base64,
         }
     }
 
@@ -314,16 +310,6 @@ impl UploadPageAssetRequest {
     pub(crate) fn mime_type(&self) -> &str {
         &self.mime_type
     }
-
-    ///
-    /// base64 エンコード済みアセット本体を返す
-    ///
-    /// # 戻り値
-    /// base64 エンコード済みアセット本体を返す。
-    ///
-    pub(crate) fn data_base64(&self) -> &str {
-        &self.data_base64
-    }
 }
 
 impl fmt::Debug for UploadPageAssetRequest {
@@ -342,7 +328,6 @@ impl fmt::Debug for UploadPageAssetRequest {
             .field("path", &self.path)
             .field("file_name", &self.file_name)
             .field("mime_type", &self.mime_type)
-            .field("data_base64", &"[REDACTED]")
             .finish()
     }
 }
@@ -984,8 +969,8 @@ pub(crate) struct EditPageRequest {
     /// ページ内容の一意性を表すインスタンスID
     instance_id: String,
 
-    /// 単一の編集操作
-    operation: McpEditPageOperation,
+    /// 配列順に適用する編集操作列
+    operation: Vec<McpEditPageOperation>,
 }
 
 ///
@@ -1748,7 +1733,7 @@ impl EditPageRequest {
     /// * `path` - 対象ページ path
     /// * `revision` - 対象 revision
     /// * `instance_id` - 内容整合性確認用 instance_id
-    /// * `operation` - 単一の編集操作
+    /// * `operation` - 配列順の編集操作
     ///
     /// # 戻り値
     /// 生成した入力モデルを返す。
@@ -1757,7 +1742,7 @@ impl EditPageRequest {
         path: String,
         revision: u64,
         instance_id: String,
-        operation: McpEditPageOperation,
+        operation: Vec<McpEditPageOperation>,
     ) -> Self {
         Self {
             path,
@@ -1801,9 +1786,9 @@ impl EditPageRequest {
     /// 編集操作を返す
     ///
     /// # 戻り値
-    /// 単一の編集操作を返す。
+    /// 配列順に適用する編集操作列を返す。
     ///
-    pub(crate) fn operation(&self) -> &McpEditPageOperation {
+    pub(crate) fn operation(&self) -> &[McpEditPageOperation] {
         &self.operation
     }
 }
@@ -2405,7 +2390,7 @@ impl From<EditPageRequest> for ServiceEditPageRequest {
             request.path,
             request.revision,
             request.instance_id,
-            request.operation.into(),
+            request.operation.into_iter().map(Into::into).collect(),
         )
     }
 }
@@ -2692,34 +2677,32 @@ mod tests {
     /// upload requestのDebug表現がアセット本体を秘匿することを確認する。
     ///
     /// # 注記
-    /// secret sentinelをrequest、tool request、envelopeの各境界で確認する。
+    /// 本文を所有しないrequestのmetadataとDebugを各境界で確認する。
     ///
     #[test]
-    fn upload_page_asset_request_debug_redacts_data_base64() {
-        const SECRET_SENTINEL: &str = "secret-upload-data-base64";
-
+    fn upload_page_asset_request_debug_has_no_body() {
         let request = UploadPageAssetRequest::new(
             "/docs/page".to_string(),
             "image.png".to_string(),
             "image/png".to_string(),
-            SECRET_SENTINEL.to_string(),
         );
         let request_debug = format!("{request:?}");
-        assert!(!request_debug.contains(SECRET_SENTINEL));
-        assert!(request_debug.contains("[REDACTED]"));
+        assert!(request_debug.contains("image/png"));
+        assert!(!request_debug.contains("data_base64"));
+        assert!(!request_debug.contains("text:"));
 
         let tool_request = McpToolRequest::UploadPageAsset(request);
         let tool_request_debug = format!("{tool_request:?}");
-        assert!(!tool_request_debug.contains(SECRET_SENTINEL));
-        assert!(tool_request_debug.contains("[REDACTED]"));
+        assert!(tool_request_debug.contains("/docs/page"));
+        assert!(!tool_request_debug.contains("data_base64"));
 
         let envelope = McpRequestEnvelope::new(
             McpToolName::UploadPageAsset,
             tool_request,
         );
         let envelope_debug = format!("{envelope:?}");
-        assert!(!envelope_debug.contains(SECRET_SENTINEL));
-        assert!(envelope_debug.contains("[REDACTED]"));
+        assert!(envelope_debug.contains("image.png"));
+        assert!(!envelope_debug.contains("data_base64"));
     }
 
     ///

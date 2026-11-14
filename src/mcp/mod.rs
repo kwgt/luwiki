@@ -11,6 +11,7 @@
 #![allow(unused_imports)]
 
 pub(crate) mod auth;
+pub(crate) mod authority_macro;
 pub(crate) mod errors;
 pub(crate) mod handler;
 pub(crate) mod model;

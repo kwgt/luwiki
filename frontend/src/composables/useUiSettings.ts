@@ -1,4 +1,6 @@
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { pageUpdateMode } from '../lib/pageEvents';
+import type { PageUpdateMode } from '../lib/pageEvents';
 import { getMetaContent } from '../lib/pageCommon';
 
 type FontFamilyMap = {
@@ -72,6 +74,21 @@ function loadFontFamilyMap(): FontFamilyMap {
 }
 
 export function useUiSettings() {
+  const selectedPageUpdateMode = ref<PageUpdateMode>('manual');
+  const pageUpdateSaveError = ref('');
+  function readPageUpdateMode(): void {
+    try { selectedPageUpdateMode.value = pageUpdateMode(localStorage.getItem('luwiki-page-update-mode')); }
+    catch { pageUpdateSaveError.value = '閲覧設定を保存できません'; }
+  }
+  function handlePageModeStorage(event: StorageEvent): void {
+    if (event.key === 'luwiki-page-update-mode') readPageUpdateMode();
+  }
+  onMounted(() => { readPageUpdateMode(); window.addEventListener('storage', handlePageModeStorage); });
+  onBeforeUnmount(() => window.removeEventListener('storage', handlePageModeStorage));
+  watch(selectedPageUpdateMode, value => {
+    try { localStorage.setItem('luwiki-page-update-mode', value); pageUpdateSaveError.value = ''; }
+    catch { pageUpdateSaveError.value = '閲覧設定を保存できません'; }
+  });
   const selectedTheme = ref(THEME_OPTIONS[0]);
   const selectedFont = ref(FONT_OPTIONS[0].value);
   const selectedFontSize = ref(15);
@@ -177,6 +194,8 @@ export function useUiSettings() {
   });
 
   return {
+    selectedPageUpdateMode,
+    pageUpdateSaveError,
     themeOptions: THEME_OPTIONS,
     fontOptions: FONT_OPTIONS,
     editorKeymapOptions: EDITOR_KEYMAP_OPTIONS,

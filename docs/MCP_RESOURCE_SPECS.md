@@ -39,11 +39,15 @@ MCP内部の責務分割、永続化、transportは各MCP設計文書を参照�
 ### 2.1 固定組み込みresource
 
 - 固定組み込みresourceはLuWiki実装が提供する読み取り専用resourceとする
-- 初期版では以下を公開する
+- 以下を公開する（URI は既定の authority を使用した例）
+  - `luwiki://local.luwiki/builtin/agent-skill`
   - `luwiki://local.luwiki/builtin/front-matter-spec`
   - `luwiki://local.luwiki/builtin/mcp-prompt-spec`
 - 固定組み込みresourceはページpath、page ID、path prefix制約に依存しない
 - 固定組み込みresourceのMIME typeは`text/markdown`とする
+- front matter と MCP prompts の配信用 Markdown は開発向け仕様と整合させる。利用に必要な規則と例はリポジトリ外から参照できる形で提供する
+- `agent-skill` の name は `LuWiki Agent Instructions`、description は `Operational instructions for LuWiki MCP agents` とする
+- 標準の読取を利用できないクライアントは `get_agent_instructions` で同じ運用指示を取得できる
 
 ### 2.2 ページ由来resource
 
@@ -270,7 +274,7 @@ authorityはrun設定`mcp_authority`で指定する。
 
 - 固定組み込みresourceは対応する埋め込み文書本文を返す
 - ページ由来resourceはfront matter終端直後からページソース末尾までの
-  raw Markdownを返す
+  raw Markdownにauthority専用置換だけを適用して返す
 - front matterを本文へ含めない
 - 本文が空または空白だけでも、resourceとして取得できる
 
@@ -355,3 +359,12 @@ resources操作では以下の論理区分を用いる。
 - `derived rebuild --target all`はresources関連派生データを再構成対象に含める
 - 再構成のtransaction境界、失敗時の既存データ維持、CLI引数は
   `MCP_SERVICE_AND_STORAGE_DESIGN.md`および`CLI_SPECS.md`を参照する
+
+## authority専用マクロの適用範囲
+
+ページ由来resources/readでは、scope・URI・最新source/front matter・path・ACLを
+確認した後、bodyの`{{mcp:authority}}`だけをrunの解決値で一回置換する。
+code内も対象とし、正式記法・escapeはMACRO_SPECS.mdに従う。
+その他はraw Markdownのままとし、HTML化や通常マクロの一般展開はしない。
+固定組み込み文書、metadata、list、URI索引、rawページ取得には適用しない。
+保存sourceとrevisionも変更しない。

@@ -35,6 +35,9 @@ pub(crate) enum McpOperation {
     /// resource取得
     ReadResource,
 
+    /// エージェント用運用指示の取得
+    GetAgentInstructions,
+
     /// prompt取得
     GetPrompt,
 
@@ -96,6 +99,7 @@ impl McpOperation {
             | Self::ListPrompts
             | Self::ListResources
             | Self::ReadResource
+            | Self::GetAgentInstructions
             | Self::GetPrompt
             | Self::SearchPages
             | Self::GetPageSection
@@ -130,6 +134,7 @@ impl McpOperation {
                 | Self::ListPrompts
                 | Self::ListResources
                 | Self::ReadResource
+                | Self::GetAgentInstructions
                 | Self::GetPrompt
                 | Self::SearchPages
                 | Self::GetPageSection
@@ -1478,8 +1483,8 @@ pub(crate) struct EditPageRequest {
     /// 内容整合性確認用 instance_id
     instance_id: String,
 
-    /// 単一の編集操作
-    operation: EditPageOperation,
+    /// 配列順に適用する編集操作列
+    operation: Vec<EditPageOperation>,
 }
 
 impl EditPageRequest {
@@ -1490,7 +1495,7 @@ impl EditPageRequest {
     /// * `path` - 対象ページ path
     /// * `revision` - 対象 revision
     /// * `instance_id` - 内容整合性確認用 instance_id
-    /// * `operation` - 単一の編集操作
+    /// * `operation` - 配列順の編集操作
     ///
     /// # 戻り値
     /// 生成した service 入力を返す。
@@ -1499,7 +1504,7 @@ impl EditPageRequest {
         path: String,
         revision: u64,
         instance_id: String,
-        operation: EditPageOperation,
+        operation: Vec<EditPageOperation>,
     ) -> Self {
         Self {
             path,
@@ -1543,9 +1548,9 @@ impl EditPageRequest {
     /// 編集操作を返す
     ///
     /// # 戻り値
-    /// 単一の編集操作を返す。
+    /// 配列順に適用する編集操作列を返す。
     ///
-    pub(crate) fn operation(&self) -> &EditPageOperation {
+    pub(crate) fn operation(&self) -> &[EditPageOperation] {
         &self.operation
     }
 }

@@ -10,11 +10,29 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::audit::AuditSink;
 use crate::cmd_args::FrontendConfig;
 use crate::database::DatabaseManager;
 use crate::fts::FtsIndexConfig;
+
+///
+/// 状態要求と監査の完了を停止処理へ通知するlease
+///
+pub(crate) struct PageStateLease(Arc<AtomicUsize>);
+
+impl Drop for PageStateLease {
+    ///
+    /// 監査guard破棄後に要求数を減らす
+    ///
+    /// # 戻り値
+    /// なし。
+    ///
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 ///
 /// HTTPサーバの共有状態
@@ -25,6 +43,9 @@ pub(crate) struct AppState {
 
     /// frontend設定
     frontend_config: FrontendConfig,
+
+    /// MCPとブラウザで共有する解決済みauthority
+    mcp_authority: String,
 
     /// FTS設定
     fts_config: FtsIndexConfig,
@@ -47,6 +68,15 @@ pub(crate) struct AppState {
 
     /// HTTP終了後のqueued MCP処理を拒否する内部印
     shutting_down: bool,
+
+    /// WebSocket待機を直ちに終了させる通知
+    page_events_stop: tokio::sync::watch::Sender<bool>,
+
+    /// 接続上限をRAIIで管理する
+    pub(crate) page_events_slots: Arc<tokio::sync::Semaphore>,
+
+    /// 非同期状態要求の監査完了までの生存数
+    page_state_requests: Arc<AtomicUsize>,
 }
 
 impl AppState {
@@ -62,6 +92,7 @@ impl AppState {
     /// * `wiki_icon` - Wikiアイコン画像ファイルのパス
     /// * `asset_limit_size` - アセットサイズ上限(バイト単位)
     /// * `audit_sink` - 監査ログ投入入口
+    /// * `mcp_authority` - runで検証・解決済みのauthority
     ///
     /// # 戻り値
     /// 生成したオブジェクトを返す。
@@ -75,10 +106,12 @@ impl AppState {
         wiki_icon: Option<PathBuf>,
         asset_limit_size: u64,
         audit_sink: Option<Arc<RwLock<AuditSink>>>,
+        mcp_authority: String,
     ) -> Self {
         Self {
             db,
             frontend_config,
+            mcp_authority,
             fts_config,
             template_root,
             wiki_title,
@@ -86,7 +119,20 @@ impl AppState {
             asset_limit_size,
             audit_sink,
             shutting_down: false,
+            page_events_stop: tokio::sync::watch::channel(false).0,
+            page_events_slots: Arc::new(tokio::sync::Semaphore::new(64)),
+            page_state_requests: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    ///
+    /// runで解決したauthorityを返す
+    ///
+    /// # 戻り値
+    /// MCPとブラウザが共有するauthority。
+    ///
+    pub(crate) fn mcp_authority(&self) -> &str {
+        &self.mcp_authority
     }
 
     ///
@@ -97,6 +143,19 @@ impl AppState {
     ///
     pub(crate) fn begin_shutdown(&mut self) {
         self.shutting_down = true;
+        self.page_events_stop.send_replace(true);
+    }
+
+    ///
+    /// 接続待機へ終了通知を渡す
+    ///
+    /// # 戻り値
+    /// shutdownの購読。
+    ///
+    pub(crate) fn page_events_shutdown(
+        &self,
+    ) -> tokio::sync::watch::Receiver<bool> {
+        self.page_events_stop.subscribe()
     }
 
     ///
@@ -107,6 +166,30 @@ impl AppState {
     ///
     pub(crate) fn is_shutting_down(&self) -> bool {
         self.shutting_down
+    }
+
+    ///
+    /// 停止gateと同じread guard内で非同期要求を登録する
+    ///
+    /// # 戻り値
+    /// 受付可能なら監査完了まで保持するlease、停止中ならNone。
+    ///
+    pub(crate) fn begin_page_state_request(&self) -> Option<PageStateLease> {
+        if self.shutting_down {
+            return None;
+        }
+        self.page_state_requests.fetch_add(1, Ordering::SeqCst);
+        Some(PageStateLease(self.page_state_requests.clone()))
+    }
+
+    ///
+    /// 最終flush前に終了待ちする非同期要求数を取得する
+    ///
+    /// # 戻り値
+    /// 監査投入が終わっていない要求数。
+    ///
+    pub(crate) fn page_state_request_count(&self) -> usize {
+        self.page_state_requests.load(Ordering::SeqCst)
     }
 
     ///

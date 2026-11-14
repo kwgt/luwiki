@@ -114,58 +114,69 @@ impl DatabaseManager {
         /*
          * コミット
          */
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         Ok(())
     }
 
     ///
-    /// ユーザ認証の検証
+    /// 同じsnapshotでBasic認証と不変主体を確定する
     ///
     /// # 引数
-    /// * `username` - ユーザ名
-    /// * `password` - パスワード
+    /// * `username` - 入力名
+    /// * `password` - 入力資格情報
     ///
     /// # 戻り値
-    /// 認証に成功した場合は`Ok(true)`を返す。
+    /// 成功時の主体、認証失敗ならNone。
     ///
+    /// # 概要
+    /// nameからIDを解決し、同じ行で資格情報・属性を検証する。
+    ///
+    pub(crate) fn authenticate_basic_user(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<UserInfo>> {
+        /* 名前と主体を同一snapshotで解決する。 */
+        let txn = self.db.begin_read()?;
+        let ids = txn.open_table(USER_ID_TABLE)?;
+        let Some(id) = ids.get(username.to_string())? else {
+            return Ok(None);
+        };
+        let id = id.value();
+        let users = txn.open_table(USER_INFO_TABLE)?;
+        let Some(user) = users.get(id.clone())? else {
+            return Ok(None);
+        };
+        let user = user.value();
+        if user.id() != id {
+            return Err(anyhow!("basic subject inconsistent"));
+        }
+
+        /* 同じ主体の資格情報とBasic可否を検証する。 */
+        if !user.allows_basic_auth() || !user.verify_password(password) {
+            return Ok(None);
+        }
+        Ok(Some(user))
+    }
+
+    ///
+    /// 互換の認証成否だけを返す
+    ///
+    /// # 引数
+    /// * `username` - 入力名
+    /// * `password` - 入力資格情報
+    ///
+    /// # 戻り値
+    /// 認証に成功した場合はOk(true)。
+    ///
+    #[allow(dead_code)]
     pub(crate) fn verify_user(
         &self,
         username: &str,
         password: &str,
     ) -> Result<bool> {
-        /*
-         * 読み取りトランザクション開始
-         */
-        let txn = self.db.begin_read()?;
-
-        /*
-         * ユーザID取得
-         */
-        let id_table = txn.open_table(USER_ID_TABLE)?;
-        let key = username.to_string();
-        let user_id = match id_table.get(&key)? {
-            Some(id) => id.value(),
-            None => return Ok(false),
-        };
-
-        /*
-         * ユーザ情報取得
-         */
-        let info_table = txn.open_table(USER_INFO_TABLE)?;
-        let user_info = match info_table.get(user_id)? {
-            Some(info) => info.value(),
-            None => return Ok(false),
-        };
-
-        /*
-         * Basic認証可否とパスワードを検証する
-         */
-        if !user_info.allows_basic_auth() {
-            return Ok(false);
-        }
-
-        Ok(user_info.verify_password(password))
+        Ok(self.authenticate_basic_user(username, password)?.is_some())
     }
 
     ///
@@ -343,7 +354,7 @@ impl DatabaseManager {
         /*
          * コミット
          */
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         Ok(())
     }
@@ -449,7 +460,7 @@ impl DatabaseManager {
         /*
          * コミット
          */
-        txn.commit()?;
+        self.commit_page_change(txn)?;
 
         Ok(())
     }

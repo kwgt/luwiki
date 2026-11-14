@@ -449,6 +449,7 @@ impl McpService {
             &normalized_path, auth.user_id(), content.to_string(),
             &PageAccessPolicy::new(auth.path_prefixes()),
         ).map_err(map_create_db_error)?;
+        self.sync_saved_pages(db, &created.outcome.affected_page_ids)?;
         let instance_id = created.outcome.instance_id.ok_or_else(|| {
             McpError::new(McpErrorCode::InternalError,
                 "created page source instance_id is missing")
@@ -570,7 +571,7 @@ impl McpService {
         /*
          * 整合確認を通過した後にだけ本文変換と update 系保存へ進める。
          */
-        let updated_source = self.apply_edit_page_operation(
+        let updated_source = self.apply_edit_page_operations(
             &latest_page_source.source(),
             request.operation(),
         )?;
@@ -585,7 +586,7 @@ impl McpService {
             saved_path,
             revision,
             instance_id,
-            "page edited".to_string(),
+            format!("page edited ({} operations)", request.operation().len()),
         ))
     }
 
@@ -665,6 +666,9 @@ impl McpService {
                 false,
             )
             .map_err(map_rename_db_error)?;
+        if result.value {
+            self.sync_saved_pages(db, &result.outcome.affected_page_ids)?;
+        }
         let revision = result.outcome.revision.ok_or_else(|| {
             McpError::new(
                 McpErrorCode::InternalError,
@@ -783,6 +787,9 @@ impl McpService {
             };
             match db.append_page_authorized(&request, &access) {
                 Ok(result) => {
+                    self.sync_saved_pages(
+                        db, &result.outcome.affected_page_ids,
+                    )?;
                     let instance =
                         result.outcome.instance_id.ok_or_else(|| {
                             McpError::new(

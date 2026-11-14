@@ -38,6 +38,8 @@ use serde_json::json;
 pub(crate) use crate::auth::AuthContext;
 #[allow(unused_imports)]
 pub(crate) use auth::require_request_scope;
+pub(crate) use auth::validate_authorization;
+pub(crate) use auth::append_bearer_expire_header;
 
 /// ファイル名で禁止する文字
 /// (追加しやすいように集約する)

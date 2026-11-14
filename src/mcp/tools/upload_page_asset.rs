@@ -48,7 +48,8 @@ pub(crate) async fn execute(
             &args.path,
             &args.file_name,
             &args.mime_type,
-            &args.data_base64,
+            args.text.as_deref(),
+            args.data_base64.as_deref(),
         ))
     })?;
 

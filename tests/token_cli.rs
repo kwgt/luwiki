@@ -1303,18 +1303,16 @@ fn user_add_with_no_basic_auth_succeeds_without_password_prompt() {
 }
 
 #[test]
+/// ReadOnlyユーザの作成にパスワード入力を渡し、属性の永続化を確認する。
+///
+/// # 注記
+/// 共通helperで作成後、user infoの属性とBasic認証可否を照合する。
 fn user_add_with_read_only_persists_attribute() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
-    let output = build_base_command(&db_path, &assets_dir)
-        .arg("user")
-        .arg("add")
-        .arg("--attribute")
-        .arg("read_only")
-        .arg("readonly_user")
-        .output()
-        .expect("user add failed");
-
-    assert!(output.status.success());
+    common::run_add_user_with_credentials_and_attributes(
+        &db_path, &assets_dir, "readonly_user", TEST_PASSWORD,
+        &["read_only"],
+    );
     let info_output = run_user_info(&db_path, &assets_dir, "readonly_user");
     assert!(info_output.status.success());
     let stdout =
@@ -1412,17 +1410,16 @@ fn user_edit_can_add_and_remove_read_only() {
 }
 
 #[test]
+/// パスワード付きで作成したReadOnlyユーザの属性解除を確認する。
+///
+/// # 注記
+/// 共通helperで作成し、clear attributes後のuser infoを照合する。
 fn user_edit_clear_attributes_removes_read_only() {
     let (base_dir, db_path, assets_dir) = prepare_test_dirs();
-    let add_output = build_base_command(&db_path, &assets_dir)
-        .arg("user")
-        .arg("add")
-        .arg("--attribute")
-        .arg("read_only")
-        .arg(TEST_USERNAME)
-        .output()
-        .expect("user add failed");
-    assert!(add_output.status.success());
+    common::run_add_user_with_credentials_and_attributes(
+        &db_path, &assets_dir, TEST_USERNAME, TEST_PASSWORD,
+        &["read_only"],
+    );
 
     let clear_output = run_user_edit_with_input(
         &db_path,

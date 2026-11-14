@@ -179,6 +179,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let auth = AuthContext::new(
@@ -261,6 +262,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let auth = AuthContext::new(
@@ -345,6 +347,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let auth = AuthContext::new(
@@ -460,6 +463,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let append_only = AuthContext::new(
@@ -552,6 +556,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state.clone());
         let auth = AuthContext::new(
@@ -675,6 +680,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let auth = AuthContext::new(
@@ -750,6 +756,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state.clone());
         let auth = AuthContext::new(
@@ -899,6 +906,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
 
         /*
@@ -929,6 +937,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
 
         let server = LuwikiMcpServer::new(state);
@@ -971,6 +980,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
 
         /*
@@ -1012,6 +1022,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
 
         /*
@@ -1056,6 +1067,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
 
         /*
@@ -1104,6 +1116,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
 
         /*
@@ -1174,6 +1187,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -1240,6 +1254,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -1299,6 +1314,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
 
@@ -1405,6 +1421,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -1522,6 +1539,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let token_id = TokenId::new();
@@ -1667,6 +1685,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -1696,6 +1715,7 @@
         assert_eq!(
             uris,
             vec![
+                "luwiki://local.luwiki/builtin/agent-skill",
                 "luwiki://local.luwiki/builtin/front-matter-spec",
                 "luwiki://local.luwiki/builtin/mcp-prompt-spec",
                 "luwiki://local.luwiki/docs/visible",
@@ -1752,6 +1772,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -1768,10 +1789,15 @@
         let result = server
             .list_resources_for_auth(&auth, None)
             .expect("list resources failed");
-        assert_eq!(result.resources.len(), 3);
+        assert_eq!(result.resources.len(), 4);
         assert_eq!(result.next_cursor, None);
 
-        let front_matter_spec = &result.resources[0];
+        let agent_skill = &result.resources[0];
+        assert_eq!(agent_skill.uri, "luwiki://local.luwiki/builtin/agent-skill");
+        assert_eq!(agent_skill.name, "LuWiki Agent Instructions");
+        assert_eq!(agent_skill.mime_type.as_deref(), Some("text/markdown"));
+
+        let front_matter_spec = &result.resources[1];
         assert_eq!(
             front_matter_spec.uri,
             "luwiki://local.luwiki/builtin/front-matter-spec",
@@ -1794,7 +1820,7 @@
         assert_eq!(front_matter_spec.meta, None);
         assert_eq!(front_matter_spec.annotations, None);
 
-        let prompt_spec = &result.resources[1];
+        let prompt_spec = &result.resources[2];
         assert_eq!(
             prompt_spec.uri,
             "luwiki://local.luwiki/builtin/mcp-prompt-spec",
@@ -1814,7 +1840,7 @@
         assert_eq!(prompt_spec.meta, None);
         assert_eq!(prompt_spec.annotations, None);
 
-        let page_resource = &result.resources[2];
+        let page_resource = &result.resources[3];
         assert_eq!(
             page_resource.uri,
             "luwiki://local.luwiki/docs/mapping",
@@ -1866,6 +1892,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -1898,7 +1925,10 @@
                     "luwiki://local.luwiki/builtin/front-matter-spec",
                 );
                 assert_eq!(mime_type.as_deref(), Some("text/markdown"));
-                assert!(text.contains("# Front Matter 基本仕様"));
+                assert_eq!(
+                    text,
+                    include_str!("../../../assets/mcp/front-matter-spec.md"),
+                );
                 assert_eq!(meta, &None);
             }
             ResourceContents::BlobResourceContents { .. } => {
@@ -1920,6 +1950,7 @@
         assert_eq!(
             listed_uris,
             vec![
+                "luwiki://local.luwiki/builtin/agent-skill",
                 "luwiki://local.luwiki/builtin/front-matter-spec",
                 "luwiki://local.luwiki/builtin/mcp-prompt-spec",
             ],
@@ -1964,6 +1995,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let uri = "luwiki://local.luwiki/builtin/front-matter-spec";
@@ -2065,6 +2097,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -2152,6 +2185,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let allowed = AuthContext::new(
@@ -2263,6 +2297,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let auth = AuthContext::new(
@@ -2380,6 +2415,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let auth = AuthContext::new(
@@ -2461,6 +2497,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -2485,6 +2522,7 @@
             uris,
             vec![
                 "luwiki://local.luwiki/Docs/alpha",
+                "luwiki://local.luwiki/builtin/agent-skill",
                 "luwiki://local.luwiki/builtin/front-matter-spec",
                 "luwiki://local.luwiki/builtin/mcp-prompt-spec",
                 "luwiki://local.luwiki/docs/zeta",
@@ -2519,7 +2557,7 @@
     ///
     /// # 注記
     /// 固定組み込み2件とページ由来52件を作成し、
-    /// 先頭50件と残り4件のcursorを検証する。
+    /// 先頭50件と残り5件のcursorを検証する。
     ///
     #[test]
     fn mcp_server_list_resources_pages_by_fifty() {
@@ -2558,6 +2596,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -2568,27 +2607,27 @@
         let server = LuwikiMcpServer::new(state);
 
         /*
-         * 先頭50件と残り4件をcursorで継続取得する
+         * 先頭50件と残り5件をcursorで継続取得する
          */
         let first = server
             .list_resources_for_auth(&auth, None)
             .expect("list first page failed");
         assert_eq!(first.resources.len(), 50);
         assert_eq!(
-            first.resources[0].uri,
+            first.resources[1].uri,
             "luwiki://local.luwiki/builtin/front-matter-spec",
         );
         assert_eq!(
-            first.resources[1].uri,
+            first.resources[2].uri,
             "luwiki://local.luwiki/builtin/mcp-prompt-spec",
         );
         assert_eq!(
             first.resources[49].uri,
-            "luwiki://local.luwiki/docs/resource-047",
+            "luwiki://local.luwiki/docs/resource-046",
         );
         assert_eq!(
             first.next_cursor.as_deref(),
-            Some("luwiki://local.luwiki/docs/resource-047"),
+            Some("luwiki://local.luwiki/docs/resource-046"),
         );
 
         let second = server
@@ -2605,6 +2644,7 @@
         assert_eq!(
             uris,
             vec![
+                "luwiki://local.luwiki/docs/resource-047",
                 "luwiki://local.luwiki/docs/resource-048",
                 "luwiki://local.luwiki/docs/resource-049",
                 "luwiki://local.luwiki/docs/resource-050",
@@ -2644,6 +2684,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -2755,6 +2796,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let read = AuthContext::new(
@@ -2890,6 +2932,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -2982,6 +3025,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
 
@@ -3072,6 +3116,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let mut prefixes = PathPrefixSet::new();
         prefixes.insert("/allowed".to_string());
@@ -3170,6 +3215,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -3230,6 +3276,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -3303,6 +3350,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -3365,6 +3413,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -3426,6 +3475,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),
@@ -3503,6 +3553,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let server = LuwikiMcpServer::new(state);
         let read = AuthContext::new(
@@ -3708,6 +3759,7 @@
             None,
             1024 * 1024,
             None,
+            "local.luwiki".to_string(),
         )));
         let auth = AuthContext::new(
             AuthUser::new("user".to_string()),

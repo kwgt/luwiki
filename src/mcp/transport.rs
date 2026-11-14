@@ -136,6 +136,7 @@ pub(crate) fn create_scope(
         .build();
 
     web::scope(endpoint.path())
+        .app_data(web::PayloadConfig::new(64 * 1024 * 1024))
         .wrap(from_fn(move |req, next| {
             require_mcp_bearer(req, next, auth_state.clone())
         }))
